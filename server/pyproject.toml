@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentlearn"
+version = "0.1.0"
+description = "Learn to build an agent, one layer at a time"
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic>=2.3.0",
+    "fastapi>=0.162.0",
+    "openai>=3.41.0",
+    "uvicorn>=0.54.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
