@@ -2,8 +2,12 @@
 
 只做输入输出。一轮对话的全部编排在 application/conversation.py：
 读一行 -> conv.turn 产出片段 -> 打印。
+
+除了对话，还提供一个只读命令 show_trace：把一个会话的执行轨迹
+（store.py 的 spans 表）画成树打印出来，对应 main.py 的 trace 子命令。
 """
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from application.conversation import Conversation
@@ -59,6 +63,49 @@ def main(session_id: str | None = None) -> None:
         print()
         # 单独打印结束原因，方便确认这轮是正常说完还是被掐断。
         print(conv.stop_reason)
+
+
+def show_trace(session_id: str) -> None:
+    """打印一个会话的执行轨迹树。main.py trace 子命令进来这里。
+
+    轨迹长这样（缩进表示父子）：
+
+        turn  ok  4.2s
+          llm_request  ok  4.1s
+
+    只读库不碰正文：想知道「说了什么」去看 JSONL，这里看「怎么走的」。
+    """
+    spans = Store(DATA / "agent.db").spans_for(session_id)
+    if not spans:
+        # 没跑过的会话、乱写的 id 都落到这里，不必区分。
+        raise SystemExit("这个会话没有 trace 记录。")
+
+    # 先按 parent_id 归堆：children[某个 span_id] = 它的子 span 列表。
+    # 根 span 的 parent_id 在库里是 NULL，Python 读出来是 None，
+    # 所以 None 这个键正好装着所有根，这里不用特判。
+    children: dict[str | None, list] = {}
+    for row in spans:
+        children.setdefault(row["parent_id"], []).append(row)
+
+    def walk(span, depth: int) -> None:
+        """递归打印一棵子树。depth 是缩进层数。"""
+        # 耗时 = 结束时间 - 开始时间。fromisoformat 能直接解析我们存的 ISO 字符串。
+        if span["end_time"]:
+            seconds = (
+                datetime.fromisoformat(span["end_time"])
+                - datetime.fromisoformat(span["start_time"])
+            ).total_seconds()
+            cost = f"{seconds * 1000:.0f}ms"
+        else:
+            # 没有结束时间 = span 还挂着：进程崩了，或者 SSE 被客户端掐断。
+            cost = "未结束"
+        print("  " * depth + f"{span['name']}  {span['status']}  {cost}")
+        # 子 span 晚于父 span 开始，归堆时保持了出现顺序，直接遍历就是时间序。
+        for child in children.get(span["span_id"], []):
+            walk(child, depth + 1)
+
+    for root in children.get(None, []):
+        walk(root, 0)
 
 
 if __name__ == "__main__":

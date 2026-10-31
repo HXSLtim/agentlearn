@@ -2,6 +2,22 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-01（三）：trace 骨架
+
+- store.py 的 logs 表退役，spans 表接棒（D11）：一行一个 span（turn / llm_request，
+  第二层加 tool_call），span_id / parent_id / start_time / end_time / status / data；
+  开始 insert 结束 update，参考 LangSmith 的 span 模型（父子 + 耗时）。
+  start_span / end_span / spans_for 三个方法，log / logs_for 删除。
+- conversation.py 埋点：每轮一个 turn 根 span，每次模型请求一个 llm_request 子 span
+  （开始记模型名和消息条数，结束补 stop_reason）；出错两个 span 都标 error。
+  客户端断开时生成器收到 GeneratorExit（不是 Exception），span 停在 running——
+  如实反映「这轮没跑完」。
+- 新增 `main.py trace <session_id>` 子命令：把 spans 画成缩进树打印（名称/状态/耗时），
+  cli.py 的 show_trace。实测正常轮显示耗时、被掐断的轮显示「未结束」。
+- 记录部署形态选型 D10：外部系统只持一个会话（POST /chat 换 session_id），
+  工具执行、正文、trace 全在本地；HTTP 面保持极小。
+- 评测欠账显式化：token 用量尚未记进 span（两条路径取法不同，第四层前补上）。
+
 ## 2026-11-01（二）：application 层成立
 
 - `application/conversation.py`：Conversation 成为两入口唯一的会话循环——

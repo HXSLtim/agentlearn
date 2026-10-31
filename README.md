@@ -37,7 +37,7 @@
 - `infrastructure/adapter.py`：协议适配器，两家的形状差别全在这里翻译。
 - `infrastructure/config.py`：读 config.ini，支持 `${环境变量}` 引用。
 - `infrastructure/transcript.py`：会话正文，一个会话一个 JSONL 文件，存在 `server/data/`。
-- `infrastructure/store.py`：会话索引和日志，存在 `server/data/agent.db`。
+- `infrastructure/store.py`：会话索引和执行轨迹（spans，父子关系 + 耗时），存在 `server/data/agent.db`。
 - `interfaces/cli.py`：终端入口。
 - `interfaces/web/server.py`：HTTP 入口，给 `app/` 调用。
 
@@ -62,6 +62,7 @@ cd server
 uv run python main.py cli                 # 终端里新开一个会话
 uv run python main.py cli <session_id>    # 续接已有会话
 uv run python main.py web                 # HTTP 服务，默认 8000 端口
+uv run python main.py trace <session_id>  # 回放一个会话的执行轨迹
 ```
 
 桌面端在 `app/` 目录里启动：`npm run tauri dev`。它不负责启动后端，后端需要单独跑着。

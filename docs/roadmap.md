@@ -52,7 +52,7 @@
 | 会话持久化 | JSONL + SQLite（见 docs/decisions.md D2） | ✅ |
 | 配置体系 | config.ini + ${ENV}（D4） | ✅ |
 | conversation.py | 把 cli/web 两份循环收成 application 层一份（D9） | ✅ |
-| trace | logs 表细化：一次请求/一次工具调用/一次结果各一条，带耗时和父子关系；为评测提供回放 | ⏳ 下一步 |
+| trace | spans 表（父子 + 耗时，D10/D11）+ `main.py trace` 回放；turn/llm_request 已埋，tool_call span 随第二层接入 | ✅ 骨架 |
 | 评测 | 从 trace 回放打分：工具调用对不对、答案准不准、花了多少 token | 未开始 |
 | 桌面端接通 | app 前端接 POST /chat；Tauri 启动时拉起 server | 未开始 |
 

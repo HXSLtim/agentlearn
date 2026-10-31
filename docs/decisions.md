@@ -15,6 +15,7 @@ infrastructure 翻译协议和存取；application 编排（循环住这里）�
 映射到熟悉的三层：interfaces=controller，application=service，infrastructure=dao+第三方封装。
 
 **否掉的备选**：
+
 - 套一层 `src/agentlearn/`——只有一套代码，外层包没有第二个实现对照，白增嵌套（试过又拆掉）。
 - 传统三层命名（service/dao）——概念能映射，但 application 这个名字时刻提醒「用例住这里」。
 
@@ -29,6 +30,7 @@ infrastructure 翻译协议和存取；application 编排（循环住这里）�
 对话只在末尾生长，追加天然契合。索引和日志是要查询的，放 SQLite。
 
 **否掉的备选**：
+
 - 全 SQLite——消息加字段要改表，学习期不想背迁移。
 - 全 JSONL——「列出最近会话」「按会话查事件」是查询，顺序扫文件不合适。
 - 两个库文件——两张表分两个 db 纯属折腾。
@@ -45,6 +47,7 @@ domain 类型（四种内容块）的字段名照 Anthropic 线上格式定，Op
 （OpenAI 的 stop/length/tool_calls 在 llm.py 翻成 end_turn/max_tokens/tool_use）。
 
 **否掉的备选**：
+
 - 只接一家——现实里中转/兼容端点两种协议都会遇到。
 - LangChain 的统一模型接口——它连循环一起包了，正是要自己写的东西。
 
@@ -60,6 +63,7 @@ domain 类型（四种内容块）的字段名照 Anthropic 线上格式定，Op
 密钥不落盘由 `${VAR}` 单独解决。fail-fast 让问题暴露在启动时而不是运行中。
 
 **否掉的备选**：
+
 - 纯 .env——provider/model 这类非环境配置放 env 语义别扭，没有 section 和注释位。
 - 配置入 SQLite——密钥落盘；配置是输入不是运行时数据；db 还在 gitignore 里，换机器就丢。
 - config 缺键时静默回退 env——出问题要查两个地方才知道值从哪来；`${VAR}` 让来源永远只有一个（文件）。
@@ -127,3 +131,41 @@ create_session），顺带消掉「启动即退出留下空会话行」的噪声
 - 路径锚定改成层层传参（main 传给 cli/web 再传给 Transcript/Store）——三处签名都要改，
   学习项目里 chdir 一行的确定性收益更高。
 - 历史内存累积 + 落盘——两份真相（内存和文件），崩溃后不一致，还要处理半截消息。
+
+---
+
+## D10 部署形态：外部系统只持一个会话，其余全在本地（2026-11-01）
+
+**决定**：企业级接入方式只有一种——企业系统开一个会话（HTTP 上就是 POST /chat 换回
+session_id，之后每次带着它）。工具执行、消息正文、trace 记录全部发生在 agent
+所在的本地机器上，外部系统不需要理解工具和轨迹的存在。
+
+**理由**：HTTP 面保持极小（chat + 将来的会话列表），边界清楚——企业交出来的是一个
+会话句柄，不是机器控制权；工具碰的是本地文件和进程，本来就该在哪跑就记在哪。
+trace/评测数据留在本地，回放完全离线可做。现在的 interfaces/web 就是这个边界。
+
+**否掉的备选**：
+
+- 工具执行搬到远端服务——工具的价值就在本地上下文（文件、进程），搬走就没了意义。
+- 外部系统参与 trace 上报——耦合增加，评测数据反而散在两边，拼不回完整轨迹。
+
+---
+
+## D11 trace：spans 表取代 logs 表（2026-11-01）
+
+**决定**：logs 表（一行一个点事件）退役，spans 表接棒。一行一个 span——一段有起止的
+操作，现在两种：turn（一轮对话，根）、llm_request（一次模型请求，子）；
+第二层加 tool_call。字段：span_id / parent_id / name / start_time / end_time /
+status（running / ok / error）/ data（JSON）。开始时 insert，结束时 update 回填。
+
+**理由**：参考 LangSmith 的 span 模型（父子关系 + 耗时），这是评测回放的最小完备形状：
+「每步多久、什么顺序、哪层出错」一次查询全出来。「开始写、结束改」让崩溃或断连
+留下 status=running、end_time 为空的半截 span——本身就是证据（实测：SSE 被客户端
+掐断的那轮在 trace 里显示「未结束」，正常轮显示耗时）。spans 只记控制流不记内容，
+「说了什么」仍以 JSONL 为准（D2 不变），两边拼起来才是完整回放。
+
+**否掉的备选**：
+
+- 维持 logs 点事件——没有起止和父子，算耗时只能相邻行相减，脆弱且算不出嵌套。
+- 事件对（span_start / span_end 两行纯追加）——读的时候要自己配对，写崩更容易出孤儿；
+  SQLite 是本地索引不是只追加的日志流，update 没有代价，换取读侧简单。

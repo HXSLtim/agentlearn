@@ -12,7 +12,7 @@
 
 - `server/`：Python 后端。入口 `main.py`（子命令 cli / web）。
   - `src/domain/`：纯数据类型，不依赖任何层。
-  - `src/infrastructure/`：llm.py（运输）、adapter.py（协议翻译）、config.py、transcript.py（JSONL 正文）、store.py（SQLite 索引+日志）。
+  - `src/infrastructure/`：llm.py（运输）、adapter.py（协议翻译）、config.py、transcript.py（JSONL 正文）、store.py（SQLite 索引 + trace/spans）。
   - `src/interfaces/`：cli.py、web/server.py，只做输入输出。
   - `src/application/`：conversation.py，两入口共用的会话循环（turn 落盘、日志都在这）。
 - `app/`：Tauri 桌面端，通过 HTTP 调 server，不共享代码。
@@ -25,6 +25,7 @@
 cd server
 uv run python main.py cli [session_id]   # 终端会话，可续接
 uv run python main.py web [--port 8000]  # HTTP 服务，默认只绑 127.0.0.1
+uv run python main.py trace <session_id> # 回放执行轨迹（spans 树）
 ```
 
 - 配置：复制 `config.example.ini` 为 `config.ini`。任何值可写 `${环境变量名}`。

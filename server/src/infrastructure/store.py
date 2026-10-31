@@ -1,20 +1,29 @@
-"""会话索引和日志，存在一个 SQLite 文件里。
+"""会话索引和执行轨迹，存在一个 SQLite 文件里。
 
-这里不存消息正文。正文在 transcript.py 的 JSONL 里。
-SQLite 只管两件需要查询的事：
+这里不存消息正文。正文在 transcript.py 的 JSONL 里，这个库只记「发生了什么」。
 
-- sessions 表：有哪些会话。用来列出历史会话，一行一个会话。
-- logs 表：会话里发生过什么。一行一个事件，比如一次请求、一次报错。
+- sessions 表：有哪些会话。一行一个会话，给会话列表用。
+- spans 表：执行轨迹（trace）。一行一个 span——一段有起止时间的操作，
+  现在有两种：turn（一轮对话）、llm_request（一次模型请求），
+  第二层会加 tool_call（一次工具调用）。
+  每行有 parent_id 指向父 span，一个会话的 span 摊开是一棵树；
+  回答「每步做了多久、按什么顺序、哪里出错」靠它，评测回放的数据源也是它。
 
-两张表放同一个库，没必要拆成两个数据库文件。
+「按会话组织、记在本地」是刻意的部署形态（docs/decisions.md D10）：
+外部系统只需要拿 session_id，工具执行和轨迹全留在 agent 所在的机器上。
+
+spans 表取代了原来的 logs 表（一行一个点事件）：点事件算不出耗时，
+也没有父子关系，撑不起回放。选型记录是 D11。
 """
+import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 class Store:
-    """agent.db 的读写器。建表、登记会话、记日志都从这里走。"""
+    """agent.db 的读写器。建表、登记会话、记 span 都从这里走。"""
 
     def __init__(self, db_path: Path) -> None:
         # 数据库文件的父目录可能还不存在，先建好。
@@ -41,12 +50,16 @@ class Store:
                 created_at text,               -- 创建时间，ISO 格式的字符串
                 jsonl_path text                -- 正文文件的路径
             );
-            create table if not exists logs (
-                id         integer primary key,  -- 自增，也就是事件的先后顺序
+            create table if not exists spans (
+                id         integer primary key,  -- 自增，插入顺序就是开始顺序
+                span_id    text unique,          -- 这条 span 自己的 id，结束时靠它找回来
                 session_id text,                 -- 属于哪个会话
-                time       text,                 -- 事件发生的时间
-                event      text,                 -- 事件种类：request、error 等
-                data       text                  -- 一段 JSON，事件的具体内容
+                parent_id  text,                 -- 父 span 的 span_id。turn 是根，为 NULL
+                name       text,                 -- turn / llm_request / tool_call（第二层）
+                start_time text,                 -- 开始时间
+                end_time   text,                 -- 结束时回填。NULL = 没跑完进程就没了
+                status     text,                 -- running / ok / error
+                data       text                  -- JSON：模型名、stop_reason、错误消息等
             );
             """
         )
@@ -73,25 +86,63 @@ class Store:
         """
         return list(self.conn.execute("select * from sessions order by created_at desc"))
 
-    def log(self, session_id: str, event: str, data: str) -> None:
-        """记一条事件。data 由调用方准备好，是一段 JSON 字符串。"""
+    def start_span(
+        self,
+        session_id: str,
+        name: str,
+        parent_id: str | None = None,
+        data: dict | None = None,
+    ) -> str:
+        """记一段操作开始，返回它的 span_id（end_span 时要拿回来）。
+
+        parent_id 不传就是根 span。data 是开始时就知道的信息（比如模型名），
+        结束时知道的（比如 stop_reason）由 end_span 补上。
+        """
+        span_id = uuid.uuid4().hex
         self.conn.execute(
-            "insert into logs (session_id, time, event, data) values (?, ?, ?, ?)",
-            (session_id, _now(), event, data),
+            "insert into spans (span_id, session_id, parent_id, name, start_time, status, data)"
+            " values (?, ?, ?, ?, ?, ?, ?)",
+            (span_id, session_id, parent_id, name, _now(), "running", _json(data)),
+        )
+        self.conn.commit()
+        return span_id
+
+    def end_span(self, span_id: str, status: str = "ok", data: dict | None = None) -> None:
+        """回填一段操作的结束：结束时间、状态、补充信息。
+
+        data 和开始时的合并而不是覆盖——开始记了模型名，结束补 stop_reason，
+        两边都留得住。span 不见了（理论上不会）就不做任何事。
+        """
+        row = self.conn.execute("select data from spans where span_id = ?", (span_id,)).fetchone()
+        if row is None:
+            return
+        merged = json.loads(row["data"] or "{}")
+        merged.update(data or {})
+        self.conn.execute(
+            "update spans set end_time = ?, status = ?, data = ? where span_id = ?",
+            (_now(), status, _json(merged), span_id),
         )
         self.conn.commit()
 
-    def logs_for(self, session_id: str) -> list[sqlite3.Row]:
-        """一个会话的全部事件，按发生顺序排列。id 自增，所以按 id 排就是按时间排。
+    def spans_for(self, session_id: str) -> list[sqlite3.Row]:
+        """一个会话的全部 span，按开始顺序排列。id 自增，所以按 id 排就是按开始排。
 
-        预留：trace 回放和评测用，暂时没有调用方。
+        trace 子命令用它画树；评测回放读它拼「每步耗时 + 顺序」。
         """
-        return list(self.conn.execute("select * from logs where session_id = ? order by id", (session_id,)))
+        return list(
+            self.conn.execute("select * from spans where session_id = ? order by id", (session_id,))
+        )
+
+
+def _json(data: dict | None) -> str:
+    """dict 转成 JSON 字符串存库。ensure_ascii=False 让中文直接可读。"""
+    return json.dumps(data or {}, ensure_ascii=False)
 
 
 def _now() -> str:
-    """当前时间的 ISO 字符串，例如 2026-10-30T01:23:45+00:00。
+    """当前时间的 ISO 字符串，例如 2026-10-30T01:23:45.678901+00:00。
 
     统一用 UTC，避免同一条数据在不同时区的机器上读出来差几个小时。
+    带微秒：span 的耗时是两个时间相减算出来的，粒度到不了微秒就全显示 0。
     """
     return datetime.now(timezone.utc).isoformat()
