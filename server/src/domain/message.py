@@ -6,8 +6,8 @@
 这么分是为了让别的层都依赖这里，而这里谁都不依赖。
 换 SDK、换存储方式，这个文件都不用改。
 
-工具相关的类型先没有。等模型真的返回一次 tool_use，
-对着真实返回的块再加，避免凭空猜一个对不上的形状。
+工具相关的类型按 Anthropic 的真实返回定：一个 tool_use 块带 id、name、input。
+OpenAI 的形状不同，由 infrastructure 里的适配器翻译成这里的类型。
 """
 # asdict 把 dataclass 实例递归转成普通字典，json.dumps 只能处理字典和列表。
 from dataclasses import asdict, dataclass
@@ -41,9 +41,45 @@ class ThinkingBlock:
     type: Literal["thinking"] = "thinking"
 
 
-# 一条消息的内容由这两种块组成。用联合类型表示「二者之一」，
-# 这样别的地方拿到一块时能明确只有这两种可能。
-ContentBlock = TextBlock | ThinkingBlock
+@dataclass
+class ToolUseBlock:
+    """模型发出的一次工具调用。
+
+    字段照着真实返回定：一次带工具的请求，模型返回的块就是这个形状，
+    同时 stop_reason 变成 "tool_use"。
+    """
+
+    # 这一次调用的标识。交回结果时要带上同一个值，模型才知道结果对应哪一次调用。
+    # 并行调两个工具时全靠它区分，不能靠顺序猜。把它当不透明字符串，别假设格式。
+    id: str
+    # 模型选中的工具名。
+    name: str
+    # 模型填好的参数，已经是字典。
+    input: dict
+    # 类型标记，固定是 "tool_use"。
+    type: Literal["tool_use"] = "tool_use"
+
+
+@dataclass
+class ToolResultBlock:
+    """一次工具调用的执行结果。
+
+    它不是模型返回的，是你执行完工具后自己造的，放进下一条 user 消息里交回去。
+    """
+
+    # 对应哪一次调用，值取自 ToolUseBlock.id。
+    tool_use_id: str
+    # 执行结果的文本。
+    content: str
+    # 执行是否失败。失败也要交回结果，而不是抛掉，模型才能据此调整。
+    is_error: bool = False
+    # 类型标记，固定是 "tool_result"。
+    type: Literal["tool_result"] = "tool_result"
+
+
+# 一条消息的内容由这四种块组成。用联合类型表示「其中之一」，
+# 这样别的地方拿到一块时能明确只有这几种可能。
+ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock
 
 
 @dataclass
@@ -60,7 +96,11 @@ class Message:
     content: list[ContentBlock]
 
     def to_dict(self) -> dict:
-        """变成普通字典，好让 json.dumps 能写成一行 JSON。"""
+        """变成普通字典，好让 json.dumps 能写成一行 JSON。
+
+        字段名当初照着 Anthropic 的线上格式定，所以这个字典同时就是
+        Anthropic 请求要的形状——adapter.message_to_anthropic 直接返回它。
+        """
         return asdict(self)
 
     @staticmethod
@@ -77,8 +117,16 @@ class Message:
                 blocks.append(ThinkingBlock(thinking=block["thinking"], signature=block.get("signature", "")))
             elif block["type"] == "text":
                 blocks.append(TextBlock(text=block["text"]))
+            elif block["type"] == "tool_use":
+                blocks.append(ToolUseBlock(id=block["id"], name=block["name"], input=block["input"]))
+            elif block["type"] == "tool_result":
+                blocks.append(ToolResultBlock(
+                    tool_use_id=block["tool_use_id"],
+                    content=block["content"],
+                    is_error=block.get("is_error", False),
+                ))
             else:
-                # 出现第三种块说明模型返回了还没定义的类型（比如将来的工具调用）。
+                # 走到这里说明出现了还没定义的块类型。
                 # 直接报错，而不是静默丢掉，免得数据缺了一块还不知道。
                 raise ValueError(f"未知的内容块: {block['type']}")
         return Message(role=data["role"], content=blocks)
