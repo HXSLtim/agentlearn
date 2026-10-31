@@ -5,14 +5,10 @@
 
 ## 下一步（已排期）
 
-- [ ] `application/conversation.py`：把 cli.py / web/server.py 里两份重复的循环收成一份，
-      入口只剩输入输出。顺路解决：
-      - `DATA = Path("data")` 两入口各一份、config.ini 路径都依赖启动时的工作目录——
-        改成 main.py 用 `Path(__file__).parent` 锚定后显式下传
-      - server.py 在 import 时就读配置（main.py 启动 cli 也会连带读）——改成惰性加载
-      - history 维护方式统一（cli 内存累积 / web 每轮整体重读，选一种）
 - [ ] trace 基建：细化 logs 表事件（一次请求、一次工具调用、一次结果，各带耗时），
-      设计参考 LangSmith 的 span 模型（父子关系 + 耗时），为评测提供回放数据
+      设计参考 LangSmith 的 span 模型（父子关系 + 耗时），为评测提供回放数据。
+      埋点位置在 application/conversation.py——现在只有 request/error 两种事件，
+      工具循环加上后在这里记 tool_call / tool_result
 
 ## 第二层：一个工具 + 手写循环
 
@@ -30,8 +26,6 @@
       当前中转不校验所以没炸；换成会校验的接口前必须从最终消息回填，否则续会话 400
 - [ ] web 无鉴权：现在安全仅因为 uvicorn 默认只绑 127.0.0.1。
       绑 0.0.0.0 / 加 --host 之前必须先加鉴权
-- [ ] cli 启动即登记会话（哪怕立刻退出），sessions 表会留下指向不存在 jsonl 的行；
-      web 只在真有请求时登记。小噪声，建 conversation 时统一
 - [ ] Tauri 一键启动：app 启动时拉起 server 进程（现在是两边各开各的）
 - [ ] app 前端还是模板欢迎页，没接 POST /chat
 - [ ] pyproject 把 domain/infrastructure/interfaces 装成顶层包名，与第三方包撞名风险低，

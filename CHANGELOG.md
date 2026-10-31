@@ -2,6 +2,20 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-01（二）：application 层成立
+
+- `application/conversation.py`：Conversation 成为两入口唯一的会话循环——
+  登记、user 落盘、整体重读历史、流转发、assistant 落盘、request/error 日志都在 turn() 里；
+  cli.py / web/server.py 缩成纯输入输出。选型与三个随路决定见 docs/decisions.md D9。
+- 路径锚定：main.py 启动时 `os.chdir` 到 server/，从仓库根启动 data/ 与 config.ini
+  也落在 server/ 下（实测仓库根启动一轮对话，正文进 server/data/sessions/）。
+- 配置惰性加载：import server 模块不再读 config.ini（实测 `_cached_config is None`）；
+  web 启动时 fail-fast 读一次。
+- 会话登记改惰性：第一次真有消息才进 sessions 表，启动即退出的会话不再留空行
+  （实测空会话不登记、已用会话登记且 logs 有 request 记录）。
+- 验证：cli 续接记忆正常；web 非法 session_id 仍 422、SSE 出流、done 事件回传
+  session_id、正文落盘。
+
 ## 2026-11-01
 
 - 协议适配器 `infrastructure/adapter.py` 成立：出站两个方向（message_to_anthropic /

@@ -19,8 +19,8 @@
 
 按依赖方向分层，外层依赖内层：
 
-- `domain`：纯概念。Message、ToolCall。不依赖 SDK。第二层才需要。
-- `application`：用例。agent 循环住在这里。第二层才需要。
+- `domain`：纯概念。Message、四种内容块。不依赖 SDK。
+- `application`：用例。会话循环（conversation.py）住在这里，cli 和 web 共用。
 - `infrastructure`：anthropic 和 openai 的客户端。把 SDK 的事件翻译成自己的类型。
 - `interfaces`：入口。只负责输入输出。
 
@@ -29,9 +29,10 @@
 - `server/`：后端。`pyproject.toml`、`main.py`、代码、数据都在这里。
 - `app/`：Tauri 桌面端。通过 HTTP 调用 server，不共享代码。
 
-`server/src/` 下三个层各是一个包：
+`server/src/` 下四个层各是一个包：
 
 - `domain/message.py`：Message 和四种内容块（Text、Thinking、ToolUse、ToolResult）。
+- `application/conversation.py`：Conversation，唯一的会话循环；入口只剩输入输出。
 - `infrastructure/llm.py`：AnthropicChat 和 OpenAIChat，只管运输；build_chat 按配置挑类；merge_fragment 把流式片段并成块。
 - `infrastructure/adapter.py`：协议适配器，两家的形状差别全在这里翻译。
 - `infrastructure/config.py`：读 config.ini，支持 `${环境变量}` 引用。
@@ -40,7 +41,7 @@
 - `interfaces/cli.py`：终端入口。
 - `interfaces/web/server.py`：HTTP 入口，给 `app/` 调用。
 
-空的层不提前建。`application` 等写循环时再加。
+空的层不提前建；application 在收拢两入口循环时（2026-11-01）成立。
 
 ## 配置
 

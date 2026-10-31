@@ -14,7 +14,7 @@
   - `src/domain/`：纯数据类型，不依赖任何层。
   - `src/infrastructure/`：llm.py（运输）、adapter.py（协议翻译）、config.py、transcript.py（JSONL 正文）、store.py（SQLite 索引+日志）。
   - `src/interfaces/`：cli.py、web/server.py，只做输入输出。
-  - `src/application/`：尚未建，留给 agent 循环（conversation.py）。
+  - `src/application/`：conversation.py，两入口共用的会话循环（turn 落盘、日志都在这）。
 - `app/`：Tauri 桌面端，通过 HTTP 调 server，不共享代码。
 - `docs/`：`decisions.md`（选型记录，只追加）+ `roadmap.md`（路线与验收标准）。
 - `data/`（运行时产生，gitignore）、`config.ini`（gitignore，模板 config.example.ini）。

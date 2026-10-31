@@ -1,8 +1,8 @@
 """给前端用的 HTTP 入口。
 
 前端是 app/ 里的 Tauri 应用，跑在另一个来源上，通过这个接口来用模型。
-和 cli.py 做的事情相同：读入问题，把片段送出去，顺手把消息存下来。
-区别只在传输方式。终端是打印，这里是 SSE，一种服务器持续往外推事件的 HTTP 响应。
+只做输入输出：请求进 -> Conversation 跑一轮 -> 片段以 SSE 推出去。
+编排（落盘、历史、日志）全在 application/conversation.py。
 
 POST /chat
     请求体：{"question": "...", "session_id": "..."}
@@ -15,9 +15,6 @@ POST /chat
         data: {"kind": "error", "message": "..."}
     前端拿到 session_id 后保存，下次请求带上，就是在续同一次对话。
     session_id 不是 UUID 时，端点直接返回 422，不开始推流。
-
-这份循环逻辑在 cli.py 里还有一份（把 SSE 推送换回 print）。
-下一步建 application/conversation.py 时会把两份收成一份，入口只剩输入输出。
 """
 import json
 import uuid
@@ -29,16 +26,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from domain.message import Message, TextBlock, ThinkingBlock
-from infrastructure.config import load_config
-from infrastructure.llm import build_chat, merge_fragment
+from application.conversation import Conversation
+from infrastructure.config import LLMConfig, load_config
+from infrastructure.llm import build_chat
 from infrastructure.store import Store
 from infrastructure.transcript import Transcript
 
-# 数据目录固定在 server/data。启动时的工作目录必须是 server，main.py 满足这一点。
+# 数据目录固定在 server/data。相对路径由 main.py 启动时把工作目录
+# 钉在 server/ 来锚定（见 main.py 的说明）。
 DATA = Path("data")
-# 配置在服务启动时读一次，之后所有请求共用。读不到直接启动失败，不带默认值。
-CONFIG = load_config()
+
+# 配置惰性加载：import 本模块不触发读文件。main.py 启动 cli 模式时也会
+# import 这个模块（拿 web_main），模块级读配置会让 cli 的报错出现在
+# import 阶段，还会让不配 config.ini 就跑测试变得不可能。
+_cached_config: LLMConfig | None = None
+
+
+def get_config() -> LLMConfig:
+    """读一次配置，之后缓存复用。第一次调用发生在 web 启动或第一个请求。"""
+    global _cached_config
+    if _cached_config is None:
+        _cached_config = load_config()
+    return _cached_config
+
 
 # FastAPI 应用本身。路由都登记在它上面。
 app = FastAPI()
@@ -66,48 +76,32 @@ class ChatRequest(BaseModel):
 
 
 def chat_events(question: str, session_id: str):
-    """产生 SSE 的每一条。写法和 cli.py 的循环一致，只是把 print 换成了 yield。
+    """产生 SSE 的每一条。这是一个生成器。
 
-    这是一个生成器。StreamingResponse 每拿到一个 yield 的字符串就往外推一次。
+    编排（登记会话、落盘、历史、日志）都在 Conversation 里，
+    这里只把它的片段翻译成 SSE 事件。
     """
-    # 每个请求各开一套连接。本地单用户够用；并发上来再换连接池。
-    transcript = Transcript(DATA / "sessions")
-    store = Store(DATA / "agent.db")
     # 没带 session_id 就是新会话，分配一个 UUID。
     if not session_id:
         session_id = str(uuid.uuid4())
-    # 正文文件不存在才登记。续接时文件已在，跳过，避免主键冲突。
-    if not transcript.path_for(session_id).exists():
-        store.create_session(session_id, CONFIG.model_id, str(transcript.path_for(session_id)))
-
-    # 用户的问题先落盘。
-    user = Message("user", [TextBlock(question)])
-    transcript.append(session_id, user)
-    # 再整体读回。这样 history 里自然包含刚刚这条问题，不用单独 append。
-    history = transcript.read(session_id)
-
-    chat = build_chat(CONFIG)
-    # 片段一边推给前端，一边并成完整的块，规则在 merge_fragment 里。
-    blocks: list[TextBlock | ThinkingBlock] = []
+    # 每个请求各开一套连接。本地单用户够用；并发上来再换连接池。
+    conv = Conversation(
+        build_chat(get_config()),
+        Transcript(DATA / "sessions"),
+        Store(DATA / "agent.db"),
+        session_id,
+    )
     try:
-        for kind, text in chat.stream(history):
+        for kind, text in conv.turn(question):
             # 每个片段立刻作为一条 SSE 事件推出去。
             yield _event({"kind": kind, "text": text})
-            merge_fragment(blocks, kind, text)
     except Exception as e:
         # 200 已经发出，没法再给状态码，只能用事件告诉前端出错了。
-        # 半截回复不落盘：存一半的对话和用户看到的不一致，宁可不要；
-        # 已落盘的 user 消息留着，下次请求模型会看到这次没答上的问题。
-        store.log(session_id, "error", json.dumps({"message": str(e)}))
+        # error 日志已由 Conversation 记过。
         yield _event({"kind": "error", "message": str(e)})
         return
-
-    # 回复完整后落盘，并记一条日志。
-    # 拼出来的思考块 signature 是空字符串，见 merge_fragment 的说明。
-    transcript.append(session_id, Message("assistant", blocks))
-    store.log(session_id, "request", json.dumps({"stop_reason": chat.stop_reason}))
     # 最后一条事件告诉前端：结束了、为什么结束、这次会话的 id 是什么。
-    yield _event({"kind": "done", "stop_reason": chat.stop_reason, "session_id": session_id})
+    yield _event({"kind": "done", "stop_reason": conv.stop_reason, "session_id": session_id})
 
 
 def _event(payload: dict) -> str:
@@ -137,7 +131,11 @@ def chat(request: ChatRequest) -> StreamingResponse:
 
 
 def main(port: int = 8000) -> None:
-    """启动 HTTP 服务。端口由 main.py 传入。"""
+    """启动 HTTP 服务。端口由 main.py 传入。
+
+    启动时先读一次配置：坏了当场报，不带进第一个请求里。
+    """
+    get_config()
     uvicorn.run(app, port=port)
 
 

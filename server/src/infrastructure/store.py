@@ -61,6 +61,11 @@ class Store:
         # execute 只是改了内存里的事务，commit 才真正写进文件。
         self.conn.commit()
 
+    def has_session(self, session_id: str) -> bool:
+        """这个会话是否已登记过。Conversation 靠它决定要不要 create_session。"""
+        row = self.conn.execute("select 1 from sessions where id = ?", (session_id,)).fetchone()
+        return row is not None
+
     def list_sessions(self) -> list[sqlite3.Row]:
         """全部会话，最近创建的排在前面。
 

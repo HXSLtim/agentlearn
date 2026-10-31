@@ -103,3 +103,27 @@ SQL 全参数化；工具执行永远禁止 eval/exec（calculator 用 ast 求�
 
 **理由**：当前「无鉴权也安全」完全依赖只听本机回环。绑外网 / 加 --host 之前必须先加鉴权，
 这一条记在 TODO「已知欠账」。
+
+---
+
+## D9 application 层落地：Conversation + 三个随路决定（2026-11-01）
+
+**决定**：`application/conversation.py` 的 `Conversation.turn()` 成为唯一的会话循环，
+cli / web 只剩输入输出。随路定死三件事：
+
+1. **历史维护 = 每轮从 JSONL 整体重读**，不做内存累积。
+   JSONL 文件是唯一事实来源，崩溃/重启后天然一致；本地小文件读取开销可忽略。
+2. **相对路径用 main.py 启动时 `os.chdir(Path(__file__).parent)` 锚定**。
+   main.py 是进程唯一入口，chdir 安全；从任何目录启动，data/ 和 config.ini 都落在 server/ 下。
+3. **配置惰性加载**（`get_config()` 缓存），import server 模块不再触发读文件。
+   否则 main.py 启动 cli 也会连带读 web 的配置，报错出现在 import 阶段。
+
+**理由**：两份循环已经开始漂移（cli 内存累积 vs web 整体重读、登记时机不同），
+第三处（工具循环）即将加入——先收拢再扩展。会话登记改成惰性（第一次真有消息才
+create_session），顺带消掉「启动即退出留下空会话行」的噪声。
+
+**否掉的备选**：
+
+- 路径锚定改成层层传参（main 传给 cli/web 再传给 Transcript/Store）——三处签名都要改，
+  学习项目里 chdir 一行的确定性收益更高。
+- 历史内存累积 + 落盘——两份真相（内存和文件），崩溃后不一致，还要处理半截消息。

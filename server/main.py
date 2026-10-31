@@ -7,12 +7,22 @@
     uv run python main.py web                启动 HTTP 服务，默认 8000 端口
 """
 import argparse
+import os
+from pathlib import Path
 
 from interfaces.cli import main as cli_main
 from interfaces.web.server import main as web_main
 
+# server/ 的绝对路径。config.ini 和 data/ 这些相对路径全靠它锚定。
+ROOT = Path(__file__).resolve().parent
+
 
 def run() -> None:
+    # 把工作目录钉在 server/。cli.py / server.py / config.py 里的相对路径
+    # （Path("data")、Path("config.ini")）由此获得确定的位置，
+    # 从仓库根、从别的目录启动都等价。main.py 是进程唯一入口，chdir 是安全的。
+    os.chdir(ROOT)
+
     parser = argparse.ArgumentParser(description="AgentLearn")
     # 两个子命令：cli 和 web。
     sub = parser.add_subparsers(dest="mode", required=True)
