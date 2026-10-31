@@ -124,6 +124,22 @@ class Store:
         )
         self.conn.commit()
 
+    def span_duration_ms(self, span_id: str) -> int | None:
+        """一个 span 的耗时，单位毫秒。还没结束（end_time 为空）返回 None。
+
+        事件流和 trace 回放都用它，保证两边看到的是同一个数：
+        耗时只在这一处算，不让每个调用方各写一遍时间相减。
+        """
+        row = self.conn.execute(
+            "select start_time, end_time from spans where span_id = ?", (span_id,)
+        ).fetchone()
+        if row is None or row["end_time"] is None:
+            return None
+        seconds = (
+            datetime.fromisoformat(row["end_time"]) - datetime.fromisoformat(row["start_time"])
+        ).total_seconds()
+        return round(seconds * 1000)
+
     def spans_for(self, session_id: str) -> list[sqlite3.Row]:
         """一个会话的全部 span，按开始顺序排列。id 自增，所以按 id 排就是按开始排。
 

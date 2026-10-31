@@ -7,11 +7,17 @@
 POST /chat
     请求体：{"question": "...", "session_id": "..."}
     session_id 为空就新开一个会话。
-    响应是 text/event-stream，每条事件一行，形状为：
-        data: {"kind": "thinking" | "text" | "tool_use", "text": "..."}
-    tool_use 是模型要调工具（text 为工具名），一整个调用只报一次；
-    之后还会有下一轮 thinking / text，直到：
-        data: {"kind": "done", "stop_reason": "...", "session_id": "..."}
+    响应是 text/event-stream，每条事件一个 JSON 对象：
+        {"kind": "thinking" | "text", "text": "..."}     流式片段
+        {"kind": "tool_use", "id": "...", "name": "...", "input": {...}}
+            模型要调工具，执行前就到。id 是这一次调用的标识，input 是解析好的参数
+        {"kind": "tool_result", "id": "...", "name": "...", "output": "...",
+         "is_error": false, "elapsed_ms": 1}
+            工具跑完。id 和对应的 tool_use 相同：一次回复里并行多个工具时，
+            前端靠 id 把结果填回各自的卡片，不能靠事件顺序猜。
+            elapsed_ms 与 `main.py trace` 回放的耗时是同一个数
+    全部推完再补一条：
+        {"kind": "done", "stop_reason": "...", "session_id": "..."}
     中途出错则补一条（200 已发出，改不了状态码，只能用事件报错）：
         data: {"kind": "error", "message": "..."}
     前端拿到 session_id 后保存，下次请求带上，就是在续同一次对话。
@@ -80,7 +86,9 @@ def chat_events(question: str, session_id: str):
     """产生 SSE 的每一条。这是一个生成器。
 
     编排（登记会话、落盘、历史、日志）都在 Conversation 里，
-    这里只把它的片段翻译成 SSE 事件。
+    这里只把它产出的事件原样推进 SSE——事件已经是结构化的 dict
+    （形状见本文件顶部），前端拿得到工具的入参、出参、耗时和是否出错，
+    不需要自己再拼。
     """
     # 没带 session_id 就是新会话，分配一个 UUID。
     if not session_id:
@@ -93,9 +101,9 @@ def chat_events(question: str, session_id: str):
         session_id,
     )
     try:
-        for kind, text in conv.turn(question):
-            # 每个片段立刻作为一条 SSE 事件推出去。
-            yield _event({"kind": kind, "text": text})
+        for event in conv.turn(question):
+            # 每个事件立刻作为一条 SSE 推出去。
+            yield _event(event)
     except Exception as e:
         # 200 已经发出，没法再给状态码，只能用事件告诉前端出错了。
         # error 日志已由 Conversation 记过。

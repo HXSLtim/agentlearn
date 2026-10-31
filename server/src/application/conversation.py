@@ -15,6 +15,15 @@ cli 和 web 两个入口共用的循环收在这里：入口只剩输入输出�
 历史维护方式统一为「每轮从 JSONL 整体重读」：文件是唯一事实来源，
 崩溃或重启后天然一致，本地小文件的读取开销可以忽略。
 
+turn() 产出的事件是 dict，两个入口消费同一份：
+    {"kind": "thinking" | "text", "text": "..."}        流式片段
+    {"kind": "tool_use", "id", "name", "input"}         模型要调工具，执行前就发
+    {"kind": "tool_result", "id", "name", "output",
+     "is_error", "elapsed_ms"}                          工具跑完，带结果和耗时
+id 是这一次调用的标识，和落盘的 ToolUseBlock.id 是同一个值：
+一次回复里并行多个工具时，前端靠它把 tool_result 填回对应的 tool_use，
+不能靠事件顺序猜。cli 把事件打印成文字，web 原样塞进 SSE。
+
 trace 的埋点也在这里：turn span 是一棵树的根，树上是循环走过的每一层——
 每次模型请求一个 llm_request span，每次工具执行一个 tool_call span
 （见 store.py 的 spans 表）。`main.py trace` 能把这棵树打出来。
@@ -59,9 +68,10 @@ class Conversation:
         self.stop_reason: str | None = None
 
     def turn(self, question: str):
-        """跑一轮对话，逐个产出 (kind, text) 片段，直到给出最终回答。
+        """跑一轮对话，逐个产出事件（dict），直到给出最终回答。
 
-        片段只交出来，怎么展示是入口的事：终端打印或 SSE 推送。
+        事件的形状见本文件顶部。两个入口拿到的是同一份：
+        cli 打印，web 原样推进 SSE，谁都不需要再拼装工具的入参出参。
         一轮的轨迹是 turn span 一棵树：循环里每次模型请求挂一个
         llm_request，每次工具执行挂一个 tool_call（`main.py trace` 回放）。
         流中途出错时：给出错的 span 标上 error（共同动作，记在这里），
@@ -110,7 +120,11 @@ class Conversation:
                 for kind, text in self.chat.stream(history, tools):
                     if ttft is None:
                         ttft = time.monotonic() - t0
-                    yield kind, text
+                    # 模型的 tool_use 片段只有名字，入参还在流里分片、这里拿不到，
+                    # 跳过它：完整的 tool_use 事件等这轮流结束、从 blocks 里发。
+                    if kind == "tool_use":
+                        continue
+                    yield {"kind": kind, "text": text}
             except Exception as e:
                 # 出错：两个 span 都标 error，错误消息记在子 span 上（离错误最近）。
                 self.store.end_span(llm_span, status="error", data={"message": str(e)})
@@ -144,6 +158,9 @@ class Conversation:
             for block in blocks:
                 if block.type != "tool_use":
                     continue
+                # 执行前先报一次：前端可以立刻渲染「正在调用 calculator(12*11)」，
+                # 不用干等工具跑完。id 带上，并行多个调用时结果靠它配对。
+                yield {"kind": "tool_use", "id": block.id, "name": block.name, "input": block.input}
                 tool_span = self.store.start_span(
                     self.session_id,
                     "tool_call",
@@ -157,6 +174,18 @@ class Conversation:
                     status="error" if is_error else "ok",
                     data={"output": content},
                 )
+                # 耗时用 span 的起止时间，和 trace 回放是同一个算法（store.span_duration_ms）：
+                # 前端看到的 elapsed_ms 跟 `main.py trace` 打出来的毫秒数一致。
+                elapsed_ms = self.store.span_duration_ms(tool_span)
+                # 跑完再报一次：出参、是否出错、耗时。id 和上面的 tool_use 相同。
+                yield {
+                    "kind": "tool_result",
+                    "id": block.id,
+                    "name": block.name,
+                    "output": content,
+                    "is_error": is_error,
+                    "elapsed_ms": elapsed_ms,
+                }
                 results.append(ToolResultBlock(
                     tool_use_id=block.id, content=content, is_error=is_error
                 ))
