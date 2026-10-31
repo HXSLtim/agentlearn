@@ -8,8 +8,9 @@ POST /chat
     请求体：{"question": "...", "session_id": "..."}
     session_id 为空就新开一个会话。
     响应是 text/event-stream，每条事件一行，形状为：
-        data: {"kind": "thinking" | "text", "text": "..."}
-    全部推完再补一条：
+        data: {"kind": "thinking" | "text" | "tool_use", "text": "..."}
+    tool_use 是模型要调工具（text 为工具名），一整个调用只报一次；
+    之后还会有下一轮 thinking / text，直到：
         data: {"kind": "done", "stop_reason": "...", "session_id": "..."}
     中途出错则补一条（200 已发出，改不了状态码，只能用事件报错）：
         data: {"kind": "error", "message": "..."}

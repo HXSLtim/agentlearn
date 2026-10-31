@@ -52,6 +52,11 @@ def main(session_id: str | None = None) -> None:
         # 片段只管打印；落盘、历史、日志都在 Conversation 里。
         try:
             for kind, text in conv.turn(question):
+                if kind == "tool_use":
+                    # 工具调用不是文字流：单独一行提示是哪个工具，
+                    # 下一轮模型的回答会接着打印在后面。
+                    print(f"\n[调用工具 {text}] ", end="", flush=True)
+                    continue
                 # end="" 不换行，flush=True 立刻显示，否则会攒一批才一起出来。
                 print(text, end="", flush=True)
         except Exception as e:

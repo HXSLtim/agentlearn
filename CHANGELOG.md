@@ -2,6 +2,29 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-01（四）：第 2 层——工具循环
+
+- agent loop 本体落在 conversation.py：stop_reason == "tool_use" 时执行工具、
+  tool_result 作为 user 消息交回、整体重读历史再请求，直到模型不再要工具；
+  MAX_TOOL_ROUNDS=8 兜底（用尽时 turn span 记 note，stop_reason 如实留 tool_use）。
+- 第一个工具 calculator（application/tools.py）：ast 白名单求值，禁 eval。
+  实测攻击样本全部拒绝：函数调用、属性探路、语句、lambda、变量名、巨型幂、bool。
+  run_tool 永不抛异常——出错/未知工具/参数错都变成 is_error 结果交回模型。
+- 工具注册 = 每次请求重申定义：domain/tool.py 的 Tool，all_tools() 随请求带上。
+  出站翻译 tool_to_anthropic / tool_to_openai 收在 adapter.py。
+- llm.py：stream 增加 tools 参数；落盘块改从完整消息取（Anthropic：最终消息，
+  顺带把 thinking 的 signature 回填，消掉该欠账；OpenAI：流里自拼）。
+  新增 "tool_use" 片段（只报工具名，给入口做提示）。
+- OpenAI 方向适配器补齐（离线验证，未接真实端点）：出站 message_to_openai 改为
+  返回列表——工具结果拆成独立 role="tool" 消息、助手调用变 tool_calls 数组
+  （arguments 为 JSON 字符串）；入站 merge_tool_call_delta + tool_uses_from_acc
+  按 index 拼分片，arguments 解析回字典，与 Anthropic 的 input 对齐。
+- tool_call span 接入 trace：挂在 turn 下，data 记工具名/入参/出参/是否出错。
+- 验收：真实模型算 (123*456)+789，调两轮 calculator，答 56877（正确）；
+  JSONL 四种块齐全；重开会话续接直接答出 56877。
+- 记录选型 D12：自建 runtime 而不是站在 OpenCode 上做 MCP+Skills——
+  交付生意与产品生意的区别，站在别人 runtime 上最难的 30% 够不着。
+
 ## 2026-11-01（三）：trace 骨架
 
 - store.py 的 logs 表退役，spans 表接棒（D11）：一行一个 span（turn / llm_request，

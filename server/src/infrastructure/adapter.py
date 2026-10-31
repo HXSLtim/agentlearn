@@ -3,16 +3,24 @@
 两家协议的形状差别全收在这里，函数不发网络请求，只做转换：
 
 出站（发给模型的请求）：
-    message_to_anthropic / message_to_openai，由 llm.py 的两个客户端调用。
-入站（模型返回的内容块）：
-    block_from_anthropic。它还没接进请求路径——现在的流式路径只消费文字片段，
-    tool_use 块的翻译等工具循环落地时启用（形状已经用真实返回验证过一轮）。
+    message_to_anthropic / message_to_openai：一条消息翻成请求里的字典。
+    tool_to_anthropic / tool_to_openai：工具定义翻成各家的形状。
+    注意 message_to_openai 返回的是字典列表——OpenAI 那边一条我们的消息
+    可能要拆成多条（见函数内说明），Anthropic 方向恒为一条。
+入站（模型返回的内容）：
+    block_from_anthropic：Anthropic 响应块 -> domain 类型。
+    merge_tool_call_delta / tool_uses_from_acc：OpenAI 流式的 tool_calls
+    是逐片到达的 JSON 字符串，这两个函数负责拼。
 
 对照：domain/message.py 的 Message.from_dict 也按 type 分发，但职责不同——
 那个把 JSONL 里我们自己存的字典还原成对象（四种块都可能遇到），
-这个把 SDK 响应的块翻译成对象（模型永远不会返回 tool_result，所以只有三种）。
+block_from_anthropic 把 SDK 响应的块翻译成对象（模型永远不会返回
+tool_result，所以只有三种）。
 """
+import json
+
 from domain.message import ContentBlock, Message, TextBlock, ThinkingBlock, ToolUseBlock
+from domain.tool import Tool
 
 
 def block_from_anthropic(raw: dict) -> ContentBlock:
@@ -42,13 +50,100 @@ def message_to_anthropic(message: Message) -> dict:
     return message.to_dict()
 
 
-def message_to_openai(message: Message) -> dict:
-    """一条 Message -> OpenAI 请求要的字典。
+def message_to_openai(message: Message) -> list[dict]:
+    """一条 Message -> OpenAI 请求要的字典列表。
 
-    OpenAI 的一条消息内容是单个字符串，不像 Anthropic 那样是内容块的列表。
-    思考是 Anthropic 特有的，这里没有对应的位置，所以只取文本块，思考块丢掉。
-    工具调用和结果的翻译（tool_calls、role=tool 消息）等工具循环时补。
+    为什么是列表：两家的工具结果走法完全不同——
+    Anthropic 把 tool_result 作为内容块放进下一条 user 消息；
+    OpenAI 没有块的概念，要求每个结果单独一条 role="tool" 的消息，
+    挂在 tool_call_id 上。所以我们的「一条 user 消息带 N 个结果块」
+    到那边要拆成 N 条。调用方（llm.py）把所有消息的结果摊平即可。
+
+    思考块没有对应位置（OpenAI 的 reasoning 不回传历史），出站丢弃——
+    两家对「上下文里保留什么」的规则不同，这正是协议差异，收在这里。
     """
-    # 只拼 type 为 "text" 的块。思考块没有 text 属性，不过滤掉会报错。
-    text = "".join(block.text for block in message.content if block.type == "text")
-    return {"role": message.role, "content": text}
+    out: list[dict] = []
+    # 先把内容块按类型归拢。
+    text = "".join(b.text for b in message.content if b.type == "text")
+    tool_uses = [b for b in message.content if b.type == "tool_use"]
+    tool_results = [b for b in message.content if b.type == "tool_result"]
+
+    if message.role == "assistant":
+        msg: dict = {"role": "assistant", "content": text if text else None}
+        if tool_uses:
+            # 助手发起的调用在这边是 tool_calls 数组，arguments 是 JSON 字符串
+            # （我们 domain 里的 input 是字典，这里要转回去）。
+            msg["tool_calls"] = [
+                {
+                    "id": b.id,
+                    "type": "function",
+                    "function": {"name": b.name, "arguments": json.dumps(b.input, ensure_ascii=False)},
+                }
+                for b in tool_uses
+            ]
+        out.append(msg)
+        return out
+
+    # user 消息：先文字（如果有），再每个工具结果单独一条 role="tool"。
+    if text:
+        out.append({"role": "user", "content": text})
+    for b in tool_results:
+        out.append({"role": "tool", "tool_call_id": b.tool_use_id, "content": b.content})
+    # 纯提问的 user 消息只有第一条文字；循环走完天然就是一条，不用特判。
+    return out
+
+
+def tool_to_anthropic(tool: Tool) -> dict:
+    """工具定义 -> Anthropic 的形状。domain 的字段名照它定的，接近恒等。"""
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": tool.input_schema,
+    }
+
+
+def tool_to_openai(tool: Tool) -> dict:
+    """工具定义 -> OpenAI 的形状。
+
+    差别有两处：外面套一层 {"type": "function"}，schema 的键叫 parameters
+    不叫 input_schema。
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.input_schema,
+        },
+    }
+
+
+def merge_tool_call_delta(acc: dict[int, dict], deltas) -> None:
+    """把一个流式 chunk 里 delta.tool_calls 的片段并进累积器，就地修改。
+
+    OpenAI 的工具调用不走 content，走 delta.tool_calls，而且分片：
+    第一个片段带 index/id/name 和 arguments 的开头，后续片段只有 index
+    和 arguments 的下一截。所以按 index 归位逐片拼接。
+    deltas 是 SDK 给的 ChoiceDeltaToolCall 列表，字段名是 OpenAI 的事，
+    所以这个拼接收在 adapter 而不是 llm.py。
+    """
+    for d in deltas:
+        slot = acc.setdefault(d.index, {"id": "", "name": "", "arguments": ""})
+        if d.id:
+            slot["id"] = d.id
+        if d.function and d.function.name:
+            slot["name"] = d.function.name
+        if d.function and d.function.arguments:
+            slot["arguments"] += d.function.arguments
+
+
+def tool_uses_from_acc(acc: dict[int, dict]) -> list[ToolUseBlock]:
+    """累积器 -> 工具调用块列表，按 index 排序（index 就是模型给出的顺序）。
+
+    arguments 拼完是一段 JSON 字符串，这里解析回字典——和 Anthropic 的
+    input 对齐，循环层拿到的永远是同一种形状。
+    """
+    return [
+        ToolUseBlock(id=slot["id"], name=slot["name"], input=json.loads(slot["arguments"] or "{}"))
+        for _, slot in sorted(acc.items())
+    ]

@@ -32,7 +32,9 @@
 `server/src/` 下四个层各是一个包：
 
 - `domain/message.py`：Message 和四种内容块（Text、Thinking、ToolUse、ToolResult）。
-- `application/conversation.py`：Conversation，唯一的会话循环；入口只剩输入输出。
+- `domain/tool.py`：Tool 定义（名字、说明、参数 schema）。执行不在这里。
+- `application/conversation.py`：Conversation，唯一的会话循环（含工具循环）；入口只剩输入输出。
+- `application/tools.py`：工具注册表和 calculator（ast 求值，禁 eval）。
 - `infrastructure/llm.py`：AnthropicChat 和 OpenAIChat，只管运输；build_chat 按配置挑类；merge_fragment 把流式片段并成块。
 - `infrastructure/adapter.py`：协议适配器，两家的形状差别全在这里翻译。
 - `infrastructure/config.py`：读 config.ini，支持 `${环境变量}` 引用。

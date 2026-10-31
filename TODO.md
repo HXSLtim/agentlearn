@@ -5,26 +5,26 @@
 
 ## 下一步（已排期）
 
-第二层工具循环（清单在下面那节）。trace 骨架已就位：spans 表 + `main.py trace`
-回放命令，工具执行处只要 `start_span(session_id, "tool_call", parent_id=turn_span)`
-再 `end_span`，轨迹里就自动多一层。
+第三层（多工具、并行、失败），清单在「以后」段。第二层已完成：
+calculator + agent loop + tool_call span。
 
-## 第二层：一个工具 + 手写循环
+## 第二层：一个工具 + 手写循环 ✅（2026-11-01）
 
-- [ ] `llm.py` 的 stream 增加 tools 参数
-- [ ] tool_use 块接进请求路径：block_from_anthropic 已写好并验证过，尚未接线
-- [ ] calculator 工具：**禁止 eval**，用 ast 解析表达式树求值
-- [ ] 循环本体：收到 tool_use → 执行 → tool_result 追加进历史 → 再请求，
-      直到 stop_reason 不是 "tool_use"
-- [ ] 工具执行处挂 tool_call span（parent 是当轮 turn span），
+- [x] `llm.py` 的 stream 增加 tools 参数
+- [x] tool_use 块接进请求路径：block_from_anthropic 接线，落盘块改从最终消息取
+- [x] calculator 工具：**禁止 eval**，用 ast 解析表达式树求值（白名单）
+- [x] 循环本体：收到 tool_use → 执行 → tool_result 追加进历史 → 再请求，
+      直到 stop_reason 不是 "tool_use"（MAX_TOOL_ROUNDS=8 兜底）
+- [x] 工具执行处挂 tool_call span（parent 是当轮 turn span），
       data 记工具名/入参/出参/是否出错
-- [ ] OpenAI 方向适配器补齐：入站 tool_calls（arguments 是 JSON 字符串，流式时逐片到达要先拼）；
-      出站工具结果要变成单独一条 role="tool" 消息
+- [x] OpenAI 方向适配器补齐：入站 tool_calls（arguments 逐片拼接后解析回字典）；
+      出站工具结果拆成单独的 role="tool" 消息（离线验证，未接真实 OpenAI 端点）
 
 ## 已知欠账
 
 - [ ] 思考块 signature 现在存空字符串：流式片段里没有它，只在最终消息里。
-      当前中转不校验所以没炸；换成会校验的接口前必须从最终消息回填，否则续会话 400
+      **Anthropic 路径已从最终消息回填（第二层顺带解决）**；OpenAI 路径
+      的 reasoning 不回传历史，signature 仍是空串，换会校验的接口前确认它不校验
 - [ ] token 用量没记进 span：Anthropic 路径 get_final_message().usage 现成可取；
       OpenAI 路径要加 stream_options={"include_usage": true} 才有。
       第四层（上下文管理）和评测都需要，届时补在 llm_request span 的 data 里
