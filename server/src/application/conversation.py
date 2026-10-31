@@ -7,6 +7,11 @@ cli 和 web 两个入口共用的循环收在这里：入口只剩输入输出�
        └─ stop_reason == tool_use？-> 执行工具 -> 结果交回 -> 再请求模型
           （循环，直到模型不再要工具，或达到轮数上限）
 
+每一圈是一次独立的厂商请求：POST 全部历史 -> SSE 流回 -> 流关。
+「交回结果」不是在原流里续写，是整段历史重发一遍（API 无状态）。
+圈与圈之间因此存在真实空隙：工具执行时间 + 新请求的首 token 延迟
+（TTFT，记进 llm_request span 的 ttft_ms）。软中断插话插的就是这个空隙。
+
 历史维护方式统一为「每轮从 JSONL 整体重读」：文件是唯一事实来源，
 崩溃或重启后天然一致，本地小文件的读取开销可以忽略。
 
@@ -14,6 +19,8 @@ trace 的埋点也在这里：turn span 是一棵树的根，树上是循环走�
 每次模型请求一个 llm_request span，每次工具执行一个 tool_call span
 （见 store.py 的 spans 表）。`main.py trace` 能把这棵树打出来。
 """
+import time
+
 from domain.message import Message, TextBlock, ToolResultBlock
 from infrastructure.llm import AnthropicChat, OpenAIChat
 from infrastructure.store import Store
@@ -92,8 +99,17 @@ class Conversation:
                 data={"model": self.chat.model, "messages": len(history)},
             )
 
+            # TTFT（首 token 延迟）：从发起请求到第一个片段回来。
+            # stream 是生成器，第一次迭代才真正发出网络请求，所以 t0 放 for 前面。
+            # 这段等待 = 网络往返 + 厂商排队 + prefill（重读全部历史）+ 出第一个字；
+            # 工具循环每圈都重付一次，历史越长 prefill 越久。
+            t0 = time.monotonic()
+            ttft: float | None = None
+
             try:
                 for kind, text in self.chat.stream(history, tools):
+                    if ttft is None:
+                        ttft = time.monotonic() - t0
                     yield kind, text
             except Exception as e:
                 # 出错：两个 span 都标 error，错误消息记在子 span 上（离错误最近）。
@@ -109,7 +125,12 @@ class Conversation:
             blocks = self.chat.blocks
             self.transcript.append(self.session_id, Message("assistant", blocks))
             stop = self.chat.stop_reason
-            self.store.end_span(llm_span, status="ok", data={"stop_reason": stop})
+            # ttft 拆开记：总耗时里藏着它，第四层 prompt caching 前后对比要靠它。
+            self.store.end_span(
+                llm_span,
+                status="ok",
+                data={"stop_reason": stop, "ttft_ms": round(ttft * 1000) if ttft is not None else None},
+            )
 
             if stop != "tool_use":
                 # 模型不再要工具，这一轮到此为止。
