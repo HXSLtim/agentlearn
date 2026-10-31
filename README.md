@@ -11,6 +11,10 @@
 
 不从 LangChain 起步。循环先自己写一遍，再去看框架包了什么。
 
+每层的验收标准、基建线进度见 [docs/roadmap.md](docs/roadmap.md)；
+技术选型的决定和理由见 [docs/decisions.md](docs/decisions.md)；
+当前工作队列见 [TODO.md](TODO.md)。
+
 ## 结构
 
 按依赖方向分层，外层依赖内层：
@@ -27,14 +31,28 @@
 
 `server/src/` 下三个层各是一个包：
 
-- `domain/message.py`：Message、TextBlock、ThinkingBlock。
-- `infrastructure/llm.py`：AnthropicChat 和 OpenAIChat。
+- `domain/message.py`：Message 和四种内容块（Text、Thinking、ToolUse、ToolResult）。
+- `infrastructure/llm.py`：AnthropicChat 和 OpenAIChat，只管运输；build_chat 按配置挑类；merge_fragment 把流式片段并成块。
+- `infrastructure/adapter.py`：协议适配器，两家的形状差别全在这里翻译。
+- `infrastructure/config.py`：读 config.ini，支持 `${环境变量}` 引用。
 - `infrastructure/transcript.py`：会话正文，一个会话一个 JSONL 文件，存在 `server/data/`。
 - `infrastructure/store.py`：会话索引和日志，存在 `server/data/agent.db`。
 - `interfaces/cli.py`：终端入口。
 - `interfaces/web/server.py`：HTTP 入口，给 `app/` 调用。
 
 空的层不提前建。`application` 等写循环时再加。
+
+## 配置
+
+第一次使用先复制模板：
+
+```bash
+cd server
+cp config.example.ini config.ini
+```
+
+`config.ini` 不进版本库。任何值都可以写 `${环境变量名}`，
+比如密钥写 `api_key = ${LLM_API_KEY}`，启动时从环境变量取，密钥不落盘。
 
 在 `server/` 目录里启动：
 
