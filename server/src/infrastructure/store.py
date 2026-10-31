@@ -20,7 +20,10 @@ class Store:
         # 数据库文件的父目录可能还不存在，先建好。
         db_path.parent.mkdir(parents=True, exist_ok=True)
         # 连接到数据库文件。文件不存在时 sqlite3 会自动创建。
-        self.conn = sqlite3.connect(db_path)
+        # check_same_thread=False：web 端的 SSE 同步生成器会被 FastAPI 的线程池
+        # 派发到不同线程执行，而 SQLite 默认只允许创建连接的线程用它。
+        # 本地单用户写入频率低，没有锁竞争问题。
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         # 默认一行结果是元组，只能靠下标取值。换成 Row 后能用列名：row["id"]。
         self.conn.row_factory = sqlite3.Row
         # 每次启动都确保表存在。
@@ -59,7 +62,10 @@ class Store:
         self.conn.commit()
 
     def list_sessions(self) -> list[sqlite3.Row]:
-        """全部会话，最近创建的排在前面。"""
+        """全部会话，最近创建的排在前面。
+
+        预留：给以后的 web 端 /sessions 列表端点用，暂时没有调用方。
+        """
         return list(self.conn.execute("select * from sessions order by created_at desc"))
 
     def log(self, session_id: str, event: str, data: str) -> None:
@@ -71,7 +77,10 @@ class Store:
         self.conn.commit()
 
     def logs_for(self, session_id: str) -> list[sqlite3.Row]:
-        """一个会话的全部事件，按发生顺序排列。id 自增，所以按 id 排就是按时间排。"""
+        """一个会话的全部事件，按发生顺序排列。id 自增，所以按 id 排就是按时间排。
+
+        预留：trace 回放和评测用，暂时没有调用方。
+        """
         return list(self.conn.execute("select * from logs where session_id = ? order by id", (session_id,)))
 
 

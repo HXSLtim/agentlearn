@@ -11,10 +11,14 @@ JSONL 就是「一行一个 JSON」：一行是一条 Message，文件从上到�
 如果只存屏幕上显示出来的文字，下一轮请求拼不回原来的消息，会话就续不上。
 """
 import json
+import re
 from pathlib import Path
 
 # 只依赖 domain，不依赖任何 SDK。
 from domain.message import Message
+
+# session_id 会直接拼进文件名。只接受 UUID，否则像 "../x" 这样的值能逃出目录，写到别的文件上。
+_SESSION_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
 class Transcript:
@@ -25,8 +29,18 @@ class Transcript:
         self.directory = directory
 
     def path_for(self, session_id: str) -> Path:
-        """一个会话对应的文件路径。文件可以尚不存在。"""
-        return self.directory / f"{session_id}.jsonl"
+        """一个会话对应的文件路径。文件可以尚不存在。
+
+        session_id 只允许是 UUID。它来自请求参数，不校验的话可以被写成路径，
+        读到或覆盖目录之外的文件。
+        """
+        if not _SESSION_ID.fullmatch(session_id):
+            raise ValueError(f"session_id 必须是 UUID: {session_id}")
+        # 解析成绝对路径后再确认一次没有逃出目录，防止符号链接之类的绕法。
+        path = (self.directory / f"{session_id}.jsonl").resolve()
+        if not path.is_relative_to(self.directory.resolve()):
+            raise ValueError(f"session_id 越出了目录: {session_id}")
+        return path
 
     def append(self, session_id: str, message: Message) -> None:
         """在会话末尾追加一条消息。不修改已有的行。"""
@@ -44,7 +58,9 @@ class Transcript:
         if not path.exists():
             return []
         messages = []
-        # splitlines 按行切开并去掉行尾换行。空行跳过，避免读到半行。
+        # splitlines 按行切开并去掉行尾换行。
+        # 空行跳过，防的是 json.loads("") 报错；真发生截断时那一行是非空的
+        # 非法 JSON，照样会抛——宁可报错，不静默丢数据。
         for line in path.read_text(encoding="utf-8").splitlines():
             if line:
                 messages.append(Message.from_dict(json.loads(line)))
