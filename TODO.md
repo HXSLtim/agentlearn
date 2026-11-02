@@ -22,7 +22,7 @@ P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未
 眼睛、耐心、MCP：
 
 - [x] 任务账本落盘，并在启动时认领 `data/sandbox/jobs/` 里还活着的进程 ✅（2026-11-03）：每个任务写 JSON 元数据；desktop lifespan 按 PID + 进程启动 token 认领，token 不一致报不可接管。离线验证 running 重启后仍可 stop、finished 保留 exit、伪造 token 拒绝接管。
-- [ ] 后台任务加墙上寿命，超时杀整个进程组。验收：超时后状态不再是 running，log 或 notices 留有 lifetime 原因。依据：`jobs.py` 只有 `MAX_REMEMBERED_JOBS`，没有寿命。
+- [x] 后台任务加墙上寿命，超时杀整个进程组 ✅（2026-11-03）：默认 30 分钟，janitor 到期杀进程组并把原因写进任务 log 与元数据；离线把检查周期和寿命调短，验证进程退出、状态非 running、log 含寿命原因。
 - [ ] desktop 渲染用户图片和 `tool_result` 上的图。验收：截图工具的 JPEG 在界面里看得见，不靠手开 JSONL。依据：`app/src/main.ts` 的 `parseServerMessages` 只处理 text / thinking / tool_use / tool_result 文本；SSE 仍只给 `has_image`。
 - [ ] MCP `tools/call` 的 image 内容块转成 `ImageBlock`，不要在客户端里丢掉。验收：带图的 MCP 结果进 JSONL，下一圈请求看得到图，span 只记 `image_bytes`。依据：`mcp_client.py` 的 `call` 只拼 `type=text`；`tools.py` 对 MCP 固定返回 `image=None`。
 - [ ] 同一个 MCP 别名的 `tools/call` 在响应回来之前串行。验收：并发两个同别名调用时响应按 id 归属，不串线。依据：`MCPManager.call` 在 `client.call` 之前放锁，注释写明响应可能读串。

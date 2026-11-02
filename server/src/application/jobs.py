@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from application.sandbox import CHILD_ENV, SANDBOX
@@ -47,6 +47,8 @@ WAIT_MAX_SECONDS = 120
 # 全在跑就先不清。防长寿命进程把账本养到无限大。
 MAX_REMEMBERED_JOBS = 50
 EXIT_UNKNOWN = "unknown"
+MAX_JOB_LIFETIME_SECONDS = 30 * 60
+LIFETIME_CHECK_SECONDS = 5
 
 
 @dataclass
@@ -60,6 +62,7 @@ class Job:
     log_path: Path
     identity: str | None = None
     started_at: str | None = None
+    expires_at: str | None = None
     # owned 进程是 int；重启后只知道它结束、拿不到退出码时是 EXIT_UNKNOWN。
     exit_code: int | str | None = None
     note: str = ""
@@ -68,6 +71,8 @@ class Job:
 # 账本 + 锁：web 的同步端点一线程一请求，两个请求可能同时查/停同一任务。
 _lock = threading.Lock()
 JOBS: dict[str, Job] = {}
+_janitor_lock = threading.Lock()
+_janitor_thread: threading.Thread | None = None
 
 
 def _metadata_path(job_id: str) -> Path:
@@ -105,6 +110,7 @@ def _write_metadata(job: Job) -> None:
         "started_at": job.started_at or datetime.now(
             timezone.utc
         ).isoformat(timespec="seconds"),
+        "expires_at": job.expires_at,
         "exit_code": job.exit_code,
     }
     path = _metadata_path(job.id)
@@ -126,6 +132,80 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _append_log_note(path: Path, note: str) -> None:
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        with path.open("a", encoding="utf-8") as log:
+            log.write(f"\n[{stamp}] {note}\n")
+    except OSError:
+        pass
+
+
+def _signal_process_group(job: Job) -> None:
+    import signal
+
+    try:
+        os.killpg(job.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 3
+    while _poll(job) is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if _poll(job) is None:
+        try:
+            os.killpg(job.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 3
+    while _poll(job) is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def _expire_job(job: Job) -> None:
+    if _poll(job) is not None:
+        return
+    _signal_process_group(job)
+    job.note = f"达到 {MAX_JOB_LIFETIME_SECONDS // 60} 分钟寿命，已终止整个进程组"
+    _append_log_note(job.log_path, job.note)
+    _write_metadata(job)
+
+
+def _lifetime_loop() -> None:
+    while True:
+        time.sleep(LIFETIME_CHECK_SECONDS)
+        now = datetime.now(timezone.utc)
+        with _lock:
+            jobs = list(JOBS.values())
+        for job in jobs:
+            expires_at = _timestamp(job.expires_at)
+            if (
+                job.exit_code is None
+                and expires_at is not None
+                and expires_at <= now
+            ):
+                _expire_job(job)
+
+
+def _ensure_lifetime_janitor() -> None:
+    global _janitor_thread
+    with _janitor_lock:
+        if _janitor_thread is not None and _janitor_thread.is_alive():
+            return
+        _janitor_thread = threading.Thread(
+            target=_lifetime_loop, daemon=True, name="job-lifetime"
+        )
+        _janitor_thread.start()
+
+
 def restore_jobs() -> None:
     """server 启动时从磁盘账本认领旧任务。
 
@@ -144,6 +224,7 @@ def restore_jobs() -> None:
                 identity = str(data.get("identity") or "")
                 exit_code = data.get("exit_code")
                 started_at = str(data.get("started_at") or "") or None
+                expires_at = str(data.get("expires_at") or "") or None
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 continue
             if job_id in JOBS:
@@ -155,6 +236,7 @@ def restore_jobs() -> None:
                     log_path=log_path, identity=identity or None,
                     exit_code=exit_code,
                     started_at=started_at,
+                    expires_at=expires_at,
                 )
                 continue
             current_identity = _process_identity(pid)
@@ -163,6 +245,7 @@ def restore_jobs() -> None:
                     id=job_id, command=command, proc=None, pid=pid,
                     log_path=log_path, identity=current_identity,
                     started_at=started_at,
+                    expires_at=expires_at,
                 )
             else:
                 JOBS[job_id] = Job(
@@ -171,7 +254,9 @@ def restore_jobs() -> None:
                     exit_code=EXIT_UNKNOWN,
                     note="PID 不再是原任务进程，不能接管",
                     started_at=started_at,
+                    expires_at=expires_at,
                 )
+    _ensure_lifetime_janitor()
 
 
 def _prune_locked() -> None:
@@ -241,21 +326,28 @@ def start_job(command: str) -> str:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    started_at_dt = datetime.now(timezone.utc)
+    started_at = started_at_dt.isoformat(timespec="seconds")
+    expires_at = (
+        started_at_dt + timedelta(seconds=MAX_JOB_LIFETIME_SECONDS)
+    ).isoformat(timespec="seconds")
     identity = _process_identity(proc.pid)
     with _lock:
         job = Job(
             id=job_id, command=command, proc=proc, pid=proc.pid,
             log_path=log_path, identity=identity,
             started_at=started_at,
+            expires_at=expires_at,
         )
         JOBS[job_id] = job
         _write_metadata(job)
         _prune_locked()
+    _ensure_lifetime_janitor()
     return (
         f"任务已启动：{job_id}（{command}）。\n"
         f"wait_job(job_id=\"{job_id}\") 等它结束；job_status 查进度；"
-        f"stop_job 停掉。输出也在 data/sandbox/jobs/{job_id}.log。"
+        f"stop_job 停掉；超过 {MAX_JOB_LIFETIME_SECONDS // 60} 分钟自动终止。"
+        f"输出也在 data/sandbox/jobs/{job_id}.log。"
     )
 
 
@@ -267,7 +359,8 @@ def _describe(job: Job) -> str:
     elif code == EXIT_UNKNOWN:
         state = f"不可接管（{job.note or '退出码不可得'}）"
     else:
-        state = f"已结束（exit {code}）"
+        suffix = f"，{job.note}" if job.note else ""
+        state = f"已结束（exit {code}{suffix}）"
     head = f"任务 {job.id}（{job.command}）{state}。输出：\n"
     return head + _tail(job.log_path)
 
@@ -306,20 +399,5 @@ def stop_job(job_id: str) -> str:
         return f"任务 {job.id} 已经结束了，不用停。"
     # 杀整个进程组：kill 只到 shell 的话，sleep x && ... 里的子进程
     # 会变孤儿继续跑（bash 工具超时路径就有这个坑，这里修掉）。
-    import signal
-    try:
-        os.killpg(job.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    deadline = time.monotonic() + 3
-    while _poll(job) is None and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if _poll(job) is None:
-        try:
-            os.killpg(job.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    deadline = time.monotonic() + 3
-    while _poll(job) is None and time.monotonic() < deadline:
-        time.sleep(0.05)
+    _signal_process_group(job)
     return f"任务 {job.id} 已停止。{_describe(job)}"
