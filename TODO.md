@@ -3,10 +3,118 @@
 学习路线总览见 docs/roadmap.md，选型理由见 docs/decisions.md。
 这里的条目完成后移进 CHANGELOG，不删历史。
 
-## 下一步（已排期）
+## 未完成（2026-11-03 全量展开）
 
-第 4 层（上下文管理：缓存断点、截断、压缩）。第三层已完成：
-now_time + bash 双工具、并行 id 配对、失败换路子。
+六层学习线已经完成。这里每条只做一件事，不再按「层 / P0 / P1 / P2」收成一句。
+P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未提交改动里，提交前先对齐。
+文后只保留已完成记录，不再另留未勾项。
+
+审查新发现：
+
+- [ ] 压缩预算按整份历史估算，已覆盖的前缀仍被算进去。验收：已有摘要且「摘要 + covered 之后的尾部」低于预算时，不再起 compaction span。依据：`server/src/application/compaction.py` 的 `plan_cut` 用的是全文 token，不是尾部。
+- [ ] 压缩请求失败时退回全文，同时 system 仍带旧摘要，covered 段出现两遍。验收：失败要么只发全文且不带旧摘要，要么只发旧摘要加原 covered 尾部。依据：`conversation.py` 的 `_apply_compaction` 异常分支返回全文和旧 `summary_text`。
+- [ ] trace 把 `purpose=compaction` 的成功 `llm_request` 也拿去配 assistant 正文，后面的回答整体错位。验收：压缩 span 不消费回答，主请求仍按顺序配对。依据：`server/src/application/trace_view.py` 的 `answers_for_requests` 只看 `llm_request` + `ok`。
+- [ ] `tool_use` / `tool_approval` 已经 yield、工具结果还没落盘时客户端断开，JSONL 留下没有 `tool_result` 的 `tool_use`。验收：断连后每个已落盘 `tool_use` 都有配对结果，下一次请求能被协议接受。依据：`conversation.py` 工具循环先 yield 再 `run_tool`，`GeneratorExit` 只收审批、不补结果。
+- [ ] `turn(append_user=False)` 收到 `images` 时静默丢掉。验收：重试带图在创建 turn span 和写 JSONL 之前报错。依据：图片只在 `append_user` 分支扩展；web 层拒绝了组合，conversation 本身没有。
+- [ ] `append_memory` 只 `strip` 首尾，中间换行会把一条 remember 写成多行。验收：含换行的内容被拒绝或折成一条记录，`memory.md` 每次只多一行带来源前缀的记录。依据：`server/src/application/tools.py` 的 `append_memory`。
+- [ ] file 触发器可以指向 `memory.md`，remember 写入会把自己再次触发。验收：解析后的路径等于记忆文件时拒绝启动。依据：`triggers.py` 的 `build_trigger` 不检查路径。
+
+眼睛、耐心、MCP：
+
+- [ ] 任务账本落盘，并在启动时认领 `data/sandbox/jobs/` 里还活着的进程。验收：重启后 `job_status` 能报 running / finished / 不可接管，running 仍能被 `stop_job` 按进程组杀掉。依据：`jobs.py` 的 `JOBS` 只在内存。
+- [ ] 后台任务加墙上寿命，超时杀整个进程组。验收：超时后状态不再是 running，log 或 notices 留有 lifetime 原因。依据：`jobs.py` 只有 `MAX_REMEMBERED_JOBS`，没有寿命。
+- [ ] desktop 渲染用户图片和 `tool_result` 上的图。验收：截图工具的 JPEG 在界面里看得见，不靠手开 JSONL。依据：`app/src/main.ts` 的 `parseServerMessages` 只处理 text / thinking / tool_use / tool_result 文本；SSE 仍只给 `has_image`。
+- [ ] MCP `tools/call` 的 image 内容块转成 `ImageBlock`，不要在客户端里丢掉。验收：带图的 MCP 结果进 JSONL，下一圈请求看得到图，span 只记 `image_bytes`。依据：`mcp_client.py` 的 `call` 只拼 `type=text`；`tools.py` 对 MCP 固定返回 `image=None`。
+- [ ] 同一个 MCP 别名的 `tools/call` 在响应回来之前串行。验收：并发两个同别名调用时响应按 id 归属，不串线。依据：`MCPManager.call` 在 `client.call` 之前放锁，注释写明响应可能读串。
+
+主动性第二阶段：
+
+- [ ] 把 bash / start_job / screenshot 放进只挂 sandbox 卷的容器。验收：容器内读不到宿主 `~/.zshrc` 和项目外密钥，sandbox 内文件仍可写回。依据：`sandbox.py` 写明 cwd 不是边界。这是对外绑非本机地址、以及无人值守升到 yolo 的共同前置。
+- [ ] 触发器加频率熔断。验收：同一触发器在窗口内超过次数后丢弃并写 `notices.log`，冷却结束前不再发起模型轮。
+- [ ] 无人值守加 token 或成本预算熔断。验收：超预算后该触发器暂停，复位前不再请求。没有显式价目时只按 token 熔断，不编造金额。
+- [ ] 熔断计数、冷却截止时间和已用预算落盘。验收：daemon 重启后同一窗口不从零开始。
+- [ ] 只有容器和熔断都可用时才允许无人值守 yolo。验收：前置不满足时启动拒绝；满足时写操作只发生在容器里。
+
+desktop / TUI 还没接上的界面：
+
+- [ ] desktop diff 工作台列出变更文件。验收：只读，不改工作区。
+- [ ] desktop diff 工作台显示逐行增删。验收：只读，不改工作区。
+- [ ] desktop diff 工作台显示未跟踪文件。验收：只读，不改工作区。
+- [ ] desktop diff 工作台可以按文件折叠。验收：只读，不改工作区。
+- [ ] TUI 增加 `/diff`，打开只读 pager。验收：不写文件。
+- [ ] desktop 内容搜索接 `GET /sessions/search`，展示每个会话的第一处命中。验收：现有恢复框只过滤 id / 标题 / 模型，不能当作内容搜索。
+- [ ] desktop 会话重命名，接 `PATCH /sessions/{id}`。
+- [ ] desktop 会话 pin，接同一 PATCH，列表 pin 优先。
+- [ ] desktop 会话 archive，接同一 PATCH。验收：默认列表消失，归档视图还能打开。
+- [ ] desktop 永久删除前要确认，再 `DELETE /sessions/{id}`。验收：归档和删除是两个按钮。
+- [ ] desktop fork：选择前 N 条消息后 `POST /sessions/{id}/fork`。
+- [ ] 两端运行账本显示每轮 `input` / `output` / `cache_read` / `cache_write` / `cache_hit_ratio`。验收：数字加总等于对应 `llm_request` span 的 usage。
+- [ ] 成本只在有一份显式价目时显示金额。验收：没有价目就标明不算钱，不估算美元。
+- [ ] 两端在 `context_report` 接近预算时告警一次。验收：不随每个流式片段重复刷。
+- [ ] desktop `@file` 路径补全。验收：补的是路径文本，不在补全时偷偷读文件进上下文。
+- [ ] desktop 拖拽图片，作为 `POST /chat` 的 `images` 发送。验收：与 retry 互斥，且只走 queue。
+- [ ] desktop 粘贴图片，契约与拖拽相同。
+- [ ] TUI `/attach` 把图片放进下一轮 user 消息。
+- [ ] 两端会话内查找。验收：能定位到一条已渲染消息，不新开会话。
+- [ ] 两端 transcript 视图分成 normal / thinking / verbose。验收：thinking 档看得到思考块，verbose 档看得到工具入参和出参。
+- [ ] 两端把当前会话导出为 Markdown。验收：`/copy` 仍然只复制最近一条回答，不把导出塞进复制。
+- [ ] 审批增加 once：只放行当前这一个 `approval_id`。验收：下一次同名工具仍要问。
+- [ ] 审批增加 this session：本会话后续匹配的工具不再询问。验收：别的会话不受影响，现有 approve / auto / yolo 全局等级还在。
+- [ ] 拒绝可以附理由。验收：理由出现在 `tool_result` 文本和 tool_call span 里。
+- [ ] plan mode 的只读探索：此模式下不能跑 bash、start_job 或其他写操作。
+- [ ] plan mode 产出一份计划文本，而不是把预置 prompt 当作计划模式。
+- [ ] plan mode 在人确认之后才执行计划。验收：未确认前没有写工作区。
+- [ ] TUI `/status` 补上与 `GET /capabilities` 相同的事实：工具来源、MCP health、sandbox 不是安全边界、版本、触发器数量。依据：现在的 `_status_text` 只有会话运行态。
+- [ ] desktop 用 RUN LOG 或同等面板渲染 `GET /capabilities`。
+
+已知欠账拆开：
+
+- [ ] OpenAI 路径的 thinking `signature` 仍是空串。验收：换到会校验历史的接口之前，先确认它不校验，或者把可回传的签名补上。依据：`llm.py` 写明 OpenAI 流不给 signature。
+- [ ] 在准则段后面再打一个缓存断点。验收：只改 `memory.md` 或摘要时，准则前缀仍能 `cache_read`。依据：D21 要求断点在准则后；D22 已实现的是最后一条消息上的断点（`adapter.py` 的 `mark_cache_breakpoint`），这一条还没做。
+- [ ] SQLite 打开 `PRAGMA journal_mode=WAL`。验收：读写不再互相堵住；不上连接池、不上 ORM。依据：`store.py` 仍写着这是欠账，连接上没有 WAL。
+- [ ] bash 超时改为杀掉进程组，和 `stop_job` 一样。验收：超时后 `sleep && ...` 的子进程不残留。依据：`tools.py` 的 `subprocess.run(timeout=...)` 只杀 shell。
+- [ ] 按 session 分开 sandbox 工作目录，或给每个工具一个机器可读的「能否并行」属性。验收：两个会话的相对路径文件互不可见，或者并行执行器会拒绝冲突工具。
+- [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
+- [ ] web 在绑定非 127.0.0.1 之前先加鉴权。验收：现在 `uvicorn.run(app, port=port)` 没有 host，默认只本机；没有鉴权时拒绝 `--host 0.0.0.0`。
+- [ ] Tauri 启动时拉起 desktop server，并去掉模板 `greet` 命令。依据：`app/src-tauri/src/lib.rs` 只有 greet。
+- [ ] 前端 API 地址可配置。验收：`app/src/main.ts` 不再写死 `http://127.0.0.1:8000`，`main.py desktop --port` 改端口后前端能跟上。
+- [ ] 替换 Tauri 模板图标为 AgentLearn 图标。
+- [ ] 顶层包名出现冲突时，再把 `domain` / `application` / `infrastructure` / `interfaces` 收成 `agentlearn.*`。验收：现在不改；`server/pyproject.toml` 的 `packages.find.where = src` 就是现状。
+- [ ] 有成功率统计需求时，再把客户端断开的 `GeneratorExit` 收成 `aborted`。验收：没有这个需求之前，span 继续停在 running（D11）。这一条不和上面的「断连补齐 tool_result」混为一谈。
+
+路线图后段（层本身已完成，这里是剩下的事）：
+
+- [ ] 意图分类做路由：闲聊直接答、任务进 agent loop、明确命令走快捷路径。验收：分类器省不下主模型开销就不启用。
+- [ ] 意图分类做工具裁剪：请求里只放相关工具定义。
+- [ ] 意图分类给 steering 档位建议。验收：前端传入的档位仍可覆盖建议。
+- [ ] 分类结果写入 span。验收：错分能在 trace 里看见；分类失败降级为完整 agent loop。
+- [ ] 写对照笔记：LangGraph 的 StateGraph / Checkpointer 对上现在的 Conversation、只追加的 JSONL、以及 summary 派生层。
+
+P2（先不做，逐条列出）：
+
+- [ ] P2：后台终端。
+- [ ] P2：给人看的长任务界面，不把 `start_job` 工具当成这个界面。
+- [ ] P2：任务列表。
+- [ ] P2：任务完成通知。
+- [ ] P2：待审批通知。
+- [ ] P2：通知中心。
+- [ ] P2：project / workspace 选择。
+- [ ] P2：文件树。
+- [ ] P2：编辑器。
+- [ ] P2：集成终端。
+- [ ] P2：应用预览浏览器。
+- [ ] P2：worktree 隔离。
+- [ ] P2：并行 agent 编排。
+- [ ] P2：跨会话消息。
+- [ ] P2：skills 管理界面。现在技能只是 `server/skills/*.md` 加 `read_skill`。
+- [ ] P2：plugins 管理界面。
+- [ ] P2：MCP server 管理界面。现在只写在 `config.ini` 的 `[mcp:<别名>]`。
+- [ ] P2：语音输入。搁置：当前中转模型不吃音频输入块。本地转写是要用再说的备选，不另开一条。
+- [ ] P2：云会话。
+- [ ] P2：手机遥控。
+- [ ] P2：定时任务的产品界面。这和已落地的 interval 触发器不是同一件事。
+- [ ] P2：PR 监控。
+- [ ] P2：computer use。
 
 ## 排队中：同会话消息的 steering（三档）✅（2026-11-03，D19）
 
@@ -33,6 +141,98 @@ now_time + bash 双工具、并行 id 配对、失败换路子。
       user(tool_result) 必须跟上，否则会话续不上。取消推迟到下一圈圈界
       （离线测试抓到的 bug，见 D19）
 
+## 前端对后端的接线需求（2026-11-03，归属 Claude Code）
+
+前端和 TUI 已经按下面的契约接线；后端由 Claude Code 维护，改实现时不要漂移。
+
+- [x] `POST /chat` 接受客户端生成的 UUID `session_id`，并在流结束的 `done`
+      事件里返回同一个 id（含 steering_cancelled 收线路径）。
+- [x] 提供 `POST /approval-mode`：
+      `{"session_id":"...","mode":"approve|auto|yolo"}`。有运行轮时立即更新
+      当前轮，后续工具调用生效；没有运行轮时返回 `active:false`，并让下一次
+      同 session 的轮次采用这个等级。
+- [x] `POST /approval-mode` 返回
+      `{"ok":true,"active":bool,"mode":"...","auto_approved":["..."]}`。
+      `auto_approved` 必须是本次切换后已不再需要人工确认、并已被放行的
+      `approval_id` 列表；desktop 用它撤掉过期的 ACCEPT/DENY 按钮。
+- [x] `tool_approval` 事件保持包含 `id`、`approval_id`、`name`、`input`、
+      `mode` 五个字段；`POST /approval` 继续用 `approval_id` 回填。
+- [x] 执行等级是当前轮实时状态；思考等级和模型是下一轮状态。当前轮必须固定
+      自己的 client/system 快照，运行中切 effort/model 不能污染当前轮。
+- [x] `GET /sessions`：按最近活动倒序返回
+      `id / title / model / created_at / updated_at / turns / stop_reason`。
+      Desktop 不能再把 localStorage 当成唯一会话索引。
+- [x] `GET /sessions/{session_id}/messages`：返回可渲染的完整内容块，
+      用于 Desktop 首屏恢复；JSONL 仍是唯一事实来源。
+- [x] `POST /stop`：请求体 `{"session_id":"..."}`，设置当前运行轮的取消标志，
+      返回 `{"ok":true,"active":bool,"cancelled":bool}`；没有运行轮时是幂等
+      no-op。停止沿用现有 `TurnCancelled` / `cancelled` 语义，不丢已完成的
+      tool_result，也不留下半截 assistant 正文。
+- [x] `GET /sessions/{session_id}/trace`：返回 spans 和按 ok `llm_request`
+      顺序配对的 assistant 回答，供 Desktop 只读 trace 面板使用。
+
+后端已全部落地（2026-11-03）：/chat 与 approval 三条是执行等级那轮的
+既有实现，核对后勾掉；/sessions、/messages、/stop、/trace 这轮补齐——
+turns / updated_at / stop_reason 由 Store.list_sessions 用子查询从 spans
+推导（派生值不落库），标题从第一条用户消息截断补进 sessions.title
+（set_title_if_empty，不覆盖后来的正式名）；/stop 复用抢占档的取消标志
+（TurnCancelled 语义，SSE 收 steering_cancelled + done）；/trace 的配对
+逻辑 answers_for_requests 从 tui/trace.py 抽到 application/trace_view.py
+（web 进程不 import TUI 包）。离线契约测试全过。
+- [x] P1 会话管理 ✅（2026-11-03）：`PATCH /sessions/{id}` 管 rename/archive
+      （归档 = 软删除，默认列表不出现，`GET /sessions?archived=true` 是归档
+      视图）；`POST /sessions/{id}/fork` body `{"through": N}` 保留前 N 条
+      消息复制新会话（spans 不复制，分支的树自己长）；永久删除是独立的
+      `DELETE /sessions/{id}`（索引 + spans + JSONL + 摘要一起清，有轮次
+      在跑时 409）——「收进归档」和「彻底没了」不同动词，混淆留给前端
+      按钮设计去防。旧库加列迁移：Store._migrate 幂等 ALTER。
+      前端的确认弹窗还没做（属于 desktop 会话库 UI）。
+
+## 前端功能补齐：TUI / desktop（2026-11-03 调研）
+
+定位：TUI 是键盘优先的单会话操作台；desktop 是会话管理与审阅工作台。
+两端共享会话语义、运行状态和事件顺序，不追求每个按钮一一对应。
+
+P0 = 单会话能完整干活；P1 = 高频工作流；P2 = 需要新架构的平台能力。
+
+### P0：先补完整闭环
+
+- [x] 停止当前轮（两端，2026-11-03）：TUI 用 `Esc` / `/stop`，desktop 给运行轮
+      独立 `STOP`；状态机统一为
+      `READY → RUNNING → STOPPING → CANCELLED / ERROR`。
+      验收：长请求或工具等待中可停止，已完成的 tool_result 保留，spans 记
+      `cancelled`，同会话下一轮仍能继续。
+      Desktop 保留 `STEER` 作为运行中发消息入口，另给独立 `STOP`，避免
+      一个按钮同时承担“改方向”和“收线”两个语义。
+- [x] desktop steering 三档（2026-11-03）：输入台显示当前档位，`Alt+S` 循环，
+      `/chat` 请求体带 `steering`，运行中消息显示 ACK / DELIVERED / FAILED。
+      验收：运行中连发三条消息，queue / cooperative / preemptive 的等待
+      颗粒度分别可见，queued 计数和 ack 状态不丢。
+- [x] 服务端会话索引与双端恢复（2026-11-03）：desktop 改用 `GET /sessions`，
+      TUI `/resume` 支持按 id、title、model 模糊过滤，列表显示最近活动时间。
+      验收：清 WebView 缓存不丢会话，server 重启后两端都能打开同一会话。
+- [x] trace 跟着会话走（两端，2026-11-03）：TUI `/trace` 打开当前会话检查器；
+      desktop 增加只读 TRACE 侧栏/抽屉，沿用 span 树 + 详情 + 对应回答。
+      验收：同一 session 在两端看到的 span 顺序、状态和回答配对一致。
+- [x] 失败恢复与重试界面（两端，2026-11-03）：错误卡片常驻，保留已完成的工具结果，
+      提供明确的 `RETRY`；重试是新请求，界面不重复渲染旧 user 卡片。
+      前端已经不在 UI 里重复插入 user 卡片；真正避免 JSONL 再落一条 user
+      消息还需要后端重试契约，见下方“重试去重”。
+- [x] TUI 键盘闭环（2026-11-03）：`↑/↓` 输入历史、`Ctrl+R` 反向搜索、
+      `Ctrl+G` 外部编辑器、`/copy` 或 `Ctrl+O` 复制最近回答。
+
+- [x] 重试去重 ✅（2026-11-03）：turn() 加 append_user=False 模式——失败轮
+      的 user 已落盘，重试对既有历史重新发起请求，不再追加同文 user
+      （历史尾部必须是 user：纯文本 = 请求前失败，tool_result = 从工具
+      循环中断点续跑）。`POST /chat` 加 retry 字段（推流前校验，尾部
+      不是 user 报 409，只支持 queue 档）；TUI 的 /retry 和 RETRY 卡片
+      都已接 append_user=False，turn span 记 origin=retry。
+
+P1 / P2 里没做完的条目已逐条拆到文首，这里只留已完成记录。
+
+- [x] desktop 多会话运行状态（2026-11-03）：会话轨显示 streaming / waiting approval /
+      error / done，可切换查看而不取消后台轮次；运行态已按 thread 独立持有。
+
 ## 排队中：agent 自盘点的五个缺口（2026-11-03）
 
 来源：让 agent 用 bash 盘点自己的能力，它报了五个缺失（眼睛、耳朵、耐心、
@@ -44,23 +244,27 @@ now_time + bash 双工具、并行 id 配对、失败换路子。
       （Anthropic 顶层 system / OpenAI 首条 role=system）。system prompt 这笔
       基建随此落地。验收：全新会话直接答出只写在 memory.md 里的暗号，
       llm_request span 记 system_chars=94
-- [ ] 眼睛：图像进 tool_result。Anthropic 的 tool_result 能装 image 块；
-      OpenAI 的 tool 消息只能文本，图像得作为下一条 user 消息补发——协议差异
-      全收在 adapter。截图先缩图（sips 就有）：全屏一张 ≈ 5k token，图像一进
-      上下文，缓存/截断立刻成刚需，和第四层连着做
-- [ ] 耐心：异步任务，10 秒超时装不完依赖等不了构建。两种设计选一：轮询式
-      （job_id + job_status 工具，简单但烧 MAX_TOOL_ROUNDS）或事件注入式
-      （turn 暂停/唤醒）——后者就是上面 cooperative steering 的机制，
-      和 steering 是同一块基建，只设计一次
-- [ ] 耳朵：语音输入。模态问题不是架构问题，排最后
-- [ ] 主动性：工具与 agent 的分水岭，未立项，前提先于本体——
-      - [ ] 主动性触发器：定时 / 文件变化 / 任务完成事件来扣扳机，
-            触发后合成消息喂给现有 turn()，循环本体不用改
-      - [ ] 常驻进程：从「请求来了才存在」变成 daemon + 事件循环
-      - [ ] 权限门：无人值守下做事先问。没人盯 + 纸糊沙箱 = D17 攻击链在
-            无人值守下运行，容器化因此从「对外前的前置」提前为主动性的前置
-      前置选型：要「更聪明的回话者」还是「不在场也延续的存在」——答案决定
-      这一层动不动，定了记 decisions.md
+- [x] 眼睛：图像进 tool_result ✅（2026-11-03，D25）：screenshot 工具
+      （screencapture + sips 缩到 1000px）+ ImageBlock；线上翻译全收在
+      adapter（Anthropic 的 tool_result 变块列表 / OpenAI 补发 user 消息），
+      to_dict 从此只是存储形状。验收：模型答出屏幕实播内容。第四层压缩
+      顺路可用——带图结果被压掉时留「[图]」标记
+- [x] 耐心：异步任务 ✅（2026-11-03，D26）：轮询式四个工具
+      （start_job / wait_job / job_status / stop_job），conversation 零改动；
+      事件注入式否掉（要 turn 级暂停/唤醒的新架构）。验收：模型自己走
+      start_job → wait_job 跑通 14 秒命令（bash 十秒必超时）
+
+耳朵 / 语音输入已搁置，条目在文首 P2，不在这里重复。
+- [x] 主动性第一阶段 ✅（2026-11-03，D27）：前置选型用户拍板
+      「不在场也延续的存在」。触发器（interval / file / jobdone，
+      application/triggers.py）只做消息注入——服务器自己读内容拼进
+      user 消息，不靠模型的 bash；常驻调度线程挂 desktop server 的
+      lifespan（TUI 不跑）；无人值守执行端钉死 auto 地板 + remember
+      唯一预授权写 + 轮数上限 4 + 会话锁零等待；每触发器一个
+      uuid5 固定会话（跨重启稳定，白天人聊夜里它醒是同一个存在）；
+      turn span 记 origin，notices.log 是它的「昨晚干了什么」。
+      真机验收过：file 触发→注入→答对→remember→origin 落 span。
+      第二阶段已拆到文首：容器、频率熔断、预算熔断、熔断落盘、yolo 开关。权限门已由 D20 覆盖。
 
 ## 第二层：一个工具 + 手写循环 ✅（2026-11-01）
 
@@ -76,46 +280,24 @@ now_time + bash 双工具、并行 id 配对、失败换路子。
 
 ## 已知欠账
 
-- [ ] 思考块 signature 现在存空字符串：流式片段里没有它，只在最终消息里。
-      **Anthropic 路径已从最终消息回填（第二层顺带解决）**；OpenAI 路径
-      的 reasoning 不回传历史，signature 仍是空串，换会校验的接口前确认它不校验
-- [ ] token 用量与缓存比例已记进 llm_request span（2026-11-02）：
-      input/output/cache_read/cache_write/cache_hit_ratio（千分比），
-      两家在 adapter 里翻成同一套键。实测中转透传，且没放 cache_control 也有命中
-      （第二圈 747‰）。还没做的是主动放断点把命中率稳住，那是第四层的事
-- [ ] SQLite 并发写：现在靠默认 busy_timeout（5 秒）扛——库级写锁，第二个写者
-      等锁释放，超时抛 database is locked。四五个会话的写入量碰不到；
-      并发真上来时连接加 `PRAGMA journal_mode=WAL`（读写互不挡），
-      同时做上面 SessionManager 那条的连接复用。两件事独立，都不急。
-      不上连接池：SQLite 连接是打开本地文件，开销微秒级且写锁是库级的，
-      池化不增加写并发；也不上 ORM：全部 SQL 就七条，裸 SQL 是故意的
-      （参数化、锁、WAL 都要看得见），等表多到需要迁移再重新评估
-- [ ] bash 工具没有安全边界，是接受的取舍（证据与理由见 D17）：cwd（data/sandbox）
-      只是起跑点，绝对路径和 ../ 都能绕过（实测 cat ../../config.ini 可读）。已做的
-      最小收紧：子进程环境只留 PATH（实测 LLM_API_KEY 不可见）——密钥不会再经工具
-      输出进模型上下文。2026-11-03 自审计实测补证：curl 直连出网 200、say 可用、
-      完整攻击链（注入→读文件→出网）成立——config.ini 只有 ${LLM_API_KEY} 引用，
-      但 ~/.zshrc 里的 export 对模型可读。模型跑在本机自己账号下，
-      与自开终端无更多权限，学习期接受；对外服务前必须容器化或独立用户。
-      超时只 kill shell 进程，后台子进程可能残留
-- [ ] 跨会话的工具冲突不归循环管：now_time 纯函数、bash 有副作用但工作目录
-      各命令共享（sandbox 不按 session 隔离）；工具一旦碰外部系统（第五层 MCP），
-      冲突发生在工具碰的资源上，解法是工具侧的：按 session_id 隔离工作目录，
-      或工具声明自己能否并行
-- [ ] web 无鉴权：现在安全仅因为 uvicorn 默认只绑 127.0.0.1。
-      绑 0.0.0.0 / 加 --host 之前必须先加鉴权
-- [ ] Tauri 一键启动：app 启动时拉起 server 进程（现在是两边各开各的）
-- [ ] API 地址可配置：`app/src/main.ts` 固定 `127.0.0.1:8000`，
-      用 `main.py desktop --port` 改端口时前端也要同步改
-- [ ] Tauri 仍在使用模板图标；桌面端产品化前替换为 AgentLearn 图标
-- [ ] pyproject 把 domain/infrastructure/interfaces 装成顶层包名，与第三方包撞名风险低，
-      出现痛点再收窄成 `agentlearn.*` 命名空间
+未勾的欠账已逐条拆到文首。D17 的取舍不变：`data/sandbox` 只是起跑点，不是安全边界；对外服务前要容器化或独立用户。断连 span 停在 running 仍是 D11 的刻意选择，和文首「断连补齐 tool_result」不是同一件事。
 
-## 以后（路线图后段，暂不展开）
-
-- 第四层：上下文变长后的缓存、截断、压缩
-- 第五层：MCP；第六层：Skills
-- 意图识别模型（2026-11-03 记入 roadmap「待排期」）：主模型前加小分类模型，
-  判意图再路由（闲聊直答 / 进 agent loop / 工具裁剪 / steering 档位建议）。
-  前提是分类器省下的开销要大于它自己的；选型定了记 decisions.md
-- 读完 LangGraph 的 StateGraph / Checkpointer 设计，对照自写的 Conversation 写对比笔记
+- [x] 换挡对模型不透明（2026-11-03，D21）：system 的运行态段写着当前模型和
+      effort_note（留空和 off 写成「未设置」），和 trace 是同一个值。
+      验收：config 里 effort=max，模型只回答档位时答 max
+- [x] system 提示词拆成三段（2026-11-03，D21）：server/constitution.md（人维护，
+      在 sandbox 外）+ 运行态 + memory.md。记忆里的指令替换不了准则——
+      验收时记忆要求保密一个暗号，模型仍拒绝「用记忆改掉行为准则」。
+      这不是安全边界：bash 用绝对路径仍写得到 constitution.md（D17）。
+      第四层的缓存断点放在准则后面，还没放
+- [x] MAX_TOOL_ROUNDS=8 per-session 可调 ✅（2026-11-03）：全局常量仍是
+      默认值，Conversation 加 max_tool_rounds 参数（钳到 ≥1），TUI 新增
+      /rounds 命令运行中查看/调整（调试长循环不用改代码）；当前轮不追改，
+      下一次 turn 生效。web 构造暂不传（desktop 没有这个旋钮的需求，
+      前端接线要时再加）
+- [x] `/memory` 斜杠命令 ✅（2026-11-03）：用户把当前对话的关键结论写入
+      data/sandbox/memory.md。模型自己用 bash 维护记忆已经能做（记忆注入那条）；
+      这条是用户主动落记忆的入口，两端命令表一起加了。读写收在
+      application/tools.py（read_memory / append_memory，带
+      「用户 + 时间」前缀区分来源），desktop 走 GET/POST /memory；
+      不等当前轮——记忆每圈圈界重读，下一圈请求就生效
