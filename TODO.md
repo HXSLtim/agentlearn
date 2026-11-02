@@ -25,7 +25,7 @@ P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未
 - [x] 后台任务加墙上寿命，超时杀整个进程组 ✅（2026-11-03）：默认 30 分钟，janitor 到期杀进程组并把原因写进任务 log 与元数据；离线把检查周期和寿命调短，验证进程退出、状态非 running、log 含寿命原因。
 - [x] desktop 渲染用户图片和 `tool_result` 上的图 ✅（2026-11-03）：恢复正文时解析顶层 image 与 `tool_result.image`，SSE 先用 `has_image` 占位并在轮次完成后重读 JSONL 回填；图片 MIME/base64 白名单校验，380px 宽度下用户图与截图 JPEG 均实际显示且无横向溢出。
 - [x] MCP `tools/call` 的 image 内容块转成 `ImageBlock` ✅（2026-11-03）：MCP client 把首个 `image` 内容块映射为 D25 单图契约，`run_tool` 透传；真 MCP 子进程离线验证图片进 JSONL、下一圈请求和 Anthropic 出站形状，tool span 图片相关字段只有 `image_bytes`。
-- [ ] 同一个 MCP 别名的 `tools/call` 在响应回来之前串行。验收：并发两个同别名调用时响应按 id 归属，不串线。依据：`MCPManager.call` 在 `client.call` 之前放锁，注释写明响应可能读串。
+- [x] 同一个 MCP 别名的 `tools/call` 在响应回来之前串行 ✅（2026-11-03）：MCPManager 按别名加调用锁，`tools/list` 与同别名调用互斥，不同别名仍并行。真 stdio 子进程并发验证慢/快调用结果各归各、事件顺序为 slow end 后 fast start，双别名总耗时约一次慢调用。
 
 主动性第二阶段：
 

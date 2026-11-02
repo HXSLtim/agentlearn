@@ -178,6 +178,11 @@ class MCPManager:
         # 一把总锁串行化所有服务器的连接管理：起进程、重启、列表都是低频
         # 操作，锁竞争不存在。工具调用本身不持这把锁（见 call）。
         self._lock = threading.Lock()
+        # 同一个 MCP 子进程不是线程安全的：两个请求线程会从同一条响应队列
+        # 取走对方的消息。按别名串行 tools/call / tools/list；不同别名仍并行。
+        self._call_locks = {
+            alias: threading.Lock() for alias in self._servers
+        }
         # 进程退出时收掉全部子进程，不留孤儿。
         atexit.register(self.shutdown)
 
@@ -199,13 +204,20 @@ class MCPManager:
         工具列表不该被一个坏进程拖垮，模型至少还能用内置工具；
         错误会在它被调用时如实报给模型。"""
         out: list[tuple[str, dict]] = []
+        clients: list[tuple[str, StdioMCPClient, threading.Lock]] = []
         with self._lock:
             for alias in self._servers:
                 try:
-                    for tool in self._client(alias).list_tools():
-                        out.append((alias, tool))
+                    clients.append((alias, self._client(alias), self._call_locks[alias]))
                 except ValueError:
                     continue
+        for alias, client, call_lock in clients:
+            try:
+                with call_lock:
+                    tools = client.list_tools()
+                out.extend((alias, tool) for tool in tools)
+            except ValueError:
+                continue
         return out
 
     def call(
@@ -216,12 +228,11 @@ class MCPManager:
         try:
             with self._lock:
                 client = self._client(alias)
-            # 调用本身不持锁：一次 tools/call 可能要跑几十秒（构建、检索），
-            # 持锁会把别的服务器的列表操作全堵住。单个服务器内部的并发
-            # 由 StdioMCPClient 自己的请求-响应匹配（id + 队列）兜住——
-            # 但两个线程交错请求时响应归属仍可能读串，所以真正的串行化
-            # 靠调用频率低这一事实 + 工具循环本身是顺序执行工具的。
-            return client.call(name, arguments)
+            call_lock = self._call_locks[alias]
+            # 只锁当前别名：长调用不堵其他服务器；同一子进程的请求/响应
+            # 队列也不会被两个线程交错消费。
+            with call_lock:
+                return client.call(name, arguments)
         except Exception as e:
             return f"MCP 工具 {alias}__{name} 执行失败: {e}", True
 
