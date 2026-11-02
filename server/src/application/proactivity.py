@@ -17,6 +17,7 @@ application 层不该知道 FastAPI 长什么样。方向和 Conversation
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
@@ -50,6 +51,7 @@ GRANULARITY_SECONDS = 5.0
 # 这是给操作者看的（不在 sandbox 里——那是模型的院子），一晚上过去
 # `cat data/notices.log` 就知道它干了什么。
 NOTICES_PATH = Path("data") / "notices.log"
+TRIGGER_STATE_PATH = Path("data") / "trigger_states.json"
 
 
 def trigger_session_id(name: str) -> str:
@@ -76,7 +78,66 @@ class ProactivityRunner(threading.Thread):
         self._cooldown_until: dict[str, float] = {}
         self._token_usage: dict[str, list[tuple[float, int]]] = {}
         self._token_budget_until: dict[str, float] = {}
+        self._load_state()
         self._stop = threading.Event()
+
+    def _load_state(self) -> None:
+        """恢复熔断账本。时间统一用墙钟 epoch：monotonic 不可跨进程比较。"""
+        try:
+            data = json.loads(TRIGGER_STATE_PATH.read_text(encoding="utf-8"))
+            saved = data["triggers"]
+            now = time.time()
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return
+        for _, name in self._triggers:
+            entry = saved.get(name)
+            if not isinstance(entry, dict):
+                continue
+            try:
+                self._failures[name] = max(0, int(entry.get("failures", 0)))
+                self._run_times[name] = [
+                    float(timestamp)
+                    for timestamp in entry.get("run_times", [])
+                    if now - float(timestamp) < RATE_WINDOW_SECONDS
+                ]
+                self._cooldown_until[name] = max(
+                    now, float(entry.get("cooldown_until", now))
+                )
+                self._token_usage[name] = [
+                    (float(timestamp), max(0, int(tokens)))
+                    for timestamp, tokens in entry.get("token_usage", [])
+                    if now - float(timestamp) < TOKEN_BUDGET_WINDOW_SECONDS
+                ]
+                self._token_budget_until[name] = max(
+                    now, float(entry.get("token_budget_until", now))
+                )
+            except (TypeError, ValueError):
+                continue
+
+    def _persist_state(self) -> None:
+        """原子写熔断状态；崩溃时要么旧账本有效，要么新账本完整。"""
+        payload = {
+            "version": 1,
+            "triggers": {
+                name: {
+                    "failures": self._failures.get(name, 0),
+                    "run_times": self._run_times.get(name, []),
+                    "cooldown_until": self._cooldown_until.get(name, 0),
+                    "token_usage": self._token_usage.get(name, []),
+                    "token_budget_until": self._token_budget_until.get(name, 0),
+                }
+                for _, name in self._triggers
+            },
+        }
+        try:
+            TRIGGER_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temporary = TRIGGER_STATE_PATH.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+            temporary.replace(TRIGGER_STATE_PATH)
+        except OSError:
+            _notice("trigger state persist failed")
 
     def stop(self) -> None:
         self._stop.set()
@@ -96,7 +157,7 @@ class ProactivityRunner(threading.Thread):
             message = trigger.check()
             if message is None:
                 continue
-            now = time.monotonic()
+            now = time.time()
             if now < self._cooldown_until.get(name, 0):
                 trigger.mark()
                 _notice(
@@ -120,6 +181,7 @@ class ProactivityRunner(threading.Thread):
                 self._token_budget_until[name] = now + TOKEN_BUDGET_WINDOW_SECONDS
                 self._token_usage[name] = token_usage
                 trigger.mark()
+                self._persist_state()
                 _notice(
                     f"trigger={name} dropped: token budget "
                     f"{TOKEN_BUDGET} in {TOKEN_BUDGET_WINDOW_SECONDS}s reached"
@@ -134,6 +196,7 @@ class ProactivityRunner(threading.Thread):
                 self._cooldown_until[name] = now + RATE_COOLDOWN_SECONDS
                 self._run_times[name] = []
                 trigger.mark()
+                self._persist_state()
                 _notice(
                     f"trigger={name} dropped: {RATE_MAX_RUNS} runs in "
                     f"{RATE_WINDOW_SECONDS}s exceeded; cooldown "
@@ -146,6 +209,7 @@ class ProactivityRunner(threading.Thread):
                 trigger.mark()
                 _notice(f"trigger={name} dropped after {MAX_CONSECUTIVE_FAILURES} failures")
                 self._failures[name] = 0
+                self._persist_state()
                 continue
             result = self._run_turn(trigger_session_id(name), message, name)
             token_count = max(0, int(result.get("token_count", 0) or 0))
@@ -154,6 +218,7 @@ class ProactivityRunner(threading.Thread):
                 self._token_usage[name] = token_usage
                 if sum(tokens for _, tokens in token_usage) >= TOKEN_BUDGET:
                     self._token_budget_until[name] = now + TOKEN_BUDGET_WINDOW_SECONDS
+                    self._persist_state()
                     _notice(
                         f"trigger={name} token budget reached after run: "
                         f"{sum(tokens for _, tokens in token_usage)}/{TOKEN_BUDGET}"
@@ -163,11 +228,13 @@ class ProactivityRunner(threading.Thread):
                 self._failures[name] = 0
                 run_times.append(now)
                 self._run_times[name] = run_times
+                self._persist_state()
                 _notice(
                     f"trigger={name} stop_reason={result.get('stop_reason', '?')}"
                 )
             else:
                 self._failures[name] = self._failures.get(name, 0) + 1
+                self._persist_state()
                 _notice(f"trigger={name} run failed: {result.get('note', '?')}")
 
 
