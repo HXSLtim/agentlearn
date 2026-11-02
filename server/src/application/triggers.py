@@ -143,5 +143,10 @@ def build_trigger(spec: dict):
     if spec["kind"] == "interval":
         return IntervalTrigger(spec["name"], spec["every_seconds"], spec["message"])
     if spec["kind"] == "file":
+        from application.tools import MEMORY_PATH
+
+        watch_path = Path(spec["path"]).resolve()
+        if watch_path == MEMORY_PATH.resolve():
+            raise ValueError("file 触发器不能盯 memory.md：remember 写入会自触发。")
         return FileTrigger(spec["name"], spec["path"], spec["message"])
     return JobDoneTrigger(spec["name"], spec["message"])

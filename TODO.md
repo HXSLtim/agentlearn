@@ -17,7 +17,7 @@ P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未
 - [x] `tool_use` / `tool_approval` 已经 yield、工具结果还没落盘时客户端断开，JSONL 留下没有 `tool_result` 的 `tool_use` ✅（2026-11-03）：三个工具事件挂起点统一补齐缺失结果并落盘一条 user(tool_result)；离线生成器在首个 tool_use 事件处 close，两个 tool_use 均有 is_error 配对。span 仍按 D11 留证，不混入 aborted 统计。
 - [x] `turn(append_user=False)` 收到 `images` 时静默丢掉 ✅（2026-11-03）：conversation 在读取历史、创建 turn span 和写 JSONL 前直接拒绝非空图片；离线验证抛 ValueError 且 transcript/spans 均为空。
 - [x] `append_memory` 只 `strip` 首尾，中间换行会把一条 remember 写成多行 ✅（2026-11-03）：写入前把空白折叠成空格；离线验证 CRLF/LF 输入均只追加一行，既有文件缺结尾换行时仍先补齐。
-- [ ] file 触发器可以指向 `memory.md`，remember 写入会把自己再次触发。验收：解析后的路径等于记忆文件时拒绝启动。依据：`triggers.py` 的 `build_trigger` 不检查路径。
+- [x] file 触发器可以指向 `memory.md`，remember 写入会把自己再次触发 ✅（2026-11-03）：`build_trigger` 按 resolve 后的真实路径拒绝记忆文件，符号链接同拦；普通文件触发器不受影响。
 
 眼睛、耐心、MCP：
 
