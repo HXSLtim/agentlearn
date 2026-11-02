@@ -23,6 +23,8 @@ import shlex
 import subprocess
 import threading
 
+from domain.message import ImageBlock
+
 # 握手时申报的协议版本。服务器会在响应里回它自己的版本；只要握手成功
 # 就用服务器的（服务器普遍兼容旧客户端），不强求一致。
 PROTOCOL_VERSION = "2025-06-18"
@@ -126,11 +128,22 @@ class StdioMCPClient:
         """服务器的工具清单。每项 {name, description, inputSchema}。"""
         return (self._request("tools/list") or {}).get("tools") or []
 
-    def call(self, name: str, arguments: dict) -> tuple[str, bool]:
-        """调一个工具，返回 (结果文本, 是否出错)。协议层的错误抛 ValueError，
+    def call(self, name: str, arguments: dict) -> tuple[str, bool, ImageBlock | None]:
+        """调一个工具，返回 (结果文本, 是否出错, 附图)。协议层的错误抛 ValueError，
         由调用方（tools.run_tool）转成 is_error 结果。"""
         result = self._request("tools/call", {"name": name, "arguments": arguments})
-        # content 是块列表，我们只消费文本块（图片块是「眼睛」那条 TODO 的事）。
+        # content 是块列表：文本块合成结果；首个 image 块走 D25 的单图契约。
+        image_block = next(
+            (
+                ImageBlock(
+                    media_type=block["mimeType"],
+                    data=block["data"],
+                )
+                for block in result.get("content", [])
+                if block.get("type") == "image"
+            ),
+            None,
+        )
         text = "\n".join(
             block.get("text", "")
             for block in result.get("content", [])
@@ -138,7 +151,7 @@ class StdioMCPClient:
         )
         # isError 是协议里工具级失败的信号（比如工具内部抛了异常），
         # 和 JSON-RPC 层的 error 不同层：那是「调用没送达」，这是「工具跑了但失败」。
-        return text, bool(result.get("isError"))
+        return text, bool(result.get("isError")), image_block
 
     def close(self) -> None:
         """关连接。先 terminate 给它优雅退出的机会，超时再 kill。"""
@@ -195,7 +208,9 @@ class MCPManager:
                     continue
         return out
 
-    def call(self, alias: str, name: str, arguments: dict) -> tuple[str, bool]:
+    def call(
+        self, alias: str, name: str, arguments: dict
+    ) -> tuple[str, bool, ImageBlock | None]:
         """调一个 MCP 工具。永不抛异常：任何失败都变成 is_error 文本，
         和 run_tool 的契约一致（模型看了错误自己调整）。"""
         try:

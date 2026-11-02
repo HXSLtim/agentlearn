@@ -492,8 +492,8 @@ def run_tool(name: str, args: dict) -> tuple[str, bool, ImageBlock | None]:
     # 不在内置注册表：试试 MCP 的复合名（别名__工具名）。
     if "__" in name:
         alias, _, tool_name = name.partition("__")
-        text, is_error = _mcp_manager().call(alias, tool_name, args)
-        return text, is_error, None
+        text, is_error, image = _mcp_manager().call(alias, tool_name, args)
+        return text, is_error, image
     # 模型幻觉出了一个不存在的工具名。如实告诉它有哪些可用，让它调整。
     available = [t.name for t in all_tools()]
     return f"没有叫 {name} 的工具。可用：{', '.join(available)}", True, None
