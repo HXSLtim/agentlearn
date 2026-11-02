@@ -94,7 +94,8 @@ def plan_cut(
     """决定切在哪：返回尾部的起始下标，None = 不用压。
 
     规则：
-    - 现状（摘要 + 全部历史）不超预算就不动。
+    - 现状（摘要 + covered 之后的尾部）不超预算就不动。covered 之前的
+      原文已经在摘要里，实际请求也不会带它，不能重复算进预算。
     - 候选切割点 = 轮次边界（is_turn_start）里、covered 之后的那些。
       covered 之前的消息只存在于摘要里，不能再切——否则同一段历史
       既在摘要里又在尾部，模型看到两遍。
@@ -104,7 +105,7 @@ def plan_cut(
       原文保留越多。
     """
     summary_est = estimate_tokens(summary_text) if summary_text else SUMMARY_TOKENS_RESERVE
-    if summary_est + estimate_history_tokens(history) <= budget:
+    if summary_est + estimate_history_tokens(history[covered:]) <= budget:
         return None
     turn_starts = [i for i, m in enumerate(history) if is_turn_start(m)]
     if not turn_starts:
