@@ -140,13 +140,12 @@ class Conversation:
             self.transcript.append(self.session_id, Message("assistant", blocks))
             stop = self.chat.stop_reason
             # ttft 和用量都拆开记：总耗时里藏着 ttft，token 和缓存比例藏在 usage 里。
-            # 第四层 prompt caching 前后对比靠这几个数。usage 为空（中转没给）就只有前两项。
-            self.store.end_span(
-                llm_span,
-                status="ok",
-                data={"stop_reason": stop, "ttft_ms": round(ttft * 1000) if ttft is not None else None,
-                      **self.chat.usage},
-            )
+            # effort 只在配置了才记。被夹档时 note 是 max→high，否则就是档位本身。
+            data = {"stop_reason": stop, "ttft_ms": round(ttft * 1000) if ttft is not None else None,
+                    **self.chat.usage}
+            if self.chat.effort:
+                data["effort"] = self.chat.effort_note
+            self.store.end_span(llm_span, status="ok", data=data)
 
             if stop != "tool_use":
                 # 模型不再要工具，这一轮到此为止。

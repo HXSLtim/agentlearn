@@ -204,3 +204,53 @@ def _usage(input_tokens: int, output_tokens: int, cache_read: int, cache_write: 
         "cache_write_tokens": cache_write,
         "cache_hit_ratio": round(cache_read / total_input * 1000) if total_input else 0,
     }
+
+
+# 我们自己的思考强度。循环和配置只认这五个词，协议字段不外泄。
+# 空字符串和 off 都表示「这个请求不带强度参数」，让服务端用它的默认。
+EFFORT_LEVELS = ("off", "low", "medium", "high", "max")
+
+# Anthropic 的 output_config.effort 有 low/medium/high/xhigh/max。
+# 我们不单列 xhigh：五个词够用，xhigh 夹在 high 和 max 之间，需要时再加一档。
+# off 不翻译成 thinking disabled——一批模型（Opus 5.5 等）对 disabled 直接 400，
+# 「关掉思考」不是可移植的一档。
+_ANTHROPIC_EFFORT = {
+    "": (None, "omit"),
+    "off": (None, "omit"),
+    "low": ("low", "low"),
+    "medium": ("medium", "medium"),
+    "high": ("high", "high"),
+    "max": ("max", "max"),
+}
+
+# OpenAI 的 reasoning_effort 常见是 low/medium/high，没有 max。
+# none / minimal 只在部分模型上合法，所以 off 也不发，跟 Anthropic 一样省略。
+# max 夹到 high，trace 说明写成 max→high，看得出被夹过而不是静默丢了。
+_OPENAI_EFFORT = {
+    "": (None, "omit"),
+    "off": (None, "omit"),
+    "low": ("low", "low"),
+    "medium": ("medium", "medium"),
+    "high": ("high", "high"),
+    "max": ("high", "max→high"),
+}
+
+
+def effort_to_anthropic(level: str) -> tuple[str | None, str]:
+    """我们的档位 -> (output_config.effort 的值或 None, trace 上的说明)。
+
+    None 表示这个请求不带 output_config。模型根本没有这个参数时，
+    配置里留空，不要发——发出去是 400，夹档救不了「整个参数不存在」。
+    """
+    return _effort(level, _ANTHROPIC_EFFORT)
+
+
+def effort_to_openai(level: str) -> tuple[str | None, str]:
+    """我们的档位 -> (reasoning_effort 的值或 None, trace 上的说明)。"""
+    return _effort(level, _OPENAI_EFFORT)
+
+
+def _effort(level: str, table: dict) -> tuple[str | None, str]:
+    if level not in table:
+        raise ValueError(f"不认识的思考强度: {level!r}，只能是 {', '.join(EFFORT_LEVELS)} 或留空")
+    return table[level]

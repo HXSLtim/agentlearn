@@ -28,6 +28,9 @@ class LLMConfig:
     api_key: str
     model_id: str
     max_tokens: int
+    # 思考强度：off / low / medium / high / max，或空字符串。
+    # 空 = 请求里不带这个参数。这一个键允许缺省，见 load_config 里的说明。
+    effort: str = ""
 
 
 def load_config(path: Path = Path("config.ini")) -> LLMConfig:
@@ -49,12 +52,20 @@ def load_config(path: Path = Path("config.ini")) -> LLMConfig:
     if not max_tokens_raw.isdigit():
         raise SystemExit(f"max_tokens 要是数字，现在写的是 {max_tokens_raw}。")
 
+    # effort 允许缺省或留空：意思是「不传」，不是「忘了配」。
+    # 中转背后的模型会换，有的根本没有思考强度这个参数，强制填写会让
+    # 换模型时启动失败。写了就必须是那五个词之一。
+    effort = section["effort"].strip() if "effort" in section else ""
+    if effort and effort not in ("off", "low", "medium", "high", "max"):
+        raise SystemExit(f"effort 只能是 off / low / medium / high / max 或留空，现在写的是 {effort}。")
+
     return LLMConfig(
         provider=provider,
         base_url=_value(section, "base_url", path),
         api_key=_value(section, "api_key", path),
         model_id=_value(section, "model_id", path),
         max_tokens=int(max_tokens_raw),
+        effort=effort,
     )
 
 

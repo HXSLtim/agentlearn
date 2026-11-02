@@ -38,6 +38,8 @@ from infrastructure.adapter import (
     tool_uses_from_acc,
     usage_from_anthropic,
     usage_from_openai,
+    effort_to_anthropic,
+    effort_to_openai,
 )
 from infrastructure.config import LLMConfig
 
@@ -50,12 +52,16 @@ _OPENAI_REASON = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "too
 class AnthropicChat:
     """走 Anthropic 协议的客户端。连官方接口或兼容这个协议的中转都能用。"""
 
-    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000) -> None:
+    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000, effort: str = "") -> None:
         # 模型 ID。不同的中转有不同的命名，这里不做校验，由配置传入。
         self.model = model
         # 这一次回复的输出上限，不限制输入。设得太小，回答会被掐断，
         # stop_reason 变成 "max_tokens" 而不是 "end_turn"。
         self.max_tokens = max_tokens
+        # 思考强度是我们的词。翻译成这家协议的字段，没有对应档位就夹紧。
+        # effort_note 给 trace：夹过的写成 max→high，没发的是 omit。
+        self.effort = effort
+        self.effort_wire, self.effort_note = effort_to_anthropic(effort)
         # base_url 指向中转或官方地址，api_key 是对应的密钥。
         self.client = anthropic.Anthropic(base_url=url, api_key=key)
         # 流跑完之前没有结束原因，所以先是 None。调用方读完 stream 之后再看它。
@@ -81,6 +87,10 @@ class AnthropicChat:
             # 「注册工具」就是这一行：定义随请求重申。API 无状态，
             # 服务器不会替你记住上次发过什么工具。
             params["tools"] = [tool_to_anthropic(tool) for tool in tools]
+        if self.effort_wire:
+            # 思考强度。None（off 或没配）就不带这个键：发一个模型不认识的
+            # 参数是 400，省略则用服务端默认。
+            params["output_config"] = {"effort": self.effort_wire}
 
         # messages.stream 返回一个上下文管理器，退出 with 时流会被关闭。
         with self.client.messages.stream(**params) as msg:
@@ -123,10 +133,12 @@ class OpenAIChat:
     base_url 要带 /v1，SDK 会在后面自动拼 /chat/completions。
     """
 
-    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000) -> None:
+    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000, effort: str = "") -> None:
         # 含义和 AnthropicChat 相同，只是底层 SDK 不同。
         self.model = model
         self.max_tokens = max_tokens
+        self.effort = effort
+        self.effort_wire, self.effort_note = effort_to_openai(effort)
         self.client = OpenAI(base_url=url, api_key=key)
         self.stop_reason: str | None = None
         self.blocks: list = []
@@ -148,6 +160,9 @@ class OpenAIChat:
         }
         if tools:
             params["tools"] = [tool_to_openai(tool) for tool in tools]
+        if self.effort_wire:
+            # OpenAI 这边的字段名是 reasoning_effort，不在 output_config 里。
+            params["reasoning_effort"] = self.effort_wire
         # stream=True 让返回值变成一个逐块迭代的对象，而不是一条完整消息。
         msg = self.client.chat.completions.create(**params)
 
@@ -204,10 +219,12 @@ def build_chat(config: LLMConfig) -> AnthropicChat | OpenAIChat:
     """
     if config.provider == "anthropic":
         return AnthropicChat(url=config.base_url, key=config.api_key,
-                             model=config.model_id, max_tokens=config.max_tokens)
+                             model=config.model_id, max_tokens=config.max_tokens,
+                             effort=config.effort)
     if config.provider == "openai":
         return OpenAIChat(url=config.base_url, key=config.api_key,
-                          model=config.model_id, max_tokens=config.max_tokens)
+                          model=config.model_id, max_tokens=config.max_tokens,
+                          effort=config.effort)
     raise ValueError(f"不认识的 provider: {config.provider}")
 
 
