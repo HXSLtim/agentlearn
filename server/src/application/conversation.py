@@ -344,6 +344,31 @@ class Conversation:
                 )
             raise TurnCancelled
 
+    def _append_disconnect_tool_results(
+        self, assistant_blocks: list, results: list
+    ) -> None:
+        """客户端断开时补齐 tool_use/tool_result 配对。
+
+        GeneratorExit 可能落在 tool_use、审批或 tool_result 事件上；这里
+        不猜断点，只对照 assistant 块补缺失结果，并把已有结果一起落盘。
+        span 不顺手收尾——断连留 running 是 D11 的证据策略。
+        """
+        completed_ids = {result.tool_use_id for result in results}
+        missing = [
+            block for block in assistant_blocks
+            if block.type == "tool_use" and block.id not in completed_ids
+        ]
+        results.extend(
+            ToolResultBlock(
+                tool_use_id=block.id,
+                content="Client disconnected before this tool call completed.",
+                is_error=True,
+            )
+            for block in missing
+        )
+        if results:
+            self.transcript.append(self.session_id, Message("user", results))
+
     def turn(
         self,
         question: str,
@@ -531,7 +556,11 @@ class Conversation:
                     continue
                 # 执行前先报一次：前端可以立刻渲染「正在调用 calculator(12*11)」，
                 # 不用干等工具跑完。id 带上，并行多个调用时结果靠它配对。
-                yield {"kind": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+                try:
+                    yield {"kind": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+                except GeneratorExit:
+                    self._append_disconnect_tool_results(blocks, results)
+                    raise
                 approval_mode = self._approval_mode_now()
                 tool_span = self.store.start_span(
                     self.session_id,
@@ -573,6 +602,7 @@ class Conversation:
                         approved = self.approval.wait(approval_id)
                     except GeneratorExit:
                         self.approval.cancel(approval_id)
+                        self._append_disconnect_tool_results(blocks, results)
                         raise
                     finally:
                         forget = (
@@ -612,19 +642,23 @@ class Conversation:
                 # 跑完再报一次：出参、是否出错、耗时。id 和上面的 tool_use 相同。
                 # has_image 只报有无：SSE 事件不搬 base64（前端渲染图片是
                 # 另一件事，见 TODO），正文以 JSONL 为准。
-                yield {
-                    "kind": "tool_result",
-                    "id": block.id,
-                    "name": block.name,
-                    "output": content,
-                    "is_error": is_error,
-                    "denied": approved is not True,
-                    "has_image": image is not None,
-                    "elapsed_ms": elapsed_ms,
-                }
                 results.append(ToolResultBlock(
                     tool_use_id=block.id, content=content, is_error=is_error, image=image
                 ))
+                try:
+                    yield {
+                        "kind": "tool_result",
+                        "id": block.id,
+                        "name": block.name,
+                        "output": content,
+                        "is_error": is_error,
+                        "denied": approved is not True,
+                        "has_image": image is not None,
+                        "elapsed_ms": elapsed_ms,
+                    }
+                except GeneratorExit:
+                    self._append_disconnect_tool_results(blocks, results)
+                    raise
 
             # 工具结果作为下一条 user 消息交回（Anthropic 协议如此；
             # OpenAI 方向由 adapter 拆成 role="tool" 的独立消息）。
