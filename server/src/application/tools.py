@@ -14,6 +14,7 @@ CLAUDE.md 约定 5，工具代码历史在 git（commit 46ef2e1）。
 - now_time：无参数、无副作用、永不失败——最简单的一档。
 - bash：有参数、有副作用、会失败——真实工具的样子（第 3 层的失败验收靠它）。
 """
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,14 @@ SANDBOX = Path("data") / "sandbox"
 # `python`（进交互解释器）这类「看起来在跑、其实永远不结束」的命令，
 # 没有超时整轮对话就挂在它身上。
 TIMEOUT_SECONDS = 10
+
+# 子进程只给这一个环境变量：PATH 得留着（不然 python3、find 都找不到），
+# 其余全部剥掉。原因：进程环境里可能有 LLM_API_KEY、代理地址这类值，
+# 而工具输出会原样进模型上下文并存进 JSONL——一条 `env` 就把密钥送进
+# 对话历史了。这不是沙箱（cwd 那条注释说了没有隔离），只是缩小波及面：
+# 注入的命令读不到进程环境。副作用是 HOME/临时变量也没了，
+# 一次性脚本基本不受影响。
+CHILD_ENV = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
 
 
 def now_time() -> str:
@@ -63,6 +72,8 @@ def bash(command: str) -> str:
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
+            # 见 CHILD_ENV 的说明：不给进程环境，密钥不进工具输出。
+            env=CHILD_ENV,
         )
     except subprocess.TimeoutExpired as e:
         # 超时路径上 text=True 不总是生效：shell=True 时 TimeoutExpired 的

@@ -1,7 +1,8 @@
 """终端入口。这一层叫 interfaces。
 
 只做输入输出。一轮对话的全部编排在 application/conversation.py：
-读一行 -> conv.turn 产出片段 -> 打印。
+交互终端默认进 tui.py 的工作台；stdin / stdout 被重定向时保持原来的
+逐行打印，方便管道、脚本和测试。`--plain` 可以强制走纯文本模式。
 
 除了对话，还提供一个只读命令 show_trace：把一个会话的执行轨迹
 （store.py 的 spans 表）和正文（JSONL）拼成一棵树打印出来，
@@ -9,6 +10,7 @@
 分开看对不上，回放必须两边一起读。
 """
 import json
+import sys
 import uuid
 from pathlib import Path
 
@@ -23,7 +25,24 @@ from infrastructure.transcript import Transcript
 DATA = Path("data")
 
 
-def main(session_id: str | None = None) -> None:
+def main(session_id: str | None = None, plain: bool = False) -> None:
+    """终端入口分派：交互终端进 TUI，非 TTY 保持纯文本。"""
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if interactive and not plain:
+        # 延迟 import：纯文本/脚本路径不需要加载 Textual 的整套 UI。
+        from interfaces.tui import run as run_tui
+
+        conversation, history = _create_session(session_id)
+        run_tui(conversation, history, session_id)
+        return
+
+    _plain_main(session_id)
+
+
+def _create_session(
+    session_id: str | None = None,
+) -> tuple[Conversation, list]:
+    """构造一个可续接的 Conversation，并读出已有历史。"""
     # session_id 由 main.py 传入，用来续接已有会话。
     # 不传就新开一个，id 用 UUID，文件名就是这个 id。
     # 例：uv run python main.py cli 3f2a9c1e-7b4d-4e6a-9c8f-1a2b3c4d5e6f
@@ -39,6 +58,13 @@ def main(session_id: str | None = None) -> None:
         raise SystemExit(f"{e}")
 
     history = transcript.read(session_id)
+    return conv, history
+
+
+def _plain_main(session_id: str | None = None) -> None:
+    """没有 TTY 时的兼容输出。事件协议和 TUI 完全一致。"""
+    conv, history = _create_session(session_id)
+    session_id = conv.session_id
     print(f"会话 {session_id}，已有 {len(history)} 条消息。空行结束。")
 
     while True:
