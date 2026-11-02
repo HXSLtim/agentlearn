@@ -259,7 +259,7 @@ class Conversation:
         那段只存在于摘要里）。超了就把 covered 到切割点之间的原文交给模型
         并进旧摘要，写回摘要文件。压缩本身是一次 llm_request，挂 span
         （purpose=compaction），trace 里看得见它花了多少 token。
-        压缩请求失败不挡对话：退回全长历史，账记在 span 上。
+        压缩请求失败不挡对话：沿用旧摘要和原来的未覆盖尾部，账记在 span 上。
         """
         path = self.transcript.summary_path_for(self.session_id)
         summary = compaction.load_summary(path)
@@ -304,9 +304,10 @@ class Conversation:
                 self.store.end_span(span, status="cancelled")
                 raise
             except Exception as e:
-                # 摘要是派生物，压不成不该拖垮对话：退回全长历史继续。
+                # 摘要是派生物，压不成不该拖垮对话。沿用旧摘要对应的
+                # covered 边界：把已覆盖原文再发一遍会让模型看到两份事实。
                 self.store.end_span(span, status="error", data={"message": str(e)})
-                return history, summary_text, covered
+                return history[covered:], summary_text, covered
             new_text = "".join(pieces).strip() or summary_text
             self.store.end_span(
                 span,
