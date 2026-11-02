@@ -397,6 +397,8 @@ class Conversation:
         # 一轮开始后固定同一个客户端：TUI 里可以随时改模型或思考档位，
         # 但当前轮的工具循环不能中途换客户端，否则同一条 trace 会混两套配置。
         chat = self.chat
+        if not append_user and images:
+            raise ValueError("重试不落新消息，不能带图。")
         if append_user:
             # 第一次真正有消息时才登记会话：启动后立刻退出的会话
             # 不再在 sessions 表里留下指向不存在文件的行。续接时表里已有，跳过。

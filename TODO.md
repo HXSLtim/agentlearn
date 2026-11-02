@@ -15,7 +15,7 @@ P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未
 - [x] 压缩请求失败时退回全文，同时 system 仍带旧摘要，covered 段出现两遍 ✅（2026-11-03）：失败时沿用旧摘要和原 covered 边界，只返回未覆盖尾部；离线假 client 抛错验证不重复发送已覆盖原文，span 记 error。
 - [x] trace 把 `purpose=compaction` 的成功 `llm_request` 也拿去配 assistant 正文，后面的回答整体错位 ✅（2026-11-03）：共用配对函数识别 `purpose=compaction` 并返回空回答；web 的 dict data 与 TUI 的 JSON 字符串两种形状离线验证，主请求仍按顺序配对。
 - [x] `tool_use` / `tool_approval` 已经 yield、工具结果还没落盘时客户端断开，JSONL 留下没有 `tool_result` 的 `tool_use` ✅（2026-11-03）：三个工具事件挂起点统一补齐缺失结果并落盘一条 user(tool_result)；离线生成器在首个 tool_use 事件处 close，两个 tool_use 均有 is_error 配对。span 仍按 D11 留证，不混入 aborted 统计。
-- [ ] `turn(append_user=False)` 收到 `images` 时静默丢掉。验收：重试带图在创建 turn span 和写 JSONL 之前报错。依据：图片只在 `append_user` 分支扩展；web 层拒绝了组合，conversation 本身没有。
+- [x] `turn(append_user=False)` 收到 `images` 时静默丢掉 ✅（2026-11-03）：conversation 在读取历史、创建 turn span 和写 JSONL 前直接拒绝非空图片；离线验证抛 ValueError 且 transcript/spans 均为空。
 - [ ] `append_memory` 只 `strip` 首尾，中间换行会把一条 remember 写成多行。验收：含换行的内容被拒绝或折成一条记录，`memory.md` 每次只多一行带来源前缀的记录。依据：`server/src/application/tools.py` 的 `append_memory`。
 - [ ] file 触发器可以指向 `memory.md`，remember 写入会把自己再次触发。验收：解析后的路径等于记忆文件时拒绝启动。依据：`triggers.py` 的 `build_trigger` 不检查路径。
 
