@@ -2,6 +2,23 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-02（二）：第 3 层——多工具、并行、失败
+
+- 工具集换血：calculator 下架（ast 白名单的写法留在 git 46ef2e1 和
+  learning-path 第 2 层），换成 now_time（无参、永不失败）+ bash
+  （shell=True，管道/重定向/$() 全真实语义，10 秒超时，cwd 在 data/sandbox）。
+  先试过 shlex.split 直 exec，等于向模型承诺残缺 shell（$((...))、> 全是
+  字面量），改回 shell=True——安全面无实质差别（python -c 本就是任意代码执行）。
+- 并行验收 ✅：一条回复里同时要 now_time 和 bash，两个 tool_call 挂同一
+  llm_request，id 配对不串线（时间 + 56877 都正确）。
+- 失败验收 ✅ 两档：exit 1 → 模型 pwd/ls 定位后如实报告；模型自发 find /
+  全盘扫描超时 → 逐步降级到朴素命令最终答对。
+- 修一个真 bug：shell=True 超时路径 TimeoutExpired.stdout/stderr 是 bytes
+  （text=True 不生效），原代码 str+bytes 直接 TypeError，靠 run_tool 兜底
+  才没断链；现在统一 `_as_text` 转换，超时报错带部分输出、说人话。
+- 已知边界如实记录（TODO）：bash 的 cwd 不是安全边界，绝对路径可绕过，
+  学习期接受，对外前必须容器化；超时只 kill shell，后台子进程可能残留。
+
 ## 2026-11-02：用量与缓存比例进 span
 
 - llm_request span 增加五个字段：input_tokens / output_tokens /
