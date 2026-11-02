@@ -2,6 +2,248 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-03（十六）：重试去重契约 + 会话库/上下文/能力面板的后端
+
+- **重试去重（P0 收口）**：`turn()` 加 `append_user=False` 模式——失败轮
+  的 user 消息已在 JSONL，重试对既有历史重新发起请求，不再追加同文
+  user。历史尾部必须是 user 消息：纯文本 = 请求前就失败；tool_result =
+  工具循环中途失败，重试从工具结果续跑（正是想要的续跑语义）。
+  `POST /chat` 加 `retry` 字段（推流前校验：尾部不是 user 报 409、
+  只支持 queue 档）；TUI `/retry` 与 RETRY 卡片接 `append_user=False`；
+  turn span 记 `origin=retry`。
+- 会话库 pin 后端：sessions.pinned 列（`_migrate` 加列）、PATCH 字段、
+  列表排序 pinned 优先于最近活动、GET /sessions 带 pinned。
+- `/context` + `/compact`（P1 上下文与用量的机制层）：
+  `Conversation.context_report()` 给三种真值——估算（摘要 + 尾部 + system
+  的预估 token，管下次请求多大 / 何时压）、上次请求 usage 实数（含缓存
+  命中）、工作集预算；`compact_now()` 复用圈界压缩的全部机制，只是把
+  预算当 0（plan_cut 退到最深合法切割点）。TUI 两条命令 +
+  `GET/POST /sessions/{id}/context|compact`；运行中压缩 409——摘要文件
+  会被运行轮的圈界压缩和手动压缩互相踩。
+- `GET /capabilities`（P1 能力面板的数据源）：工具清单带来源
+  （builtin/mcp/skill）、`MCPManager.health()`（健康检查不主动起进程，
+  惰性如实报 not_started）、sandbox 边界如实陈述 D17 取舍、运行时
+  python/模型/effort/触发器数。两端 UI 消费这份 JSON。
+- user 消息带图（@file / 粘贴图片的后端半边）：`turn(images=...)` 文字块
+  前图块后；adapter 两方向补齐——Anthropic 顶层图块包 source（原来会以
+  存储形状直发、必 400），OpenAI 带图 user 的 content 变数组
+  （text + image_url，纯文字保持字符串）；`POST /chat` 加 images 字段
+  （校验 media_type/data；与 retry 互斥、只支持 queue 档——软中断的
+  inbox 只搬文字）；JSONL 往返、压缩渲染给「用户发来一张图」标记。
+  前端的 @file 补全 / 拖拽 / 粘贴 UI 还没接。
+- `GET /sessions/search?q=`（P1 会话库的按内容搜索）：线性扫 JSONL
+  文字块，每会话报第一处命中（带前后文截断），总量封顶 50；归档会话
+  也搜得到。没上 FTS——几十个会话毫秒级，索引维护比线性扫描贵。
+- 验收（离线）：重试三路径（请求前失败重试不重落 user、成功后重试
+  ValueError、从 tool_result 续跑历史尾部正确 + span origin=retry）；
+  pin 排序压过最近活动、取消后还原；compact_now 压缩/无可压两态 +
+  压后 context_report 对账 + 下一轮 turn 摘要进 system；capabilities
+  字段与工具来源标注；user 图块双方向翻译 + 软中断合并 + JSONL 往返 +
+  turn 带图请求历史正确；搜索命中/空词 422/每会话一条。两套既有离线
+  套件全绿。
+
+## 2026-11-03（十五）：主动性第一阶段——不在场也延续的存在（D27）
+
+- 前置选型用户拍板「不在场也延续的存在」，主动性立项；耳朵搁置
+  （当前中转模型不吃音频输入块，本地转写是用再说的备选）。
+- 触发器三种（`application/triggers.py`，config.ini 的 `[trigger:*]` 段）：
+  interval（≥60 秒防风暴）/ file（内容变化，内容由服务器读进消息，
+  不靠模型 bash）/ jobdone（后台任务跑完带输出尾部）。check()/mark()
+  分离：执行失败不消费触发，连续 3 败丢弃并写 notices。
+- 常驻调度线程挂 desktop server 的 lifespan（TUI 不跑）：串行闸门、
+  每 5 秒一 tick、tick 异常不杀线程。无人值守执行端 `_run_unattended`：
+  SessionManager 会话锁零等待（拿不到就放弃这 tick）、auto 权限地板、
+  轮数上限 4、事件丢弃（JSONL + spans 是全部输出）、turn span 记
+  origin="trigger:<名>"。每个触发器一个 uuid5 固定会话——跨重启稳定，
+  白天人聊夜里它醒是同一个存在；data/notices.log 是它的值班日志。
+- 新工具 `remember`（auto 档唯一被预授权的写）：往 memory.md 追加
+  带 agent 时间戳的一行，作用域授权等价 /memory 命令；read_memory /
+  append_memory 从 conversation.py 搬进 tools.py（memory.md 是 sandbox
+  数据）并加 author 参数。
+- 顺手修两个既有问题：jobs 账本 exit_code 懒缓存没人 poll 就看不见
+  「跑完」（jobdone 触发器自己 poll）；SANDBOX/CHILD_ENV 的
+  tools↔jobs import 环（jobs 先导入必炸）拆进 application/sandbox.py。
+- 验收（真机）：file 触发器 → 注入带内容 → 模型答对 1+1 → remember
+  自动放行 → 记忆落盘 → span origin 正确 → notices 记 end_turn；
+  config.ini 按字节还原。离线：三触发器全路径、调度失败计数、
+  remember 空内容 is_error、auto 放行集、双 import 顺序。
+- 第二阶段（未做）：容器化（D17 攻击链的「读密钥」一步清零）之后
+  地板才可提 yolo；届时熔断和任务账本落盘必须一起做。
+
+## 2026-11-03（十四）：TUI / desktop P0 工作流闭环
+
+- desktop 接上 server 会话索引、正文恢复、三档 steering、独立 STOP 和只读
+  TRACE 抽屉。停止状态为 `RUNNING → STOPPING → CANCELLED / ERROR`；运行中
+  的发送按钮保留 `STEER`，避免“改方向”和“收线”挤在同一按钮上。
+- trace 抽屉消费 `GET /sessions/{id}/trace`，左侧 span 树、右侧
+  status / duration / 模型参数 / cache / effort / 工具入参出参 / 配对回答；
+  窄屏改为上下分栏。TUI `/trace` 仍走本地 Store + JSONL，两端不共享 UI 代码。
+- 两端错误卡都能直接 `RETRY`；已完成工具结果保留，界面不会重复插入同一
+  user 卡片。JSONL 层的重试去重仍需后端新契约，已记入 TODO。
+- desktop 长会话布局修掉：Grid 增加 `minmax(0, 1fr)` 行约束后，历史再长
+  composer 也固定在视口底部；thinking 运行态改成最多约 6 行的尾部滚动预览，
+  完成后折叠为完整 reasoning。
+- TUI 补齐错误重试卡、`/retry`，并保持 thinking / text / tool 严格按事件
+  顺序原位挂载。验收：tsc + vite build、TUI 三个 headless 冒烟、真实
+  `GET /sessions` + `/messages` + `/trace` 接线，以及 1280×800 / 375×812
+  真实截图（长历史、thinking、steering、STOPPING、trace、错误重试）全过。
+
+## 2026-11-03（十三）：会话索引与回放端点（前端接线需求落地）
+
+- 四个新端点（形状按 TODO 契约，desktop 会话轨 / 首屏恢复 / 停止 / 只读
+  trace 面板的数据源）：`GET /sessions`（最近活动倒序）、
+  `GET /sessions/{id}/messages`（完整内容块，Message.to_dict 原样）、
+  `POST /stop`（设取消标志，复用抢占档 TurnCancelled 语义：SSE 收
+  steering_cancelled + done，不丢已完成的 tool_result；无运行轮幂等 no-op）、
+  `GET /sessions/{id}/trace`（spans 树 + 配对回答）。
+- Store.list_sessions 重写：turns / updated_at / stop_reason 用子查询从
+  spans 推导（派生值不落库，落了要维护两处），排序从创建时间改为最近活动；
+  新增 set_title_if_empty——标题列建表时预留的「起标题的地方」兑现，
+  Conversation 第一轮 turn 用第一条用户消息截断补标题，不覆盖后来的正式名。
+- answers_for_requests / answer_texts 从 tui/trace.py 抽到
+  application/trace_view.py：web 端点要同一套「ok llm_request 按序配对
+  assistant 回答」逻辑，而 web 进程不该 import TUI 包（会拖进 Textual）。
+- P1 会话管理一并落地：`PATCH /sessions/{id}`（rename / archive，归档是
+  软删除、`GET /sessions?archived=true` 归档视图）、`DELETE /sessions/{id}`
+  （永久删除：索引 + spans + JSONL + 摘要一起清，运行中 409）、
+  `POST /sessions/{id}/fork`（`{"through": N}` 保留前 N 条复制新会话，
+  spans 不复制）。sessions 表加 archived 列，旧库由 Store._migrate 幂等
+  ALTER 补列；Store 新增 rename_session / set_archived / delete_session，
+  Transcript 新增 delete（摘要派生物跟着正文一起没）。
+- /chat UUID 回传、approval-mode 三条契约核对为既有实现已满足，TODO 勾掉。
+- 验收：离线契约测试（临时 SQLite + JSONL 直调端点函数）——排序/派生列/
+  消息块形状/thinking signature/trace 配对/stop 置标志/404 vs 422/
+  标题只写一次，全过；P1 那组再加：旧库无 archived 列的迁移、归档进出
+  默认列表、fork 边界（through 0/超界 422、复制内容与标题后缀）、
+  运行中删除 409、删除后 spans/正文/摘要全清，全过。
+
+## 2026-11-03（十二）：欠账清理——/memory、/rounds、压缩档位
+
+- `/memory [内容]`（两端命令表）：用户主动往 data/sandbox/memory.md 记一条，
+  读写收在 application/conversation.py（read_memory / append_memory，带
+  「用户 + 本地时间」前缀和模型自己写的行区分来源）；不带参数查看现有记忆。
+  TUI 直调 application 函数，desktop 走新端点 GET /memory / POST /memory。
+  两端都不等当前轮——记忆是每圈圈界重读的，追加只影响之后发出的请求。
+  system 注入文案同步注明用户也会写、改写时保留原意。
+- `/rounds [N]`（TUI）：工具轮数上限 per-session 可调（欠账那条）。全局默认
+  仍是 8，Conversation 加 max_tool_rounds 参数（钳到 ≥1），当前轮不追改、
+  下一次 turn 生效。web 构造暂不传，前端要这个旋钮时再加。
+- 压缩请求不再继承用户思考档位：llm.stream 加单次 effort 覆盖参数
+  （空串 = client 默认），压缩固定 low——摘要不需要深度思考，用户开 max
+  时别跟着烧。span data 记 effort=low，trace 里分得清两处档位为何不同。
+- 截图转 JPEG（sips 质量 75，实测 625KB PNG → 106KB base64）：省的是
+  JSONL 正文和请求体的体积；上下文 token 按像素算，缩图那步才省 token。
+- 验收：记忆读写往返（含无结尾换行的既有文件）；离线 compaction /
+  steering 套件全绿（假 client 签名跟上新参数）；imports / tsc 干净
+  （desktop 遗留报错均为并行改名半成品，与本条无关）。
+
+## 2026-11-03（十一）：耐心——后台任务
+
+- `application/jobs.py`（新，D26）：start_job / wait_job / job_status /
+  stop_job 四个工具。命令后台跑（sandbox 起跑、环境只给 PATH、独立进程组），
+  输出写 data/sandbox/jobs/任务id.log；wait_job 单次上限 120 秒、超时如实
+  报「还没结束」；stop_job 连子进程一起杀（修掉 bash 超时路径的子进程
+  残留坑）。轮询式，conversation 零改动。
+- wait_job / job_status 进 auto 档自动放行集；start_job / stop_job 与
+  bash 同级需确认。轮询烧工具轮数、wait 不烧的取舍写进工具说明。
+- 验收（真机）：模型自己走 start_job → wait_job 跑通 14 秒命令
+  （bash 十秒必超时），exit 0、span 全 ok。
+
+## 2026-11-03（十）：眼睛——图像进 tool_result
+
+- 新内置工具 `screenshot`（D25）：screencapture 截屏、sips 缩到最长边
+  1000px、base64 进 ImageBlock，临时文件即用即删；需要「屏幕录制」权限，
+  失败转 is_error。run_tool 返回值变三元组 (文本, 是否出错, 图|None)。
+- domain 新增 ImageBlock；ToolResultBlock 可带一张图（JSONL 存完整块，
+  老数据无 image 键读回 None）。to_dict 从此只是存储形状——线上翻译
+  全在 adapter：Anthropic 的 tool_result content 变块列表（图前文后，
+  无图消息剥掉 asdict 带出的 "image": null）；OpenAI 图作为紧跟
+  role="tool" 的一条 user 消息补发（data URI）。
+- 压缩的摘要给带图结果留「[图]」标记；spans 只记 image_bytes；
+  SSE 事件只报 has_image。
+- 验收（真机）：「看一眼我的屏幕」→ 模型答出屏幕实播内容（综艺、
+  嘉宾、角标广告）；JSONL 带图可续发、span 记大小、缓存仍命中。
+
+## 2026-11-03（九）：第 6 层——Skills 指令包
+
+- `skills/*.md` 一个文件一个技能（D24）：头部两行简化 frontmatter
+  （name/description），其余是正文。每圈 all_tools() 重扫目录，
+  加技能 = 丢文件，零代码改动、不用重启。
+- 新内置工具 `read_skill(name)`：索引（名字+说明）嵌在它的 description 里，
+  是 Skills 唯一的常驻上下文开销；正文按需拉取，读进来是普通 tool_result，
+  长会话由第 4 层压缩收走。技能引用的脚本走 bash，加载与执行分界同 MCP。
+- `skills/report.md` 作为示例技能随库（运行报告的固定格式）。
+- 验收（A/B 真机，同问「写运行报告」）：无技能 0/4 格式标记；有技能
+  先调 read_skill 再输出 4/4 全对。conversation.py 未改动。
+
+## 2026-11-03（八）：第 5 层——MCP 外部工具
+
+- `infrastructure/mcp_client.py`（新，D23）：手写 MCP stdio 客户端——
+  子进程 stdin/stdout 上的 JSON-RPC 2.0，一行一条 JSON。initialize 握手、
+  tools/list、tools/call 三个方法；读线程 + 队列实现 30 秒超时；进程死了
+  自动重启；单个服务器起不来只跳过，不拖垮工具列表。
+- config.ini 新增 `[mcp:<别名>]` 段（config.py 的 load_mcp_servers，
+  别名只许字母数字下划线，command 过 shlex）。没有这类段 = 行为与从前
+  完全一致。
+- 外部工具以「别名__工具名」并入 all_tools()/run_tool()（tools.py），
+  inputSchema 即 domain 的 input_schema，零翻译；内置名不含 `__`，
+  路由不撞。examples/mcp_count.py 是手写的最小 MCP 服务器（验收对象）。
+- 验收：真机只加 `[mcp:cnt]` 配置，模型调 `cnt__count_words` 答对
+  「8 字符、3 词」；离线含 kill 重启。conversation.py 未改动。
+- 已知欠账：同一 MCP 服务器的并发调用未真正串行化（现在工具顺序执行，
+  不构成问题）；图片类 content 块跳过（「眼睛」缺口）。
+
+## 2026-11-03（七）：第 4 层——上下文压缩与缓存断点
+
+- `application/compaction.py`（新，D22）：圈界处估算「摘要 + 历史」超预算
+  就把前缀压成摘要。摘要存 `data/sessions/<id>.summary.json`（派生层，
+  JSONL 只追加不改写）；切割只落轮次边界，tool_use/tool_result 配对不拆散；
+  压缩本身是一次 llm_request（span 记 purpose=compaction），失败沿用旧
+  摘要和原 covered 尾部。预算默认 24000 估算 token。
+- system 第四段挂会话摘要，四段固定：准则、运行态、记忆、摘要（D21 之上）。
+  llm_request span 的 messages 记尾部条数，压缩后再加 compaction_covered。
+- prompt caching：Anthropic 请求在最后一条消息打 cache_control 断点
+  （估算前缀 ≥2048 token 才打，低于最短可缓存长度会 400）；OpenAI 自动
+  前缀缓存无标记。断点跟尾巴走，工具循环每圈追加的历史命中上一圈前缀。
+- 验收（预算 1000、7 轮、首轮埋暗号）：主请求 input 平在 236–547，
+  cache_read 最高 512、命中率 655‰；covered=10 时仍答对暗号。
+  离线五案：边界安全（无悬空 tool_use）、压缩发生/不发生、已有摘要
+  只发尾部、压缩失败退全长。
+
+## 2026-11-03（六）：模型/思考档位顺延，执行等级实时生效
+
+- 思考档位和模型可以在当前轮运行中切换；`Conversation.turn()` 固定本轮
+  client 快照，system 提示词也读这份快照，所以当前轮不会混两套配置，下一次
+  `turn()` 才使用新档位。TUI `Alt+T`、desktop `Alt+T` / `POST /settings` 均可。
+- 执行等级改为 `RunningTurn` 的运行态字段，每个工具调用前实时读取。
+  `Shift+Tab` 在流式中也能切；后续工具立即按新等级判断。若审批框已经打开，
+  切到 `auto` / `yolo` 后不再需要人工确认的那一条会立即放行并关闭审批 UI。
+- desktop 在请求前由客户端固定 session UUID，新增
+  `POST /approval-mode {session_id, mode}`，运行中精确更新对应轮次；响应带
+  `auto_approved`，前端据此撤掉过期的 Accept/Deny 状态。没有运行轮时端点
+  返回 `active:false` 并记住新等级，下一次轮次 `begin` 时采用，覆盖「请求
+  已发出、服务端还没建运行轮」的短窗口；前端也会在后续 `/chat` 再带上它。
+
+## 2026-11-03（五）：system 提示词分三段
+
+- system 不再 100% 来自模型自己能改的 `memory.md`（D21）。每轮拼三段，
+  顺序固定：`server/constitution.md`（人维护的准则）、当前模型与思考档位、
+  memory.md（只放事实，空则省略）。不落 JSONL。
+- 档位用 `effort_note`，和 trace 是同一个值。留空和 off 写成「未设置」。
+  模型改不了档位，但知道自己在哪一档。
+- 准则放在 server/ 下只是为了不和便签混在一个文件里，bash 绝对路径仍写得到
+  （D17），不把它当成安全边界。验收：记忆里藏了暗号，模型仍答出档位 max，
+  并拒绝「用记忆改掉准则」。
+
+## 2026-11-03（四）：执行等级 approve / auto / yolo
+
+- `application/approval.py`（新）：工具执行前的人工门。approve（默认）
+  每次都等 Accept；auto 只放行无副作用工具（now_time），bash 仍要 Accept；
+  yolo 直接跑。拒绝和超时变成 is_error 的 tool_result，不打断配对。
+- 两端都用 Shift+Tab 切换，一轮进行中不让切。TUI 弹模态框；desktop 在
+  工具卡上给 Accept / Deny，经 `POST /approval` 回填。运行态，不进 config.ini。
+- 明确不是安全边界（D20）：auto 不读命令内容，命令过滤仍按 D17 否掉。
+
 ## 2026-11-03（三）：同会话消息 steering 三档
 
 - `application/session_manager.py`（新）：web 进程单例，按 session_id 管槽位
