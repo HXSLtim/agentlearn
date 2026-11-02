@@ -11,6 +11,7 @@
 
 不从 LangChain 起步。循环先自己写一遍，再去看框架包了什么。
 
+每层在搞懂什么、为什么按这个顺序，见 [docs/learning-path.md](docs/learning-path.md)；
 每层的验收标准、基建线进度见 [docs/roadmap.md](docs/roadmap.md)；
 技术选型的决定和理由见 [docs/decisions.md](docs/decisions.md)；
 当前工作队列见 [TODO.md](TODO.md)。
