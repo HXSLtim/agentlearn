@@ -81,6 +81,14 @@
               READY
             </span>
             <button
+              class="icon-button text-icon-button trace-toggle"
+              id="trace-toggle"
+              type="button"
+              aria-label="打开当前会话执行轨迹"
+            >
+              <span class="icon-code">TRACE</span>
+            </button>
+            <button
               class="icon-button text-icon-button run-rail-toggle"
               id="run-rail-toggle"
               type="button"
@@ -139,14 +147,28 @@
                 <span><kbd>↵</kbd> 发送</span>
                 <span><kbd>/</kbd> 命令</span>
                 <span><kbd>⇧ ↵</kbd> 换行</span>
+                <span><kbd>⌥ T</kbd> 思考</span>
+                <span><kbd>⌥ S</kbd> Steering</span>
+                <span><kbd>⇧ Tab</kbd> 执行</span>
                 <span><kbd>⌘ N</kbd> 新会话</span>
               </div>
-              <button class="send-button" id="send" type="submit">
-                <span id="send-label">RUN</span>
-                <svg viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="M4 10h11M10 5l5 5-5 5" />
-                </svg>
-              </button>
+              <div class="composer-actions">
+                <button
+                  class="stop-button"
+                  id="stop"
+                  type="button"
+                  title="停止当前运行轮（Esc）"
+                  hidden
+                >
+                  STOP
+                </button>
+                <button class="send-button" id="send" type="submit">
+                  <span id="send-label">RUN</span>
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M4 10h11M10 5l5 5-5 5" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
           <p class="composer-note">
@@ -187,6 +209,18 @@
             <dt>ELAPSED</dt>
             <dd id="run-elapsed">—</dd>
           </div>
+          <div class="run-metric-wide">
+            <dt>THINKING EFFORT</dt>
+            <dd id="run-effort">—</dd>
+          </div>
+          <div class="run-metric-wide">
+            <dt>EXECUTION APPROVAL</dt>
+            <dd id="run-approval">APPROVE</dd>
+          </div>
+          <div class="run-metric-wide">
+            <dt>MESSAGE STEERING</dt>
+            <dd id="run-steering">QUEUE</dd>
+          </div>
         </dl>
 
         <section class="activity-section">
@@ -211,6 +245,62 @@
         </footer>
       </aside>
       <div class="scrim" id="scrim"></div>
+    </div>
+
+    <div class="trace-modal" id="trace-modal" hidden>
+      <div class="trace-backdrop" data-trace-close></div>
+      <aside
+        class="trace-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="trace-title"
+      >
+        <header class="trace-header">
+          <div>
+            <span class="eyebrow">SESSION INSPECTOR / READ ONLY</span>
+            <h2 id="trace-title">执行轨迹</h2>
+          </div>
+          <div class="trace-header-actions">
+            <button class="trace-refresh" id="trace-refresh" type="button">
+              RELOAD
+            </button>
+            <button
+              class="icon-button trace-close"
+              id="trace-close"
+              type="button"
+              aria-label="关闭执行轨迹"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m4 4 12 12M16 4 4 16" />
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div class="trace-summary-line" id="trace-summary">
+          <span>SESSION —</span><span>SPANS 0</span><span>NO DATA</span>
+        </div>
+        <div class="trace-workspace">
+          <section class="trace-tree-panel">
+            <header>
+              <span>SPAN TREE</span>
+              <span id="trace-count">0</span>
+            </header>
+            <div class="trace-tree" id="trace-tree" role="tree"></div>
+          </section>
+          <section class="trace-detail-panel">
+            <header>
+              <span>SPAN DETAIL</span>
+              <span id="trace-selected-state">WAITING</span>
+            </header>
+            <div class="trace-detail" id="trace-detail"></div>
+          </section>
+        </div>
+        <footer class="trace-footer">
+          <span>JSONL ANSWER PAIRING</span>
+          <span>SQLITE SPANS</span>
+          <span>ESC CLOSE · R RELOAD</span>
+        </footer>
+      </aside>
     </div>
 
     <div class="settings-modal" id="settings-modal" hidden>
@@ -363,9 +453,19 @@
           <span>LOCAL UI INDEX</span>
         </div>
         <p class="resume-summary" id="resume-summary"></p>
+        <label class="resume-search-field">
+          <span>FILTER INDEX</span>
+          <input
+            id="resume-search"
+            type="search"
+            placeholder="按标题、id、模型或 stop reason 过滤…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
         <div class="resume-list" id="resume-list" role="listbox"></div>
         <footer class="resume-footer">
-          正文和执行轨迹仍在 server/data；这里只切换界面索引。
+          会话索引、正文和执行轨迹都来自 server；本地缓存只负责打开速度。
         </footer>
       </section>
     </div>

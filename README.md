@@ -73,6 +73,9 @@ TUI 和 desktop 输入 `/` 都会打开命令面板：方向键选择、Tab 补�
 可直接用 `/model <id>` 切模型、`/config` 打开设置，或用 `/now`、`/files`、
 `/boundary` 触发预置任务；未知斜杠命令只在本地报错，不会发给模型。
 
+运行中可随时调档：`Alt+T` 切思考强度，当前轮保持旧档，下一轮生效；
+`Shift+Tab` 切执行等级（approve / auto / yolo），立即影响后续工具调用。
+
 在 `server/` 目录里启动：
 
 ```bash

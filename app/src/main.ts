@@ -11,7 +11,9 @@ const STORAGE_KEY = "agentlearn.desktop.v1";
 
 marked.setOptions({ gfm: true, breaks: true });
 
-type ToolState = "running" | "done";
+type ApprovalMode = "approve" | "auto" | "yolo";
+type SteeringMode = "queue" | "cooperative" | "preemptive";
+type ToolState = "waiting" | "running" | "done";
 
 interface ToolEvent {
   id: string;
@@ -20,6 +22,7 @@ interface ToolEvent {
   output?: string;
   isError?: boolean;
   elapsedMs?: number;
+  approvalId?: string;
   state: ToolState;
 }
 
@@ -28,12 +31,17 @@ interface TextPart {
   text: string;
 }
 
+interface ThinkingPart {
+  type: "thinking";
+  text: string;
+}
+
 interface ToolPart {
   type: "tool";
   tool: ToolEvent;
 }
 
-type AssistantPart = TextPart | ToolPart;
+type AssistantPart = TextPart | ThinkingPart | ToolPart;
 
 interface UiMessage {
   id: string;
@@ -46,6 +54,8 @@ interface UiMessage {
   durationMs?: number;
   createdAt: number;
   streaming?: boolean;
+  queued?: boolean;
+  steeringState?: "queued" | "acknowledged" | "delivered" | "failed";
 }
 
 interface Thread {
@@ -55,6 +65,13 @@ interface Thread {
   createdAt: number;
   updatedAt: number;
   stopReason: string;
+  approvalMode: ApprovalMode;
+  steeringMode: SteeringMode;
+  model: string;
+  serverTurns?: number;
+  runStartedAt?: number;
+  stopping?: boolean;
+  messagesLoaded?: boolean;
   messages: UiMessage[];
 }
 
@@ -84,17 +101,86 @@ interface SettingsPayload {
 }
 
 interface ChatEvent {
-  kind: "thinking" | "text" | "tool_use" | "tool_result" | "done" | "error";
+  kind:
+    | "thinking"
+    | "text"
+    | "tool_use"
+    | "tool_approval"
+    | "tool_result"
+    | "steering_ack"
+    | "steering_injected"
+    | "steering_cancelled"
+    | "done"
+    | "error";
   text?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
   output?: string;
   is_error?: boolean;
+  denied?: boolean;
   elapsed_ms?: number;
   stop_reason?: string;
   session_id?: string;
   message?: string;
+  approval_id?: string;
+  mode?: ApprovalMode;
+}
+
+interface ApprovalModeResponse {
+  ok: boolean;
+  active: boolean;
+  mode: ApprovalMode;
+  auto_approved: string[];
+}
+
+interface ServerSession {
+  id: string;
+  title: string;
+  model: string;
+  created_at: string;
+  updated_at: string;
+  turns: number;
+  stop_reason: string;
+}
+
+interface ServerContentBlock {
+  type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
+  text?: string;
+  thinking?: string;
+  id?: string;
+  tool_use_id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  content?: string;
+  is_error?: boolean;
+}
+
+interface ServerMessage {
+  role: "user" | "assistant";
+  content: ServerContentBlock[];
+}
+
+interface TraceSpan {
+  span_id: string;
+  parent_id: string | null;
+  name: string;
+  start_time: string;
+  end_time: string | null;
+  status: "running" | "ok" | "error" | "cancelled";
+  data: Record<string, unknown>;
+  duration_ms: number | null;
+}
+
+interface TraceResponse {
+  spans: TraceSpan[];
+  answers: Record<string, string>;
+}
+
+interface StopResponse {
+  ok: boolean;
+  active: boolean;
+  cancelled: boolean;
 }
 
 interface SlashCommand {
@@ -135,10 +221,62 @@ const SLASH_COMMANDS: SlashCommand[] = [
     group: "SESSION",
   },
   {
+    name: "memory",
+    usage: "/memory [内容]",
+    description: "往跨会话记忆记一条；不带参数查看",
+    group: "SESSION",
+    takesArgument: true,
+  },
+  {
     name: "status",
     usage: "/status",
     description: "查看当前会话与运行状态",
     group: "RUNTIME",
+  },
+  {
+    name: "trace",
+    usage: "/trace",
+    description: "打开当前会话的 span 树与回答配对",
+    group: "RUNTIME",
+  },
+  {
+    name: "stop",
+    usage: "/stop",
+    description: "在下一个检查点停止当前运行轮",
+    group: "RUNTIME",
+  },
+  {
+    name: "retry",
+    usage: "/retry",
+    description: "重跑上一条失败的请求，不新增用户消息卡片",
+    group: "RUNTIME",
+  },
+  {
+    name: "steering",
+    usage: "/steering [mode]",
+    description: "切换 queue / cooperative / preemptive",
+    group: "RUNTIME",
+    takesArgument: true,
+  },
+  {
+    name: "effort",
+    usage: "/effort [level]",
+    description: "切换思考等级；不带参数循环",
+    group: "RUNTIME",
+    takesArgument: true,
+  },
+  {
+    name: "approval",
+    usage: "/approval [mode]",
+    description: "切换 approve / auto / yolo",
+    group: "RUNTIME",
+    takesArgument: true,
+  },
+  {
+    name: "copy",
+    usage: "/copy",
+    description: "复制最近一条完整回答",
+    group: "SYSTEM",
   },
   {
     name: "model",
@@ -201,6 +339,7 @@ const threadCount = requireElement<HTMLElement>("#thread-count");
 const newThreadButton = requireElement<HTMLButtonElement>("#new-thread");
 const railCloseButton = requireElement<HTMLButtonElement>("#rail-close");
 const railOpenButton = requireElement<HTMLButtonElement>("#rail-open");
+const traceToggle = requireElement<HTMLButtonElement>("#trace-toggle");
 const runRailToggle = requireElement<HTMLButtonElement>("#run-rail-toggle");
 const scrim = requireElement<HTMLElement>("#scrim");
 const threadKicker = requireElement<HTMLElement>("#thread-kicker");
@@ -213,6 +352,7 @@ const promptInput = requireElement<HTMLTextAreaElement>("#prompt");
 const composerStatus = requireElement<HTMLElement>("#composer-status");
 const sendButton = requireElement<HTMLButtonElement>("#send");
 const sendLabel = requireElement<HTMLElement>("#send-label");
+const stopButton = requireElement<HTMLButtonElement>("#stop");
 const commandPalette = requireElement<HTMLElement>("#command-palette");
 const commandList = requireElement<HTMLElement>("#command-list");
 const runState = requireElement<HTMLElement>("#run-state");
@@ -221,6 +361,9 @@ const runSession = requireElement<HTMLElement>("#run-session");
 const runTurns = requireElement<HTMLElement>("#run-turns");
 const runTools = requireElement<HTMLElement>("#run-tools");
 const runElapsed = requireElement<HTMLElement>("#run-elapsed");
+const runEffort = requireElement<HTMLElement>("#run-effort");
+const runApproval = requireElement<HTMLElement>("#run-approval");
+const runSteering = requireElement<HTMLElement>("#run-steering");
 const runStop = requireElement<HTMLElement>("#run-stop");
 const activityList = requireElement<HTMLElement>("#activity-list");
 const activityCount = requireElement<HTMLElement>("#activity-count");
@@ -245,17 +388,33 @@ const resumeModal = requireElement<HTMLElement>("#resume-modal");
 const resumeCloseButton = requireElement<HTMLButtonElement>("#resume-close");
 const resumeList = requireElement<HTMLElement>("#resume-list");
 const resumeSummary = requireElement<HTMLElement>("#resume-summary");
+const resumeSearch = requireElement<HTMLInputElement>("#resume-search");
+const traceModal = requireElement<HTMLElement>("#trace-modal");
+const traceCloseButton = requireElement<HTMLButtonElement>("#trace-close");
+const traceRefreshButton = requireElement<HTMLButtonElement>("#trace-refresh");
+const traceSummary = requireElement<HTMLElement>("#trace-summary");
+const traceTree = requireElement<HTMLElement>("#trace-tree");
+const traceCount = requireElement<HTMLElement>("#trace-count");
+const traceDetail = requireElement<HTMLElement>("#trace-detail");
+const traceSelectedState = requireElement<HTMLElement>("#trace-selected-state");
 
 let state = loadState();
-let streaming = false;
-let runStartedAt = 0;
+let currentEffort: SettingsSnapshot["effort"] = "";
+let approvalModeSync: Promise<void> = Promise.resolve();
+const autoApprovedApprovalIds = new Set<string>();
 let toastTimer: number | undefined;
 let renderFrame: number | undefined;
-let pendingAssistantId = "";
+let renderTarget: { threadId: string; messageId: string } | null = null;
 let commandMatches: SlashCommand[] = [...SLASH_COMMANDS];
 let commandSelection = 0;
 let resumeMatches: Thread[] = [];
 let resumeSelection = 0;
+let resumeQuery = "";
+let traceSpans: TraceSpan[] = [];
+let traceAnswers: Record<string, string> = {};
+let traceSelectedSpanId = "";
+let traceSessionId = "";
+let traceLoadSequence = 0;
 let commandReceipt: {
   threadId: string;
   title: string;
@@ -276,7 +435,38 @@ function createThread(): Thread {
     createdAt: now,
     updatedAt: now,
     stopReason: "",
+    approvalMode: "approve",
+    steeringMode: "queue",
+    model: "",
+    messagesLoaded: true,
     messages: [],
+  };
+}
+
+function normalizeStoredMessage(message: UiMessage): UiMessage {
+  const parts: AssistantPart[] = Array.isArray(message.parts)
+    ? message.parts
+    : [];
+  if (
+    message.thinking &&
+    !parts.some((part) => part.type === "thinking")
+  ) {
+    parts.unshift({ type: "thinking", text: message.thinking });
+  }
+  return {
+    ...message,
+    thinking: message.thinking ?? "",
+    parts,
+    error: message.error ?? "",
+    stopReason: message.stopReason ?? "",
+    streaming: false,
+    queued: false,
+    steeringState:
+      message.steeringState === "delivered"
+        ? "delivered"
+        : message.steeringState
+          ? "failed"
+          : undefined,
   };
 }
 
@@ -289,15 +479,27 @@ function loadState(): PersistedState {
         const threads = parsed.threads.slice(0, 24).map((thread) => ({
           ...thread,
           messages: Array.isArray(thread.messages)
-            ? thread.messages.map((message) => ({
-                ...message,
-                thinking: message.thinking ?? "",
-                parts: Array.isArray(message.parts) ? message.parts : [],
-                error: message.error ?? "",
-                stopReason: message.stopReason ?? "",
-                streaming: false,
-              }))
+            ? thread.messages.map(normalizeStoredMessage)
             : [],
+          approvalMode:
+            thread.approvalMode === "auto" || thread.approvalMode === "yolo"
+              ? (thread.approvalMode as ApprovalMode)
+              : "approve",
+          steeringMode:
+            thread.steeringMode === "cooperative" ||
+            thread.steeringMode === "preemptive"
+              ? (thread.steeringMode as SteeringMode)
+              : "queue",
+          model: typeof thread.model === "string" ? thread.model : "",
+          serverTurns:
+            typeof thread.serverTurns === "number"
+              ? thread.serverTurns
+              : undefined,
+          runStartedAt: undefined,
+          stopping: undefined,
+          messagesLoaded: Array.isArray(thread.messages)
+            ? thread.messages.length > 0
+            : false,
         }));
         const activeThreadId = threads.some(
           (thread) => thread.id === parsed.activeThreadId,
@@ -329,6 +531,175 @@ function persistState(): void {
   }
 }
 
+function parseServerTime(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
+function parseServerMessages(
+  messages: ServerMessage[],
+  sessionStopReason = "",
+): UiMessage[] {
+  const result: UiMessage[] = [];
+  const tools = new Map<string, ToolEvent>();
+  const baseTime = Date.now() - messages.length;
+
+  for (const [index, message] of messages.entries()) {
+    const createdAt = baseTime + index;
+    if (message.role === "assistant") {
+      const assistant: UiMessage = {
+        ...createAssistantMessage(),
+        createdAt,
+        streaming: false,
+        queued: false,
+      };
+      for (const block of message.content) {
+        if (block.type === "thinking" && block.thinking) {
+          appendAssistantThinking(assistant, block.thinking);
+        } else if (block.type === "text" && block.text) {
+          appendAssistantText(assistant, block.text);
+        } else if (block.type === "tool_use" && block.id) {
+          const tool: ToolEvent = {
+            id: block.id,
+            name: block.name ?? "tool",
+            input: block.input ?? {},
+            state: "running",
+          };
+          assistant.parts.push({ type: "tool", tool });
+          tools.set(block.id, tool);
+        }
+      }
+      if (assistant.parts.length) {
+        result.push(assistant);
+      }
+      continue;
+    }
+
+    let userMessage: UiMessage | undefined;
+    for (const block of message.content) {
+      if (block.type === "text" && block.text) {
+        userMessage ??= {
+          ...createUserMessage(""),
+          createdAt,
+        };
+        userMessage.text += block.text;
+      } else if (block.type === "tool_result" && block.tool_use_id) {
+        const tool = tools.get(block.tool_use_id);
+        if (tool) {
+          tool.state = "done";
+          tool.output = block.content ?? "";
+          tool.isError = Boolean(block.is_error);
+          tool.elapsedMs = undefined;
+        }
+      }
+    }
+    if (userMessage) {
+      result.push(userMessage);
+    }
+  }
+
+  const lastAssistant = [...result]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  if (lastAssistant && sessionStopReason) {
+    lastAssistant.stopReason = sessionStopReason;
+  }
+  return result;
+}
+
+function mergeServerSessions(sessions: ServerSession[]): void {
+  for (const session of sessions) {
+    let thread = state.threads.find(
+      (candidate) => candidate.sessionId === session.id,
+    );
+    if (!thread) {
+      thread = createThread();
+      thread.sessionId = session.id;
+      thread.messages = [];
+      thread.messagesLoaded = false;
+      state.threads.push(thread);
+    }
+    thread.title = session.title || thread.title || "未命名运行";
+    thread.model = session.model || thread.model;
+    thread.serverTurns = session.turns;
+    thread.stopReason = session.stop_reason || thread.stopReason;
+    thread.createdAt = parseServerTime(session.created_at);
+    thread.updatedAt = parseServerTime(session.updated_at);
+  }
+}
+
+async function fetchServerSessions(reportError = false): Promise<void> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(`${API_BASE}/sessions`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const sessions = (await response.json()) as ServerSession[];
+    mergeServerSessions(sessions);
+    persistState();
+    renderEverything();
+  } catch (error) {
+    if (reportError) {
+      showToast(
+        `读取服务端会话失败：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+const hydrationJobs = new Map<string, Promise<void>>();
+
+async function hydrateThread(thread: Thread, force = false): Promise<void> {
+  if (!thread.sessionId || (thread.messagesLoaded && !force) || isThreadRunning(thread)) {
+    return;
+  }
+  const existing = hydrationJobs.get(thread.id);
+  if (existing) {
+    return existing;
+  }
+  const job = (async () => {
+    try {
+      const response = await fetch(
+        `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}/messages`,
+      );
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const messages = (await response.json()) as ServerMessage[];
+      thread.messages = parseServerMessages(messages, thread.stopReason);
+      thread.serverTurns = messages.filter(
+        (message) => message.role === "user",
+      ).length;
+      thread.messagesLoaded = true;
+      thread.updatedAt = Date.now();
+      persistState();
+      if (thread.id === state.activeThreadId) {
+        renderEverything(true);
+      } else {
+        renderThreadList();
+      }
+    } catch (error) {
+      showToast(
+        `读取会话正文失败：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      hydrationJobs.delete(thread.id);
+    }
+  })();
+  hydrationJobs.set(thread.id, job);
+  return job;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -348,6 +719,10 @@ function renderMarkdown(value: string): string {
 
 function shortSession(sessionId: string): string {
   return sessionId ? sessionId.slice(0, 8) : "PENDING";
+}
+
+function effortLabel(effort: SettingsSnapshot["effort"]): string {
+  return effort || "default (omit)";
 }
 
 function threadTitleFor(prompt: string): string {
@@ -376,6 +751,75 @@ function lastAssistant(thread: Thread): UiMessage | undefined {
   return [...thread.messages].reverse().find((message) => message.role === "assistant");
 }
 
+function runningAssistant(thread: Thread): UiMessage | undefined {
+  const running = [...thread.messages]
+    .reverse()
+    .filter((message) => message.role === "assistant" && message.streaming);
+  return running.find((message) => !message.queued) ?? running[0];
+}
+
+function isThreadRunning(thread: Thread): boolean {
+  return runningAssistant(thread) !== undefined;
+}
+
+function threadStatus(thread: Thread): string {
+  const active = runningAssistant(thread);
+  if (active) {
+    if (thread.stopping) {
+      return "STOPPING";
+    }
+    return assistantTools(active).some((tool) => tool.state === "waiting")
+      ? "APPROVAL"
+      : "RUNNING";
+  }
+  const assistant = lastAssistant(thread);
+  if (assistant?.stopReason === "cancelled" || thread.stopReason === "cancelled") {
+    return "CANCELLED";
+  }
+  if (assistant?.error || thread.stopReason === "error") {
+    return "ERROR";
+  }
+  return thread.messages.length ? "DONE" : "READY";
+}
+
+function threadStatusClass(status: string): "is-ready" | "is-running" | "is-error" {
+  if (status === "RUNNING" || status === "APPROVAL" || status === "STOPPING") {
+    return "is-running";
+  }
+  if (status === "ERROR") {
+    return "is-error";
+  }
+  return "is-ready";
+}
+
+function createUserMessage(text: string): UiMessage {
+  return {
+    id: createId(),
+    role: "user",
+    text,
+    thinking: "",
+    parts: [],
+    error: "",
+    stopReason: "",
+    createdAt: Date.now(),
+  };
+}
+
+function createAssistantMessage(queued = false): UiMessage {
+  return {
+    id: createId(),
+    role: "assistant",
+    text: "",
+    thinking: "",
+    parts: [],
+    error: "",
+    stopReason: "",
+    createdAt: Date.now(),
+    streaming: true,
+    queued,
+  };
+}
+
 function assistantTools(message: UiMessage | undefined): ToolEvent[] {
   if (!message) {
     return [];
@@ -396,10 +840,12 @@ function renderThreadList(): void {
   threadList.innerHTML = sorted
     .map((thread) => {
       const selected = thread.id === state.activeThreadId;
-      const messageCount = thread.messages.filter(
-        (message) => message.role === "user",
-      ).length;
+      const messageCount =
+        thread.serverTurns ??
+        thread.messages.filter((message) => message.role === "user").length;
       const badge = thread.sessionId ? shortSession(thread.sessionId).slice(0, 4) : "NEW";
+      const status = threadStatus(thread);
+      const statusClass = threadStatusClass(status);
       return `
         <button
           class="thread-item${selected ? " is-active" : ""}"
@@ -407,10 +853,10 @@ function renderThreadList(): void {
           data-thread-id="${escapeHtml(thread.id)}"
           aria-current="${selected ? "true" : "false"}"
         >
-          <span class="thread-marker" aria-hidden="true"></span>
+          <span class="thread-marker ${statusClass}" aria-hidden="true"></span>
           <span class="thread-copy">
             <strong>${escapeHtml(thread.title)}</strong>
-            <small>${relativeTime(thread.updatedAt)} · ${messageCount} turns</small>
+            <small><b class="thread-state ${statusClass}">${status}</b> · ${relativeTime(thread.updatedAt)} · ${messageCount} turns</small>
           </span>
           <span class="thread-badge">${badge}</span>
         </button>
@@ -466,15 +912,37 @@ function emptyStateMarkup(): string {
 function renderTool(tool: ToolEvent): string {
   const args = JSON.stringify(tool.input, null, 2);
   const output =
-    tool.state === "running"
-      ? `<span class="tool-pending">waiting for result…</span>`
-      : `<pre>${escapeHtml(tool.output || "(no output)")}</pre>`;
+    tool.state === "waiting"
+      ? `
+        <div class="tool-approval-gate">
+          <span>HOST EXECUTION REQUIRES APPROVAL</span>
+          <div>
+            <button type="button" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="false">DENY</button>
+            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true">ACCEPT</button>
+          </div>
+        </div>
+      `
+      : tool.state === "running"
+        ? `<span class="tool-pending">waiting for result…</span>`
+        : `<pre>${escapeHtml(tool.output || "(no output)")}</pre>`;
   const duration =
     tool.elapsedMs === undefined ? "" : `<span>${tool.elapsedMs}ms</span>`;
+  const label =
+    tool.state === "waiting"
+      ? "TOOL APPROVAL"
+      : tool.isError
+        ? "TOOL ERROR"
+        : "TOOL CALL";
+  const stateClass =
+    tool.state === "waiting"
+      ? "is-waiting"
+      : tool.state === "running"
+        ? "is-running"
+        : "";
   return `
-    <section class="tool-event ${tool.isError ? "is-error" : ""} ${tool.state === "running" ? "is-running" : ""}">
+    <section class="tool-event ${tool.isError ? "is-error" : ""} ${stateClass}">
       <header>
-        <span class="tool-label">${tool.isError ? "TOOL ERROR" : "TOOL CALL"}</span>
+        <span class="tool-label">${label}</span>
         <code>${escapeHtml(tool.name)}</code>
         ${duration}
       </header>
@@ -486,9 +954,38 @@ function renderTool(tool: ToolEvent): string {
 
 function renderAssistant(message: UiMessage): string {
   const parts = message.parts
-    .map((part) => {
+    .map((part, index) => {
       if (part.type === "tool") {
         return renderTool(part.tool);
+      }
+      if (part.type === "thinking") {
+        if (!part.text) {
+          return "";
+        }
+        const live = Boolean(
+          message.streaming && index === message.parts.length - 1,
+        );
+        if (live) {
+          const tail = part.text.slice(-280);
+          return `
+            <section class="reasoning-live" aria-label="模型正在思考">
+              <header>
+                <span><i aria-hidden="true"></i> THINKING / LIVE</span>
+                <span>${part.text.length.toLocaleString()} chars</span>
+              </header>
+              <pre>${tail.length < part.text.length ? "…" : ""}${escapeHtml(tail)}</pre>
+            </section>
+          `;
+        }
+        return `
+          <details class="reasoning-block">
+            <summary>
+              <span>REASONING</span>
+              <span>${part.text.length.toLocaleString()} chars</span>
+            </summary>
+            <pre>${escapeHtml(part.text)}</pre>
+          </details>
+        `;
       }
       if (!part.text) {
         return "";
@@ -496,28 +993,31 @@ function renderAssistant(message: UiMessage): string {
       return `<div class="markdown">${renderMarkdown(part.text)}</div>`;
     })
     .join("");
-  const reasoning = message.thinking
-    ? `
-      <details class="reasoning-block"${message.streaming ? " open" : ""}>
-        <summary>
-          <span>REASONING</span>
-          <span>${message.thinking.length.toLocaleString()} chars</span>
-        </summary>
-        <pre>${escapeHtml(message.thinking)}</pre>
-      </details>
-    `
-    : "";
   const waiting =
     message.streaming && !message.text
       ? `
         <div class="thinking-line" aria-label="模型正在生成">
           <span></span><span></span><span></span>
-          <em>${message.thinking ? "FORMING RESPONSE" : "WAITING FOR FIRST TOKEN"}</em>
+          <em>${
+            message.queued
+              ? "QUEUED · WAITING FOR TURN SLOT"
+              : message.thinking
+                ? "FORMING RESPONSE"
+                : "WAITING FOR FIRST TOKEN"
+          }</em>
         </div>
       `
       : "";
   const error = message.error
-    ? `<div class="message-error"><strong>RUN ERROR</strong><p>${escapeHtml(message.error)}</p></div>`
+    ? `
+      <div class="message-error">
+        <div>
+          <strong>RUN ERROR</strong>
+          <p>${escapeHtml(message.error)}</p>
+        </div>
+        <button class="retry-run" type="button" data-retry-message-id="${escapeHtml(message.id)}">RETRY</button>
+      </div>
+    `
     : "";
   const stop =
     message.stopReason && !message.streaming
@@ -534,7 +1034,6 @@ function renderAssistant(message: UiMessage): string {
           minute: "2-digit",
         })}</time>
       </header>
-      ${reasoning}
       <div class="assistant-flow">${waiting}${parts}</div>
       ${error}
       <footer class="message-footer">
@@ -546,10 +1045,14 @@ function renderAssistant(message: UiMessage): string {
 }
 
 function renderUser(message: UiMessage): string {
+  const steering =
+    message.steeringState
+      ? `<span class="steering-state is-${message.steeringState}">${message.steeringState.toUpperCase()}</span>`
+      : "";
   return `
     <article class="message user-message message-appear" data-message-id="${escapeHtml(message.id)}">
       <header class="user-heading">
-        <span>YOU</span>
+        <span>YOU ${steering}</span>
         <time>${new Date(message.createdAt).toLocaleTimeString("zh-CN", {
           hour: "2-digit",
           minute: "2-digit",
@@ -606,30 +1109,48 @@ function renderHeader(): void {
   threadKicker.textContent = thread.sessionId
     ? `SESSION ${shortSession(thread.sessionId)}`
     : "NEW SESSION";
+  traceToggle.disabled = !thread.sessionId;
+  traceToggle.title = thread.sessionId
+    ? "打开当前会话执行轨迹（/trace）"
+    : "当前会话还没有 trace";
 }
 
 function renderRunLedger(): void {
   const thread = activeThread();
-  const assistant = lastAssistant(thread);
+  const active = runningAssistant(thread);
+  const assistant = active ?? lastAssistant(thread);
   const tools = assistantTools(assistant);
-  const status = streaming
-    ? "STREAMING"
-    : assistant?.error
-      ? "ERROR"
-      : thread.messages.length
-        ? "COMPLETE"
-        : "READY";
+  const waitingApproval = tools.some((tool) => tool.state === "waiting");
+  const status = active
+    ? thread.stopping
+      ? "STOPPING"
+      : waitingApproval
+      ? "APPROVAL"
+      : "STREAMING"
+    : threadStatus(thread) === "CANCELLED"
+      ? "CANCELLED"
+      : assistant?.error
+        ? "ERROR"
+        : thread.messages.length
+          ? "COMPLETE"
+          : "READY";
   const statusClass =
-    status === "STREAMING"
+    status === "STREAMING" || status === "APPROVAL" || status === "STOPPING"
       ? "is-running"
       : status === "ERROR"
         ? "is-error"
         : "is-ready";
   const statusCopy =
-    status === "STREAMING"
-      ? "模型请求或工具仍在执行"
+    status === "STOPPING"
+      ? "停止请求已发送，等待下一个检查点收线"
+      : status === "APPROVAL"
+      ? "工具等待人工接受或拒绝"
+      : status === "STREAMING"
+        ? `${thread.steeringMode.toUpperCase()} steering · 模型请求或工具仍在执行`
       : status === "ERROR"
         ? "上一轮没有正常结束"
+        : status === "CANCELLED"
+          ? "上一轮在检查点被取消"
         : status === "COMPLETE"
           ? "最近一轮已经结束"
           : "等待第一条消息";
@@ -641,8 +1162,13 @@ function renderRunLedger(): void {
     thread.messages.filter((message) => message.role === "user").length,
   );
   runTools.textContent = String(tools.length);
+  runEffort.textContent = effortLabel(currentEffort);
+  runApproval.textContent = thread.approvalMode.toUpperCase();
+  runSteering.textContent = thread.steeringMode.toUpperCase();
   runStop.textContent = thread.stopReason || "—";
-  if (!streaming) {
+  if (active && thread.runStartedAt) {
+    runElapsed.textContent = `${Date.now() - thread.runStartedAt}ms`;
+  } else {
     runElapsed.textContent =
       assistant?.durationMs !== undefined ? `${assistant.durationMs}ms` : "—";
   }
@@ -664,10 +1190,18 @@ function renderRunLedger(): void {
   for (const tool of [...tools].reverse()) {
     activity.push({
       key: tool.id,
-      tag: tool.isError ? "ERR" : tool.state === "running" ? "RUN" : "TOOL",
+      tag: tool.isError
+        ? "ERR"
+        : tool.state === "waiting"
+          ? "WAIT"
+          : tool.state === "running"
+            ? "RUN"
+            : "TOOL",
       title: tool.name,
       detail:
-        tool.state === "running"
+        tool.state === "waiting"
+          ? "approval required"
+          : tool.state === "running"
           ? "executing"
           : `${tool.elapsedMs ?? 0}ms · ${tool.output?.split("\n")[0]?.slice(0, 48) ?? "done"}`,
       status: tool.isError ? "error" : tool.state,
@@ -693,27 +1227,44 @@ function renderRunLedger(): void {
 }
 
 function renderEverything(forceBottom = false): void {
+  const thread = activeThread();
+  const running = isThreadRunning(thread);
+  const stopping = Boolean(thread.stopping && running);
   renderThreadList();
   renderHeader();
   renderConversation(forceBottom);
   renderRunLedger();
-  sendButton.disabled = streaming;
-  sendLabel.textContent = streaming ? "RUNNING" : "RUN";
-  composerStatus.textContent = streaming
-    ? "STREAM OPEN · WAITING FOR DONE"
-    : "ENTER TO SEND · SHIFT+ENTER FOR NEWLINE";
+  sendButton.disabled = stopping;
+  sendLabel.textContent = running ? "STEER" : "RUN";
+  stopButton.hidden = !running;
+  stopButton.disabled = stopping;
+  stopButton.textContent = stopping ? "STOPPING" : "STOP";
+  composerStatus.textContent = stopping
+    ? "STOPPING · WAITING FOR CHECKPOINT"
+    : running
+      ? `${thread.steeringMode.toUpperCase()} · ENTER TO STEER · ALT+S SWITCH`
+      : "ENTER TO SEND · SHIFT+ENTER FOR NEWLINE";
+  promptInput.placeholder = running
+    ? `当前轮运行中 · ${thread.steeringMode.toUpperCase()} steering`
+    : "输入任务或命令…";
 }
 
-function updateAssistant(message: UiMessage): void {
-  pendingAssistantId = message.id;
+function updateAssistant(thread: Thread, message: UiMessage): void {
+  renderTarget = { threadId: thread.id, messageId: message.id };
   if (renderFrame !== undefined) {
     return;
   }
   renderFrame = requestAnimationFrame(() => {
     renderFrame = undefined;
-    const thread = activeThread();
-    const current = thread.messages.find(
-      (candidate) => candidate.id === pendingAssistantId,
+    const target = renderTarget;
+    renderTarget = null;
+    renderThreadList();
+    const active = activeThread();
+    if (!target || target.threadId !== active.id) {
+      return;
+    }
+    const current = active.messages.find(
+      (candidate) => candidate.id === target.messageId,
     );
     if (!current) {
       return;
@@ -750,6 +1301,16 @@ function appendAssistantText(message: UiMessage, fragment: string): void {
   message.text += fragment;
 }
 
+function appendAssistantThinking(message: UiMessage, fragment: string): void {
+  const last = message.parts[message.parts.length - 1];
+  if (last?.type === "thinking") {
+    last.text += fragment;
+  } else {
+    message.parts.push({ type: "thinking", text: fragment });
+  }
+  message.thinking += fragment;
+}
+
 function getAssistantTool(message: UiMessage, id: string): ToolEvent | undefined {
   return message.parts
     .filter((part): part is ToolPart => part.type === "tool")
@@ -757,22 +1318,52 @@ function getAssistantTool(message: UiMessage, id: string): ToolEvent | undefined
     .find((tool) => tool.id === id);
 }
 
-function handleChatEvent(
-  event: ChatEvent,
-  thread: Thread,
-  assistant: UiMessage,
-): boolean {
+interface StreamContext {
+  thread: Thread;
+  assistant: UiMessage;
+  userMessage?: UiMessage;
+}
+
+function markStreamActivity(context: StreamContext): void {
+  const { thread, assistant, userMessage } = context;
+  assistant.queued = false;
+  if (userMessage?.steeringState && userMessage.steeringState !== "delivered") {
+    userMessage.steeringState = "delivered";
+    schedulePersist();
+    if (thread.id === state.activeThreadId) {
+      renderConversation(false);
+      renderThreadList();
+    }
+  }
+  thread.runStartedAt ??= Date.now();
+}
+
+function refreshUserState(thread: Thread): void {
+  thread.updatedAt = Date.now();
+  schedulePersist();
+  if (thread.id === state.activeThreadId) {
+    renderConversation(false);
+    renderThreadList();
+  }
+}
+
+function handleChatEvent(event: ChatEvent, context: StreamContext): boolean {
+  const { thread } = context;
+  let { assistant } = context;
   if (event.kind === "thinking") {
-    assistant.thinking += event.text ?? "";
-    updateAssistant(assistant);
+    markStreamActivity(context);
+    appendAssistantThinking(assistant, event.text ?? "");
+    updateAssistant(thread, assistant);
     return false;
   }
   if (event.kind === "text") {
+    markStreamActivity(context);
     appendAssistantText(assistant, event.text ?? "");
-    updateAssistant(assistant);
+    updateAssistant(thread, assistant);
     return false;
   }
   if (event.kind === "tool_use" && event.id) {
+    markStreamActivity(context);
     const tool: ToolEvent = {
       id: event.id,
       name: event.name ?? "tool",
@@ -780,29 +1371,120 @@ function handleChatEvent(
       state: "running",
     };
     assistant.parts.push({ type: "tool", tool });
-    updateAssistant(assistant);
+    updateAssistant(thread, assistant);
+    return false;
+  }
+  if (event.kind === "tool_approval" && event.id && event.approval_id) {
+    markStreamActivity(context);
+    const tool = getAssistantTool(assistant, event.id);
+    if (tool) {
+      if (autoApprovedApprovalIds.delete(event.approval_id)) {
+        tool.state = "running";
+        tool.approvalId = undefined;
+      } else {
+        tool.state = "waiting";
+        tool.approvalId = event.approval_id;
+      }
+      if (event.mode) {
+        thread.approvalMode = event.mode;
+      }
+      updateAssistant(thread, assistant);
+    }
     return false;
   }
   if (event.kind === "tool_result" && event.id) {
-    const tool = getAssistantTool(assistant, event.id);
-    if (tool) {
-      tool.state = "done";
-      tool.output = event.output ?? "";
-      tool.isError = Boolean(event.is_error);
-      tool.elapsedMs = event.elapsed_ms;
+    markStreamActivity(context);
+    let tool = getAssistantTool(assistant, event.id);
+    if (!tool) {
+      tool = {
+        id: event.id,
+        name: event.name ?? "tool",
+        input: {},
+        state: "done",
+      };
+      assistant.parts.push({ type: "tool", tool });
     }
-    updateAssistant(assistant);
+    tool.state = "done";
+    tool.output = event.output ?? "";
+    tool.isError = Boolean(event.is_error);
+    tool.approvalId = undefined;
+    tool.elapsedMs = event.elapsed_ms;
+    updateAssistant(thread, assistant);
+    return false;
+  }
+  if (event.kind === "steering_ack") {
+    if (context.userMessage) {
+      context.userMessage.steeringState = "acknowledged";
+    }
+    refreshUserState(thread);
+    return false;
+  }
+  if (event.kind === "steering_injected") {
+    assistant.streaming = false;
+    assistant.queued = false;
+    assistant.durationMs = Date.now() - assistant.createdAt;
+    assistant.stopReason = "steering";
+
+    const text = event.text ?? "";
+    let userMessage = [...thread.messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "user" &&
+          message.text === text &&
+          (message.steeringState === "queued" ||
+            message.steeringState === "acknowledged"),
+      );
+    if (!userMessage) {
+      userMessage = createUserMessage(text);
+      userMessage.steeringState = "delivered";
+      thread.messages.push(userMessage);
+    } else {
+      userMessage.steeringState = "delivered";
+    }
+
+    assistant = createAssistantMessage();
+    thread.messages.push(assistant);
+    context.assistant = assistant;
+    context.userMessage = userMessage;
+    thread.runStartedAt ??= Date.now();
+    thread.updatedAt = Date.now();
+    schedulePersist();
+    if (thread.id === state.activeThreadId) {
+      renderConversation(false);
+      renderRunLedger();
+    }
+    updateAssistant(thread, assistant);
+    return false;
+  }
+  if (event.kind === "steering_cancelled") {
+    thread.stopping = false;
+    assistant.streaming = false;
+    assistant.queued = false;
+    assistant.stopReason = "cancelled";
+    assistant.durationMs = Date.now() - assistant.createdAt;
+    thread.stopReason = "cancelled";
+    updateAssistant(thread, assistant);
     return false;
   }
   if (event.kind === "error") {
+    thread.stopping = false;
     assistant.error = event.message ?? "未知错误";
+    if (context.userMessage?.steeringState) {
+      context.userMessage.steeringState = "failed";
+    }
     thread.stopReason = "error";
-    return false;
+    updateAssistant(thread, assistant);
+    return true;
   }
   if (event.kind === "done") {
+    thread.stopping = false;
     thread.sessionId = event.session_id ?? thread.sessionId;
-    thread.stopReason = event.stop_reason ?? "—";
-    assistant.stopReason = thread.stopReason;
+    const stopReason = event.stop_reason ?? "—";
+    assistant.stopReason = stopReason;
+    if (stopReason !== "injected") {
+      thread.stopReason = stopReason;
+    }
     return true;
   }
   return false;
@@ -857,6 +1539,7 @@ function setSettingsStatus(
 }
 
 function applySettings(snapshot: SettingsSnapshot): void {
+  currentEffort = snapshot.effort;
   settingsProvider.value = snapshot.provider;
   settingsModel.value = snapshot.model_id;
   settingsBaseUrl.value = snapshot.base_url;
@@ -867,6 +1550,7 @@ function applySettings(snapshot: SettingsSnapshot): void {
     ? "留空保持当前密钥"
     : "输入 API Key，或写 ${ENV_VAR}";
   settingsKeySource.textContent = `当前密钥：${snapshot.api_key_source} · 留空不改`;
+  runEffort.textContent = effortLabel(currentEffort);
 }
 
 function setSettingsBusy(busy: boolean): void {
@@ -985,48 +1669,79 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
     );
     return;
   }
-  if (streaming) {
-    showToast("当前轮还没结束，先等 done 事件");
+  const thread = activeThread();
+  promptInput.value = "";
+  resizePrompt();
+  closeCommandPalette();
+  if (isThreadRunning(thread)) {
+    await submitSteering(thread, question);
     return;
   }
 
   commandReceipt = null;
-  const thread = activeThread();
-  const assistant: UiMessage = {
-    id: createId(),
-    role: "assistant",
-    text: "",
-    thinking: "",
-    parts: [],
-    error: "",
-    stopReason: "",
-    createdAt: Date.now(),
-    streaming: true,
-  };
-  thread.messages.push({
-    id: createId(),
-    role: "user",
-    text: question,
-    thinking: "",
-    parts: [],
-    error: "",
-    stopReason: "",
-    createdAt: Date.now(),
-  });
+  if (!thread.sessionId) {
+    // 先由客户端定下 UUID，流式期间切换执行等级才能精确发给当前会话。
+    thread.sessionId = createId();
+  }
+  const userMessage = createUserMessage(question);
+  const assistant = createAssistantMessage();
+  thread.messages.push(userMessage);
   thread.messages.push(assistant);
   if (thread.title === "未命名运行") {
     thread.title = threadTitleFor(question);
   }
+  thread.model = settingsModel.value.trim() || thread.model;
   thread.updatedAt = Date.now();
-  streaming = true;
-  runStartedAt = Date.now();
-  promptInput.value = "";
-  resizePrompt();
+  thread.runStartedAt = Date.now();
   renderEverything(true);
   schedulePersist();
+  await runChatRequest(
+    { thread, assistant, userMessage },
+    question,
+    thread.steeringMode,
+  );
+}
 
+async function submitSteering(thread: Thread, question: string): Promise<void> {
+  const userMessage = createUserMessage(question);
+  userMessage.steeringState = "queued";
+  const assistant = createAssistantMessage(true);
+  thread.messages.push(userMessage);
+  thread.messages.push(assistant);
+  thread.updatedAt = Date.now();
+  thread.runStartedAt ??= Date.now();
+  if (thread.id === state.activeThreadId) {
+    promptInput.value = "";
+    resizePrompt();
+    renderEverything(true);
+  }
+  schedulePersist();
+  showToast(
+    `${thread.steeringMode.toUpperCase()} steering 已发送 · ${
+      thread.steeringMode === "cooperative"
+        ? "下一次请求前并入"
+        : thread.steeringMode === "preemptive"
+          ? "等待当前轮退场"
+          : "当前轮结束后执行"
+    }`,
+  );
+  await runChatRequest(
+    { thread, assistant, userMessage },
+    question,
+    thread.steeringMode,
+  );
+}
+
+async function runChatRequest(
+  context: StreamContext,
+  question: string,
+  steering: SteeringMode,
+): Promise<void> {
+  const { thread } = context;
   let gotDone = false;
   let receivedError = false;
+  let acknowledged = false;
+  let finalStopReason = "";
   try {
     const response = await fetch(`${API_BASE}/chat`, {
       method: "POST",
@@ -1034,6 +1749,8 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
       body: JSON.stringify({
         question,
         session_id: thread.sessionId,
+        approval_mode: thread.approvalMode,
+        steering,
       }),
     });
     if (!response.ok) {
@@ -1043,11 +1760,17 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
       throw new Error("浏览器没有拿到 SSE body");
     }
     await consumeSse(response.body, (event) => {
+      if (event.kind === "steering_ack") {
+        acknowledged = true;
+      }
       if (event.kind === "error") {
         receivedError = true;
         showToast(event.message ?? "本轮执行出错");
       }
-      gotDone = handleChatEvent(event, thread, assistant) || gotDone;
+      if (event.kind === "done") {
+        finalStopReason = event.stop_reason ?? "";
+      }
+      gotDone = handleChatEvent(event, context) || gotDone;
     });
     if (!gotDone && !receivedError) {
       throw new Error("SSE 连接结束但没有收到 done 事件");
@@ -1059,25 +1782,405 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
         : error instanceof Error
           ? error.message
           : String(error);
-    assistant.error = message;
+    context.assistant.error = message;
+    if (context.userMessage?.steeringState) {
+      context.userMessage.steeringState = "failed";
+    }
     thread.stopReason = "error";
     showToast(message);
   } finally {
-    assistant.streaming = false;
-    assistant.durationMs = Date.now() - runStartedAt;
-    streaming = false;
+    context.assistant.streaming = false;
+    context.assistant.queued = false;
+    thread.stopping = false;
+    context.assistant.durationMs ??=
+      Date.now() - context.assistant.createdAt;
+    if (acknowledged && finalStopReason === "injected") {
+      const index = thread.messages.findIndex(
+        (message) => message.id === context.assistant.id,
+      );
+      if (index >= 0 && !context.assistant.text && !context.assistant.parts.length) {
+        thread.messages.splice(index, 1);
+      }
+    }
     thread.updatedAt = Date.now();
+    if (!isThreadRunning(thread)) {
+      thread.runStartedAt = undefined;
+    }
     persistState();
-    renderEverything(true);
-    promptInput.focus();
+    if (thread.id === state.activeThreadId) {
+      renderEverything(true);
+      if (settingsModal.hidden && resumeModal.hidden && traceModal.hidden) {
+        promptInput.focus();
+      }
+    }
   }
 }
 
-function newThread(): boolean {
-  if (streaming) {
-    showToast("当前轮结束后再新建会话");
-    return false;
+async function stopActiveTurn(thread = activeThread()): Promise<void> {
+  if (!thread.sessionId || !isThreadRunning(thread) || thread.stopping) {
+    if (!isThreadRunning(thread)) {
+      showToast("当前没有运行中的轮次");
+    }
+    return;
   }
+  thread.stopping = true;
+  if (thread.id === state.activeThreadId) {
+    renderEverything();
+  }
+  renderThreadList();
+  try {
+    const response = await fetch(`${API_BASE}/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: thread.sessionId }),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const result = (await response.json()) as StopResponse;
+    if (!result.active) {
+      thread.stopping = false;
+      showToast("后端没有正在运行的轮次；本地事件流可能刚刚结束");
+      if (thread.id === state.activeThreadId) {
+        renderEverything();
+      }
+      renderThreadList();
+      return;
+    }
+    showToast("停止请求已发送 · 将在下一个检查点收线");
+  } catch (error) {
+    thread.stopping = false;
+    showToast(
+      `停止失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+    if (thread.id === state.activeThreadId) {
+      renderEverything();
+    }
+    renderThreadList();
+  }
+}
+
+function traceDuration(span: TraceSpan): string {
+  return span.duration_ms === null ? "open" : `${span.duration_ms}ms`;
+}
+
+function traceStatusClass(status: TraceSpan["status"]): string {
+  return `is-${status}`;
+}
+
+function traceSpanHint(span: TraceSpan): string {
+  if (span.name === "llm_request") {
+    const ttft = span.data.ttft_ms;
+    const model = span.data.model;
+    return [model, ttft !== undefined && ttft !== null ? `ttft ${ttft}ms` : ""]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (span.name === "tool_call") {
+    return String(span.data.tool ?? "tool");
+  }
+  return "";
+}
+
+function traceTreeMarkup(): string {
+  const ids = new Set(traceSpans.map((span) => span.span_id));
+  const children = new Map<string, TraceSpan[]>();
+  for (const span of traceSpans) {
+    if (!span.parent_id || !ids.has(span.parent_id)) {
+      continue;
+    }
+    const bucket = children.get(span.parent_id) ?? [];
+    bucket.push(span);
+    children.set(span.parent_id, bucket);
+  }
+  const roots = traceSpans.filter(
+    (span) => !span.parent_id || !ids.has(span.parent_id),
+  );
+  const visited = new Set<string>();
+
+  const renderSpan = (span: TraceSpan, depth: number): string => {
+    if (visited.has(span.span_id)) {
+      return "";
+    }
+    visited.add(span.span_id);
+    const selected = span.span_id === traceSelectedSpanId;
+    const hint = traceSpanHint(span);
+    return `
+      <button
+        class="trace-node ${selected ? "is-selected" : ""}"
+        type="button"
+        role="treeitem"
+        aria-selected="${selected}"
+        data-span-id="${escapeHtml(span.span_id)}"
+        style="--trace-depth: ${depth}"
+      >
+        <span class="trace-node-guide" aria-hidden="true"></span>
+        <span class="trace-node-dot ${traceStatusClass(span.status)}" aria-hidden="true"></span>
+        <span class="trace-node-main">
+          <strong>${escapeHtml(span.name)}</strong>
+          <small>${escapeHtml(span.status)} · ${traceDuration(span)}${hint ? ` · ${escapeHtml(hint)}` : ""}</small>
+        </span>
+      </button>
+      ${(children.get(span.span_id) ?? [])
+        .map((child) => renderSpan(child, depth + 1))
+        .join("")}
+    `;
+  };
+
+  return roots.map((span) => renderSpan(span, 0)).join("");
+}
+
+function traceField(label: string, value: unknown): string {
+  const rendered =
+    value === undefined || value === null || value === ""
+      ? "—"
+      : typeof value === "object"
+        ? JSON.stringify(value)
+        : String(value);
+  return `
+    <div class="trace-field">
+      <span>${escapeHtml(label)}</span>
+      <code>${escapeHtml(rendered)}</code>
+    </div>
+  `;
+}
+
+function traceDetailMarkup(span: TraceSpan | undefined): string {
+  if (!span) {
+    return `
+      <div class="trace-empty">
+        <strong>NO SPAN SELECTED</strong>
+        <p>从左侧选择一步，查看入参、耗时、状态和落盘回答。</p>
+      </div>
+    `;
+  }
+  const data = span.data;
+  const answer = traceAnswers[span.span_id] ?? "";
+  const known = new Set([
+    "message",
+    "model",
+    "messages",
+    "ttft_ms",
+    "stop_reason",
+    "effort",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cache_hit_ratio",
+    "tool",
+    "input",
+    "output",
+  ]);
+  const remaining = Object.fromEntries(
+    Object.entries(data).filter(([key]) => !known.has(key)),
+  );
+  let body = "";
+  if (span.name === "llm_request") {
+    body = `
+      <section class="trace-detail-section">
+        <h3>MODEL REQUEST</h3>
+        <div class="trace-fields">
+          ${traceField("model", data.model)}
+          ${traceField("messages", data.messages)}
+          ${traceField("ttft", data.ttft_ms === undefined ? "—" : `${data.ttft_ms}ms`)}
+          ${traceField("stop", data.stop_reason)}
+          ${traceField("effort", data.effort)}
+          ${traceField("tokens", `in ${data.input_tokens ?? "—"} / out ${data.output_tokens ?? "—"}`)}
+          ${traceField(
+            "cache",
+            `read ${data.cache_read_tokens ?? "—"} / write ${data.cache_write_tokens ?? "—"} / hit ${data.cache_hit_ratio ?? "—"}‰`,
+          )}
+        </div>
+      </section>
+    `;
+  } else if (span.name === "tool_call") {
+    body = `
+      <section class="trace-detail-section">
+        <h3>TOOL CALL</h3>
+        <div class="trace-fields">
+          ${traceField("tool", data.tool)}
+        </div>
+      </section>
+      <section class="trace-detail-section">
+        <h3>INPUT</h3>
+        <pre>${escapeHtml(JSON.stringify(data.input ?? {}, null, 2))}</pre>
+      </section>
+      <section class="trace-detail-section">
+        <h3>OUTPUT</h3>
+        <pre class="${span.status === "error" ? "is-error" : ""}">${escapeHtml(String(data.output ?? "—"))}</pre>
+      </section>
+    `;
+  }
+  if (Object.keys(remaining).length) {
+    body += `
+      <section class="trace-detail-section">
+        <h3>SPAN DATA</h3>
+        <pre>${escapeHtml(JSON.stringify(remaining, null, 2))}</pre>
+      </section>
+    `;
+  }
+  if (data.message) {
+    body += `
+      <section class="trace-detail-section">
+        <h3>ERROR MESSAGE</h3>
+        <pre class="is-error">${escapeHtml(String(data.message))}</pre>
+      </section>
+    `;
+  }
+  if (answer) {
+    body += `
+      <section class="trace-detail-section trace-answer">
+        <h3>PAIRED ANSWER</h3>
+        <div class="markdown">${renderMarkdown(answer)}</div>
+      </section>
+    `;
+  }
+  const localStart = new Date(span.start_time).toLocaleString("zh-CN");
+  const localEnd = span.end_time
+    ? new Date(span.end_time).toLocaleString("zh-CN")
+    : "—";
+  return `
+    <article class="trace-span-card">
+      <header>
+        <div>
+          <span class="eyebrow">SPAN / ${escapeHtml(span.span_id.slice(0, 12))}</span>
+          <h2>${escapeHtml(span.name)}</h2>
+        </div>
+        <span class="trace-status ${traceStatusClass(span.status)}">${escapeHtml(span.status.toUpperCase())}</span>
+      </header>
+      <div class="trace-fields trace-span-meta">
+        ${traceField("duration", traceDuration(span))}
+        ${traceField("start", localStart)}
+        ${traceField("end", localEnd)}
+        ${traceField("parent", span.parent_id ?? "root")}
+      </div>
+      ${body || `<div class="trace-empty"><p>这段 span 没有附加数据。</p></div>`}
+    </article>
+  `;
+}
+
+function selectTraceSpan(spanId: string): void {
+  traceSelectedSpanId = spanId;
+  const span = traceSpans.find((candidate) => candidate.span_id === spanId);
+  traceTree.innerHTML = traceTreeMarkup();
+  traceDetail.innerHTML = traceDetailMarkup(span);
+  traceSelectedState.textContent = span
+    ? `${span.status.toUpperCase()} · ${traceDuration(span)}`
+    : "WAITING";
+}
+
+function renderTrace(): void {
+  traceCount.textContent = String(traceSpans.length);
+  const turns = traceSpans.filter((span) => span.name === "turn").length;
+  const errors = traceSpans.filter((span) => span.status === "error").length;
+  const running = traceSpans.filter(
+    (span) => span.status === "running",
+  ).length;
+  const wall = traceSpans
+    .filter((span) => span.name === "turn")
+    .reduce((total, span) => total + (span.duration_ms ?? 0), 0);
+  traceSummary.innerHTML = `
+    <span>SESSION ${escapeHtml(shortSession(traceSessionId))}</span>
+    <span>TURNS ${turns}</span>
+    <span>SPANS ${traceSpans.length}</span>
+    <span>ERRORS ${errors}</span>
+    <span>RUNNING ${running}</span>
+    <span>WALL ${wall}ms</span>
+  `;
+  traceTree.innerHTML = traceTreeMarkup();
+  selectTraceSpan(traceSelectedSpanId);
+  requestAnimationFrame(() => {
+    traceTree
+      .querySelector<HTMLElement>(".trace-node.is-selected")
+      ?.scrollIntoView({ block: "center" });
+  });
+}
+
+async function loadTrace(): Promise<void> {
+  const thread = activeThread();
+  traceSessionId = thread.sessionId;
+  if (!traceSessionId) {
+    traceSpans = [];
+    traceAnswers = {};
+    traceSelectedSpanId = "";
+    traceSummary.innerHTML = "<span>SESSION PENDING</span><span>NO TRACE</span>";
+    traceTree.innerHTML = "";
+    traceDetail.innerHTML = `
+      <div class="trace-empty">
+        <strong>NO SESSION YET</strong>
+        <p>先发送一轮消息，span 从第一轮开始写入。</p>
+      </div>
+    `;
+    traceCount.textContent = "0";
+    traceSelectedState.textContent = "WAITING";
+    return;
+  }
+  const sequence = ++traceLoadSequence;
+  traceRefreshButton.disabled = true;
+  traceSummary.innerHTML = `<span>SESSION ${escapeHtml(shortSession(traceSessionId))}</span><span>READING SQLITE + JSONL…</span>`;
+  traceTree.innerHTML = `<div class="trace-loading">LOADING SPAN TREE</div>`;
+  traceDetail.innerHTML = `<div class="trace-loading">READING TRACE</div>`;
+  traceSelectedState.textContent = "LOADING";
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(traceSessionId)}/trace`,
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const trace = (await response.json()) as TraceResponse;
+    if (sequence !== traceLoadSequence || traceModal.hidden) {
+      return;
+    }
+    traceSpans = trace.spans;
+    traceAnswers = trace.answers;
+    const preferred =
+      [...traceSpans].reverse().find(
+        (span) => span.name === "llm_request" || span.name === "tool_call",
+      ) ??
+      traceSpans[0];
+    traceSelectedSpanId = preferred?.span_id ?? "";
+    renderTrace();
+  } catch (error) {
+    if (sequence !== traceLoadSequence) {
+      return;
+    }
+    traceSpans = [];
+    traceAnswers = {};
+    traceTree.innerHTML = "";
+    traceCount.textContent = "0";
+    traceSummary.innerHTML = `<span>SESSION ${escapeHtml(shortSession(traceSessionId))}</span><span>TRACE UNAVAILABLE</span>`;
+    traceSelectedState.textContent = "ERROR";
+    traceDetail.innerHTML = `
+      <div class="trace-empty is-error">
+        <strong>TRACE READ FAILED</strong>
+        <p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p>
+      </div>
+    `;
+  } finally {
+    if (sequence === traceLoadSequence) {
+      traceRefreshButton.disabled = false;
+    }
+  }
+}
+
+function openTrace(): void {
+  const thread = activeThread();
+  traceSessionId = thread.sessionId;
+  traceModal.hidden = false;
+  document.title = `AgentLearn · trace ${shortSession(thread.sessionId)}`;
+  void loadTrace();
+}
+
+function closeTrace(): void {
+  traceLoadSequence += 1;
+  traceModal.hidden = true;
+  document.title = "AgentLearn";
+  promptInput.focus();
+}
+
+function newThread(): boolean {
   const current = activeThread();
   if (!current.messages.length) {
     commandReceipt = null;
@@ -1098,10 +2201,6 @@ function newThread(): boolean {
 }
 
 function switchThread(threadId: string): void {
-  if (streaming && threadId !== state.activeThreadId) {
-    showToast("当前轮结束后再切换会话");
-    return;
-  }
   if (!state.threads.some((thread) => thread.id === threadId)) {
     return;
   }
@@ -1112,6 +2211,11 @@ function switchThread(threadId: string): void {
   closeThreadRail();
   closeResume();
   promptInput.focus();
+  const thread = activeThread();
+  if (!thread.messagesLoaded) {
+    showToast(`正在读取会话 ${shortSession(thread.sessionId)}…`);
+    void hydrateThread(thread);
+  }
 }
 
 function findResumeThread(argument: string): Thread | null {
@@ -1129,30 +2233,52 @@ function findResumeThread(argument: string): Thread | null {
       ? exact
       : state.threads.filter(
           (thread) =>
-            thread.id.toLowerCase().startsWith(query) ||
-            thread.sessionId.toLowerCase().startsWith(query),
+            thread.id.toLowerCase().includes(query) ||
+            thread.sessionId.toLowerCase().includes(query) ||
+            thread.title.toLowerCase().includes(query) ||
+            thread.model.toLowerCase().includes(query) ||
+            thread.stopReason.toLowerCase().includes(query),
         );
   if (candidates.length === 1) {
     return candidates[0];
   }
   showToast(
     candidates.length > 1
-      ? "匹配到多个会话，请多输入几位 id"
-      : `没有会话 id 以 ${argument} 开头`,
+      ? "匹配到多个会话，请补充标题、id 或模型关键词"
+      : `没有 id / 标题 / 模型匹配 ${argument} 的会话`,
   );
   return null;
 }
 
+function filterResumeThreads(): void {
+  const query = resumeQuery.trim().toLowerCase();
+  const all = [...state.threads].sort((a, b) => b.updatedAt - a.updatedAt);
+  resumeMatches = query
+    ? all.filter(
+        (thread) =>
+          thread.id.toLowerCase().includes(query) ||
+          thread.sessionId.toLowerCase().includes(query) ||
+          thread.title.toLowerCase().includes(query) ||
+          thread.model.toLowerCase().includes(query) ||
+          thread.stopReason.toLowerCase().includes(query),
+      )
+    : all;
+  resumeSelection = Math.min(
+    resumeSelection,
+    Math.max(0, resumeMatches.length - 1),
+  );
+}
+
 function renderResumeList(): void {
   const currentId = state.activeThreadId;
-  resumeSummary.textContent = `${resumeMatches.length} 个本地会话 · 当前 ${shortSession(
+  resumeSummary.textContent = `${resumeMatches.length} 个会话 · server 索引 · 当前 ${shortSession(
     activeThread().sessionId,
   )}`;
   resumeList.innerHTML = resumeMatches
     .map((thread, index) => {
-      const turns = thread.messages.filter(
-        (message) => message.role === "user",
-      ).length;
+      const turns =
+        thread.serverTurns ??
+        thread.messages.filter((message) => message.role === "user").length;
       const current = thread.id === currentId;
       return `
         <button
@@ -1169,29 +2295,27 @@ function renderResumeList(): void {
           <span class="resume-item-turns">${turns} TURNS</span>
           ${current ? '<span class="resume-current">CURRENT</span>' : ""}
           <strong>${escapeHtml(thread.title)}</strong>
-          <small>${escapeHtml(thread.stopReason || "no completed run")}</small>
+          <small>${escapeHtml(thread.model || "model unknown")} · ${escapeHtml(
+            thread.stopReason || "no completed run",
+          )}</small>
         </button>
       `;
     })
     .join("");
 }
 
-function openResume(): void {
-  if (streaming) {
-    showToast("当前轮结束后再切换会话");
-    return;
-  }
-  resumeMatches = [...state.threads].sort((a, b) => b.updatedAt - a.updatedAt);
+async function openResume(): Promise<void> {
+  await fetchServerSessions(true);
+  resumeQuery = "";
+  resumeSearch.value = "";
+  filterResumeThreads();
   const alternate = resumeMatches.findIndex(
     (thread) => thread.id !== state.activeThreadId,
   );
   resumeSelection = alternate >= 0 ? alternate : 0;
   renderResumeList();
   resumeModal.hidden = false;
-  promptInput.blur();
-  resumeList
-    .querySelector<HTMLButtonElement>(".resume-item.is-selected")
-    ?.focus();
+  resumeSearch.focus();
 }
 
 function closeResume(): void {
@@ -1210,15 +2334,14 @@ function moveResumeSelection(delta: number): void {
     ?.focus();
 }
 
-function selectResume(index: number): void {
+async function selectResume(index: number): Promise<void> {
   const thread = resumeMatches[index];
   if (!thread) {
     return;
   }
+  await hydrateThread(thread, true);
   switchThread(thread.id);
-  if (!streaming) {
-    showToast(`已续接：${thread.title}`);
-  }
+  showToast(`已续接：${thread.title}`);
 }
 
 function resizePrompt(): void {
@@ -1276,7 +2399,9 @@ function updateCommandPalette(): void {
   }
   const prefix = text.slice(1).toLowerCase();
   commandMatches = SLASH_COMMANDS.filter((command) =>
-    command.name.startsWith(prefix),
+    [command.name, ...(command.aliases ?? [])].some((name) =>
+      name.startsWith(prefix),
+    ),
   );
   if (!commandMatches.length) {
     closeCommandPalette();
@@ -1356,6 +2481,209 @@ async function quickSetModel(modelId: string): Promise<void> {
   }
 }
 
+async function refreshEffort(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/settings`);
+    if (!response.ok) {
+      return;
+    }
+    const snapshot = (await response.json()) as SettingsSnapshot;
+    currentEffort = snapshot.effort;
+    settingsModel.value = snapshot.model_id;
+    runEffort.textContent = effortLabel(currentEffort);
+  } catch {
+    runEffort.textContent = "unavailable";
+  }
+}
+
+async function setEffort(effort: SettingsSnapshot["effort"]): Promise<void> {
+  try {
+    const currentResponse = await fetch(`${API_BASE}/settings`);
+    if (!currentResponse.ok) {
+      throw new Error(await readError(currentResponse));
+    }
+    const current = (await currentResponse.json()) as SettingsSnapshot;
+    const payload: SettingsPayload = {
+      provider: current.provider,
+      base_url: current.base_url,
+      model_id: current.model_id,
+      max_tokens: current.max_tokens,
+      effort,
+      api_key: null,
+    };
+    const response = await fetch(`${API_BASE}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const snapshot = (await response.json()) as SettingsSnapshot;
+    applySettings(snapshot);
+    showToast(`思考等级：${effortLabel(snapshot.effort)} · 本轮不变，下一轮生效`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function cycleEffort(): Promise<void> {
+  const order: SettingsSnapshot["effort"][] = [
+    "",
+    "low",
+    "medium",
+    "high",
+    "max",
+  ];
+  const index = order.indexOf(currentEffort);
+  await setEffort(index < 0 ? "low" : order[(index + 1) % order.length]);
+}
+
+async function respondToApproval(
+  approvalId: string,
+  approved: boolean,
+): Promise<void> {
+  const buttons = Array.from(
+    conversation.querySelectorAll<HTMLButtonElement>(
+      `[data-approval-id="${CSS.escape(approvalId)}"]`,
+    ),
+  );
+  for (const button of buttons) {
+    button.disabled = true;
+  }
+  try {
+    const response = await fetch(`${API_BASE}/approval`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approval_id: approvalId, approved }),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    showToast(approved ? "已允许工具执行" : "已拒绝工具执行");
+  } catch (error) {
+    for (const button of buttons) {
+      button.disabled = false;
+    }
+    showToast(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function markAutoApproved(thread: Thread, approvalIds: string[]): void {
+  if (!approvalIds.length) {
+    return;
+  }
+  const approved = new Set(approvalIds);
+  for (const approvalId of approved) {
+    autoApprovedApprovalIds.add(approvalId);
+  }
+  for (const message of thread.messages) {
+    for (const part of message.parts) {
+      if (
+        part.type === "tool" &&
+        part.tool.approvalId &&
+        approved.has(part.tool.approvalId)
+      ) {
+        part.tool.state = "running";
+        part.tool.approvalId = undefined;
+      }
+    }
+  }
+  thread.updatedAt = Date.now();
+  persistState();
+  if (thread.id === state.activeThreadId) {
+    renderConversation(false);
+    renderRunLedger();
+  }
+}
+
+function syncRuntimeApprovalMode(thread: Thread, mode: ApprovalMode): void {
+  const sessionId = thread.sessionId;
+  if (!sessionId) {
+    return;
+  }
+  approvalModeSync = approvalModeSync.then(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/approval-mode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, mode }),
+      });
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const result = (await response.json()) as ApprovalModeResponse;
+      markAutoApproved(thread, result.auto_approved);
+    } catch (error) {
+      showToast(
+        `实时切换执行等级失败：${
+          error instanceof Error ? error.message : String(error)
+        }；下一轮仍使用 ${mode.toUpperCase()}`,
+      );
+    }
+  });
+}
+
+function cycleApprovalMode(): void {
+  const modes: ApprovalMode[] = ["approve", "auto", "yolo"];
+  const thread = activeThread();
+  const index = modes.indexOf(thread.approvalMode);
+  setApprovalMode(modes[(index + 1) % modes.length]);
+}
+
+function setApprovalMode(mode: ApprovalMode): void {
+  const thread = activeThread();
+  thread.approvalMode = mode;
+  thread.updatedAt = Date.now();
+  persistState();
+  renderThreadList();
+  renderRunLedger();
+  const descriptions: Record<ApprovalMode, string> = {
+    approve: "每次工具调用都要 Accept",
+    auto: "只读工具自动放行，bash 需确认",
+    yolo: "全部工具直接执行",
+  };
+  showToast(
+    `执行等级：${thread.approvalMode.toUpperCase()} · ${
+      descriptions[thread.approvalMode]
+    }${isThreadRunning(thread) ? " · 后续工具立即生效" : " · 下一轮生效"}`,
+  );
+  if (isThreadRunning(thread)) {
+    syncRuntimeApprovalMode(thread, thread.approvalMode);
+  }
+}
+
+const STEERING_MODES: SteeringMode[] = [
+  "queue",
+  "cooperative",
+  "preemptive",
+];
+
+function setSteeringMode(mode: SteeringMode): void {
+  const thread = activeThread();
+  thread.steeringMode = mode;
+  thread.updatedAt = Date.now();
+  persistState();
+  renderThreadList();
+  renderRunLedger();
+  const descriptions: Record<SteeringMode, string> = {
+    queue: "新消息等当前轮结束后再跑",
+    cooperative: "下一次模型请求前并入当前轮",
+    preemptive: "下一个检查点打断当前轮",
+  };
+  showToast(
+    `Steering：${mode.toUpperCase()} · ${descriptions[mode]}${
+      isThreadRunning(thread) ? " · 下一条消息生效" : ""
+    }`,
+  );
+}
+
+function cycleSteeringMode(): void {
+  const thread = activeThread();
+  const index = STEERING_MODES.indexOf(thread.steeringMode);
+  setSteeringMode(STEERING_MODES[(index + 1) % STEERING_MODES.length]);
+}
+
 function showCommandResult(title: string, body: string, error = false): void {
   commandReceipt = {
     threadId: state.activeThreadId,
@@ -1364,6 +2692,37 @@ function showCommandResult(title: string, body: string, error = false): void {
     error,
   };
   renderConversation(true);
+}
+
+async function runMemoryCommand(argument: string): Promise<void> {
+  // 不等当前轮：记忆是每圈圈界重读的，追加只影响之后的请求。
+  try {
+    if (!argument) {
+      const response = await fetch(`${API_BASE}/memory`);
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+      const memory = (await response.json()) as { text: string };
+      showCommandResult(
+        "MEMORY",
+        memory.text.trim() || "（记忆还是空的。/memory <内容> 记第一条。）",
+      );
+      return;
+    }
+    const response = await fetch(`${API_BASE}/memory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: argument }),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const result = (await response.json()) as { line: string };
+    showToast("已记下，下一圈请求生效");
+    showCommandResult("MEMORY", `已记下（下一圈请求生效）：\n${result.line}`);
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function showStatus(): Promise<void> {
@@ -1376,7 +2735,10 @@ async function showStatus(): Promise<void> {
       signal: controller.signal,
     });
     if (response.ok) {
-      model = ((await response.json()) as SettingsSnapshot).model_id;
+      const snapshot = (await response.json()) as SettingsSnapshot;
+      model = snapshot.model_id;
+      currentEffort = snapshot.effort;
+      runEffort.textContent = effortLabel(currentEffort);
     }
   } catch {
     model = "unavailable · backend offline";
@@ -1385,24 +2747,100 @@ async function showStatus(): Promise<void> {
   }
   const assistant = lastAssistant(thread);
   const tools = assistantTools(assistant);
-  const stateLabel = streaming
-    ? "STREAMING"
-    : assistant?.error
-      ? "ERROR"
-      : thread.messages.length
-        ? "COMPLETE"
-        : "READY";
+  const stateLabel = threadStatus(thread);
   showCommandResult(
     "STATUS",
     [
       `session   ${thread.sessionId || "pending"}`,
       `model     ${model}`,
+      `thinking  ${effortLabel(currentEffort)}`,
+      `approval  ${thread.approvalMode.toUpperCase()}`,
+      `steering  ${thread.steeringMode.toUpperCase()}`,
       `state     ${stateLabel}`,
       `turns     ${thread.messages.filter((message) => message.role === "user").length}`,
       `tools     ${tools.length}`,
       `stop      ${thread.stopReason || "—"}`,
-      "storage   JSONL + SQLite on server · UI index in localStorage",
+      "storage   server /sessions + JSONL + SQLite · localStorage is UI cache",
     ].join("\n"),
+  );
+}
+
+async function copyLatestAnswer(): Promise<void> {
+  const thread = activeThread();
+  const answer = [...thread.messages]
+    .reverse()
+    .find(
+      (message) =>
+        message.role === "assistant" && !message.streaming && message.text.trim(),
+    );
+  if (!answer) {
+    showToast("还没有可复制的完整回答");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(answer.text);
+  } catch {
+    const helper = document.createElement("textarea");
+    helper.value = answer.text;
+    helper.style.position = "fixed";
+    helper.style.opacity = "0";
+    document.body.appendChild(helper);
+    helper.select();
+    const copied = document.execCommand("copy");
+    helper.remove();
+    if (!copied) {
+      showToast("系统剪贴板不可用");
+      return;
+    }
+  }
+  showToast(`已复制最近回答 · ${answer.text.length.toLocaleString()} chars`);
+}
+
+async function retryFailedTurn(
+  thread: Thread,
+  assistantId?: string,
+): Promise<void> {
+  if (isThreadRunning(thread)) {
+    showToast("当前轮还在运行；先停止或等待它收线");
+    return;
+  }
+  const failedIndex = assistantId
+    ? thread.messages.findIndex(
+        (message) => message.id === assistantId && message.role === "assistant",
+      )
+    : [...thread.messages]
+        .map((message, index) => ({ message, index }))
+        .reverse()
+        .find(
+          ({ message }) =>
+            message.role === "assistant" && Boolean(message.error),
+        )?.index ?? -1;
+  const failed = thread.messages[failedIndex];
+  if (!failed || failed.role !== "assistant" || !failed.error) {
+    showToast("没有可重试的失败请求");
+    return;
+  }
+  const previousUser = [...thread.messages.slice(0, failedIndex)]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (!previousUser?.text.trim()) {
+    showToast("找不到这条失败请求对应的用户消息");
+    return;
+  }
+  const assistant = createAssistantMessage();
+  thread.messages.splice(failedIndex + 1, 0, assistant);
+  thread.stopReason = "";
+  thread.stopping = false;
+  thread.runStartedAt = Date.now();
+  thread.updatedAt = Date.now();
+  if (thread.id === state.activeThreadId) {
+    renderEverything(true);
+  }
+  schedulePersist();
+  await runChatRequest(
+    { thread, assistant },
+    previousUser.text,
+    thread.steeringMode,
   );
 }
 
@@ -1433,10 +2871,6 @@ async function runSlashCommand(
       openSettings();
       return;
     }
-    if (streaming) {
-      showToast("当前轮结束后再改设置");
-      return;
-    }
     await quickSetModel(argument);
     return;
   }
@@ -1444,20 +2878,87 @@ async function runSlashCommand(
     await showStatus();
     return;
   }
-  if (streaming) {
-    showToast("当前轮还没结束，先等 done 事件");
+  if (command.name === "trace") {
+    openTrace();
+    return;
+  }
+  if (command.name === "stop") {
+    await stopActiveTurn();
+    return;
+  }
+  if (command.name === "retry") {
+    await retryFailedTurn(activeThread());
+    return;
+  }
+  if (command.name === "memory") {
+    await runMemoryCommand(argument);
+    return;
+  }
+  if (command.name === "copy") {
+    await copyLatestAnswer();
+    return;
+  }
+  if (command.name === "steering") {
+    if (!argument) {
+      cycleSteeringMode();
+      return;
+    }
+    const mode = argument.toLowerCase() as SteeringMode;
+    if (!STEERING_MODES.includes(mode)) {
+      showToast(`未知 steering 档位：${argument}`);
+      return;
+    }
+    setSteeringMode(mode);
+    return;
+  }
+  if (command.name === "effort") {
+    if (!argument) {
+      await cycleEffort();
+      return;
+    }
+    const normalized = argument.toLowerCase();
+    const aliases: Record<string, SettingsSnapshot["effort"]> = {
+      default: "",
+      omit: "",
+      none: "",
+      off: "off",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      max: "max",
+    };
+    const effort = aliases[normalized];
+    if (effort === undefined) {
+      showToast(`未知思考等级：${argument}`);
+      return;
+    }
+    await setEffort(effort);
+    return;
+  }
+  if (command.name === "approval") {
+    if (!argument) {
+      cycleApprovalMode();
+      return;
+    }
+    const mode = argument.toLowerCase() as ApprovalMode;
+    if (mode !== "approve" && mode !== "auto" && mode !== "yolo") {
+      showToast(`未知执行等级：${argument}`);
+      return;
+    }
+    setApprovalMode(mode);
     return;
   }
   if (command.name === "resume") {
     if (argument) {
       const thread = findResumeThread(argument);
       if (thread) {
+        await hydrateThread(thread, true);
         switchThread(thread.id);
         showToast(`已续接：${thread.title}`);
       }
       return;
     }
-    openResume();
+    await openResume();
     return;
   }
   if (command.name === "clear" || command.name === "new") {
@@ -1493,6 +2994,7 @@ function schedulePersist(): void {
   window.setTimeout(() => persistState(), 250);
 }
 
+traceToggle.addEventListener("click", openTrace);
 newThreadButton.addEventListener("click", newThread);
 railCloseButton.addEventListener("click", closeThreadRail);
 railOpenButton.addEventListener("click", openThreadRail);
@@ -1506,11 +3008,38 @@ settingsModal.addEventListener("click", (event) => {
   }
 });
 resumeCloseButton.addEventListener("click", closeResume);
+resumeSearch.addEventListener("input", () => {
+  resumeQuery = resumeSearch.value;
+  resumeSelection = 0;
+  filterResumeThreads();
+  renderResumeList();
+});
 resumeModal.addEventListener("click", (event) => {
   const target = event.target as Element;
   if (target.closest("[data-resume-close]")) {
     closeResume();
   }
+});
+traceCloseButton.addEventListener("click", closeTrace);
+traceRefreshButton.addEventListener("click", () => {
+  void loadTrace();
+});
+traceModal.addEventListener("click", (event) => {
+  const target = event.target as Element;
+  if (target.closest("[data-trace-close]")) {
+    closeTrace();
+  }
+});
+traceTree.addEventListener("click", (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>(
+    "[data-span-id]",
+  );
+  if (button?.dataset.spanId) {
+    selectTraceSpan(button.dataset.spanId);
+  }
+});
+stopButton.addEventListener("click", () => {
+  void stopActiveTurn();
 });
 settingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1529,6 +3058,23 @@ threadList.addEventListener("click", (event) => {
   }
 });
 conversation.addEventListener("click", (event) => {
+  const retryButton = (event.target as Element).closest<HTMLButtonElement>(
+    "[data-retry-message-id]",
+  );
+  if (retryButton?.dataset.retryMessageId) {
+    void retryFailedTurn(activeThread(), retryButton.dataset.retryMessageId);
+    return;
+  }
+  const approvalButton = (event.target as Element).closest<HTMLButtonElement>(
+    "[data-approval-id]",
+  );
+  if (approvalButton?.dataset.approvalId) {
+    void respondToApproval(
+      approvalButton.dataset.approvalId,
+      approvalButton.dataset.approved === "true",
+    );
+    return;
+  }
   const button = (event.target as Element).closest<HTMLButtonElement>(
     "[data-prompt]",
   );
@@ -1553,7 +3099,7 @@ resumeList.addEventListener("click", (event) => {
   if (button?.dataset.resumeIndex === undefined) {
     return;
   }
-  selectResume(Number(button.dataset.resumeIndex));
+  void selectResume(Number(button.dataset.resumeIndex));
 });
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1584,6 +3130,7 @@ promptInput.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
+    event.stopPropagation();
     if (paletteVisible) {
       const parsed = parseSlashCommand(promptInput.value.trim());
       if (!parsed?.command) {
@@ -1600,6 +3147,20 @@ promptInput.addEventListener("input", () => {
 });
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
+  const traceVisible = !traceModal.hidden;
+  if (traceVisible) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeTrace();
+      return;
+    }
+    if (event.key.toLowerCase() === "r" && !modifier) {
+      event.preventDefault();
+      void loadTrace();
+      return;
+    }
+    return;
+  }
   const resumeVisible = !resumeModal.hidden;
   if (resumeVisible) {
     if (event.key === "ArrowDown") {
@@ -1612,12 +3173,18 @@ document.addEventListener("keydown", (event) => {
       moveResumeSelection(-1);
       return;
     }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void selectResume(resumeSelection);
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       closeResume();
       promptInput.focus();
       return;
     }
+    return;
   }
   const settingsVisible = !settingsModal.hidden;
   if (settingsVisible) {
@@ -1625,6 +3192,21 @@ document.addEventListener("keydown", (event) => {
       event.preventDefault();
       closeSettings();
     }
+    return;
+  }
+  if (event.altKey && event.code === "KeyT" && !modifier) {
+    event.preventDefault();
+    void cycleEffort();
+    return;
+  }
+  if (event.key === "Tab" && event.shiftKey) {
+    event.preventDefault();
+    cycleApprovalMode();
+    return;
+  }
+  if (event.altKey && event.code === "KeyS" && !modifier) {
+    event.preventDefault();
+    cycleSteeringMode();
     return;
   }
   if (modifier && event.key === ",") {
@@ -1640,15 +3222,22 @@ document.addEventListener("keydown", (event) => {
     promptInput.focus();
   }
   if (event.key === "Escape") {
+    if (isThreadRunning(activeThread())) {
+      event.preventDefault();
+      void stopActiveTurn();
+      return;
+    }
     closeThreadRail();
     promptInput.blur();
   }
 });
 window.setInterval(() => {
-  if (streaming) {
-    runElapsed.textContent = `${Date.now() - runStartedAt}ms`;
+  const thread = activeThread();
+  if (isThreadRunning(thread) && thread.runStartedAt) {
+    runElapsed.textContent = `${Date.now() - thread.runStartedAt}ms`;
   }
 }, 100);
 
 renderEverything();
 resizePrompt();
+void refreshEffort();
