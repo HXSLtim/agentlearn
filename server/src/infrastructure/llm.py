@@ -25,14 +25,19 @@ thinking 的 signature 只在最终消息里——片段流里拼不出这两样
 """
 import os
 
+import json
+
 import anthropic
 from openai import OpenAI
 
 from domain.message import Message, TextBlock, ThinkingBlock
 from domain.tool import Tool
 from infrastructure.adapter import (
+    CACHE_MIN_TOKENS,
     block_from_anthropic,
+    estimate_tokens,
     history_to_anthropic,
+    mark_cache_breakpoint,
     message_to_anthropic,
     message_to_openai,
     merge_tool_call_delta,
@@ -75,10 +80,18 @@ class AnthropicChat:
         # 这一轮的用量，流跑完才有。中转不给时保持空字典，调用方要容忍缺字段。
         self.usage: dict = {}
 
-    def stream(self, history: list[Message], tools: list[Tool] | None = None, system: str = ""):
+    def stream(
+        self,
+        history: list[Message],
+        tools: list[Tool] | None = None,
+        system: str = "",
+        effort: str = "",
+    ):
         """逐个产出 (kind, text)。这是一个生成器，调用方用 for 循环来消费。
 
         system 是随请求重发的提示词（跨会话记忆住在这里），不进对话历史。
+        effort 是单次覆盖（空串 = 用 client 上的默认档）：压缩这类后台请求
+        不需要深度思考，固定用 low，别跟着用户档位烧 token。
         流跑完后：结束原因在 self.stop_reason，完整内容块在 self.blocks。
         """
         # 请求参数先攒成字典：tools 是可选的，没有工具就不带这个键。
@@ -94,14 +107,26 @@ class AnthropicChat:
             # 「注册工具」就是这一行：定义随请求重申。API 无状态，
             # 服务器不会替你记住上次发过什么工具。
             params["tools"] = [tool_to_anthropic(tool) for tool in tools]
-        if self.effort_wire:
-            # 思考强度。None（off 或没配）就不带这个键：发一个模型不认识的
-            # 参数是 400，省略则用服务端默认。
-            params["output_config"] = {"effort": self.effort_wire}
+        # 思考强度：单次覆盖优先（effort_to_* 返回线上的词，见 adapter）。
+        # omit（off 或没配）就不带这个键：发一个模型不认识的
+        # 参数是 400，省略则用服务端默认。
+        effort_wire = effort_to_anthropic(effort)[0] if effort else self.effort_wire
+        if effort_wire:
+            params["output_config"] = {"effort": effort_wire}
         if system:
             # 系统提示词在这家协议里是顶层字符串字段（OpenAI 那边是首条
             # 消息，见 prepend_system）——这是原生形状，直接放，不用过 adapter。
             params["system"] = system
+
+        # prompt caching（第 4 层）：估算整个请求前缀够长（低于最短可缓存
+        # 长度打了断点会 400），就在最后一条消息上打 cache_control 断点。
+        # 断点跟着尾巴走，工具循环每圈追加的历史都能命中上一圈的前缀。
+        # 估算连 JSON 结构开销一起算（宁可高估）；真值由 usage 记账。
+        prefix_estimate = estimate_tokens(system) + estimate_tokens(
+            json.dumps(params["messages"], ensure_ascii=False)
+        )
+        if prefix_estimate >= CACHE_MIN_TOKENS:
+            mark_cache_breakpoint(params["messages"])
 
         # messages.stream 返回一个上下文管理器，退出 with 时流会被关闭。
         with self.client.messages.stream(**params) as msg:
@@ -155,8 +180,17 @@ class OpenAIChat:
         self.blocks: list = []
         self.usage: dict = {}
 
-    def stream(self, history: list[Message], tools: list[Tool] | None = None, system: str = ""):
-        """逐个产出 (kind, text)。流跑完后看 self.stop_reason 和 self.blocks。"""
+    def stream(
+        self,
+        history: list[Message],
+        tools: list[Tool] | None = None,
+        system: str = "",
+        effort: str = "",
+    ):
+        """逐个产出 (kind, text)。流跑完后看 self.stop_reason 和 self.blocks。
+
+        effort 是单次覆盖（空串 = client 默认档），用途见 AnthropicChat.stream。
+        """
         params: dict = {
             "model": self.model,
             # 这个字段在 OpenAI 那边叫 max_completion_tokens，含义和 max_tokens 相同。
@@ -175,9 +209,11 @@ class OpenAIChat:
             params["messages"] = prepend_system(params["messages"], system)
         if tools:
             params["tools"] = [tool_to_openai(tool) for tool in tools]
-        if self.effort_wire:
-            # OpenAI 这边的字段名是 reasoning_effort，不在 output_config 里。
-            params["reasoning_effort"] = self.effort_wire
+        # 单次覆盖优先；reasoning_effort 是 OpenAI 这边的字段名，不在
+        # output_config 里（协议差异的翻译在 adapter 的 effort_to_openai）。
+        effort_wire = effort_to_openai(effort)[0] if effort else self.effort_wire
+        if effort_wire:
+            params["reasoning_effort"] = effort_wire
         # stream=True 让返回值变成一个逐块迭代的对象，而不是一条完整消息。
         msg = self.client.chat.completions.create(**params)
 

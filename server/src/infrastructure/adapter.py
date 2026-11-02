@@ -18,6 +18,7 @@ block_from_anthropic 把 SDK 响应的块翻译成对象（模型永远不会返
 tool_result，所以只有三种）。
 """
 import json
+import re
 
 from domain.message import ContentBlock, Message, TextBlock, ThinkingBlock, ToolUseBlock
 from domain.tool import Tool
@@ -42,12 +43,69 @@ def message_to_anthropic(message: Message) -> dict:
     """一条 Message -> Anthropic 请求要的字典。
 
     domain 类型的字段名当初就是照着 Anthropic 的线上格式定的，
-    所以出站翻译今天是恒等：Message.to_dict() 直接就是它要的形状。
+    所以出站翻译基本是恒等：Message.to_dict() 就是它要的形状。
     仍然单独留这个函数、不让调用方直接调 to_dict()，
     因为 OpenAI 方向不是恒等，调用方不应该需要记住哪家是哪家。
-    将来 Anthropic 改格式，改动也只落在这里。
+
+    唯一不恒等的一处：带图的 tool_result（眼睛，2026-11-03）。我们的存储
+    形状是 content 字符串 + 可选的 image 字段；Anthropic 要求 content
+    变成块列表（image 块在前、text 块在后）。to_dict 的形状要保持和
+    JSONL 存盘一致（存储用我们的形状），线上翻译只在这里做——
+    「存盘形状」和「线上形状」是两件事，差异不许渗出 adapter。
     """
-    return message.to_dict()
+    raw = message.to_dict()
+    # 图块两种来源：tool_result 的附带图（眼睛，D25）和 user 消息里的
+    # 顶层图块（@file / 粘贴图片，2026-11-03）——都要翻成线上形状。
+    has_image = any(
+        (b.type == "tool_result" and b.image is not None) or b.type == "image"
+        for b in message.content
+    )
+    if not has_image:
+        # 无图也不能直接恒等：asdict 会给每个 tool_result 带上 "image": null，
+        # 线上多一个协议里没有的键。剥掉再交出去（JSONL 存盘不受影响）。
+        content = [
+            {k: v for k, v in block.items() if k != "image"}
+            if block.get("type") == "tool_result" else block
+            for block in raw["content"]
+        ]
+        raw["content"] = content
+        return raw
+    content = []
+    for block in raw["content"]:
+        if block.get("type") == "tool_result" and block.get("image"):
+            image = block.pop("image")
+            content.append({
+                "type": "tool_result",
+                "tool_use_id": block["tool_use_id"],
+                "is_error": block.get("is_error", False),
+                # 图在前文在后：Anthropic 的示例就是这个顺序，先图后说明。
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image["media_type"],
+                            "data": image["data"],
+                        },
+                    },
+                    {"type": "text", "text": block["content"]},
+                ],
+            })
+        elif block.get("type") == "image":
+            # user 顶层图块：存储形状是 media_type + data 两个字段，
+            # 线上要包进 source（和 tool_result 里那张同一个包装）。
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": block["media_type"],
+                    "data": block["data"],
+                },
+            })
+        else:
+            content.append({k: v for k, v in block.items() if k != "image"})
+    raw["content"] = content
+    return raw
 
 
 def history_to_anthropic(history: list[Message]) -> list[dict]:
@@ -116,10 +174,35 @@ def message_to_openai(message: Message) -> list[dict]:
         return out
 
     # user 消息：先文字（如果有），再每个工具结果单独一条 role="tool"。
-    if text:
+    # 带图（@file / 粘贴）时 content 必须是数组：text 块 + image_url 块
+    # （data URI），纯文字消息保持字符串形状省 token。
+    images = [b for b in message.content if b.type == "image"]
+    if images:
+        parts: list[dict] = [{"type": "text", "text": text}] if text else []
+        parts.extend({
+            "type": "image_url",
+            "image_url": {"url": f"data:{b.media_type};base64,{b.data}"},
+        } for b in images)
+        out.append({"role": "user", "content": parts})
+    elif text:
         out.append({"role": "user", "content": text})
     for b in tool_results:
         out.append({"role": "tool", "tool_call_id": b.tool_use_id, "content": b.content})
+        # 带图的工具结果：role="tool" 只能是文本，图作为紧随其后的一条
+        # user 消息补发（data URI）。这是「眼睛」在两家协议里最大的分歧：
+        # Anthropic 是 tool_result 里装 image 块，OpenAI 得另开一条消息。
+        # 补发的消息紧跟在它所属的 tool 消息后面，模型仍能对上号
+        # （上一条就是对应结果，图文相邻）。
+        if b.image is not None:
+            out.append({
+                "role": "user",
+                "content": [{
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{b.image.media_type};base64,{b.image.data}"
+                    },
+                }],
+            })
     # 纯提问的 user 消息只有第一条文字；循环走完天然就是一条，不用特判。
     return out
 
@@ -285,3 +368,39 @@ def _effort(level: str, table: dict) -> tuple[str | None, str]:
     if level not in table:
         raise ValueError(f"不认识的思考强度: {level!r}，只能是 {', '.join(EFFORT_LEVELS)} 或留空")
     return table[level]
+
+
+# ---------------------------------------------------------------------------
+# prompt caching 与 token 估算（第 4 层）
+# ---------------------------------------------------------------------------
+
+# Anthropic 对可缓存前缀有最短长度要求（Opus/Sonnet 1024、Haiku 2048）。
+# 打了断点但前缀不够长，请求直接 400。取最严的 2048 当门槛，宁可少命中。
+CACHE_MIN_TOKENS = 2048
+
+_CJK = re.compile(r"[一-鿿]")
+
+
+def estimate_tokens(text: str) -> int:
+    """一段文本的 token 估算。中文字符按 1 个算，其余按 4 个字符折 1 个。
+
+    是粗估不是计数（真值在响应的 usage 里，spans 记了账）。
+    用途只有两个，都只吃误差不吃精确：压缩决策（什么时候压）和
+    缓存断点门槛（够不够格打断点）。方向上宁可高估——高估只是早压一点。
+    """
+    cjk = len(_CJK.findall(text))
+    return cjk + (len(text) - cjk) // 4
+
+
+def mark_cache_breakpoint(messages: list[dict]) -> list[dict]:
+    """在 Anthropic 请求的 messages 上打缓存断点（就地修改，返回同一列表）。
+
+    断点打在最后一条消息的最后一个内容块上：Anthropic 缓存的是
+    「从头到断点」的整段前缀，工具循环每圈追加消息、断点跟着尾巴走，
+    每圈都能命中上一圈的前缀——这正是 agent loop 最贵的重读部分。
+    system（准则 + 记忆 + 摘要）在前缀里，一起被缓存住。
+    OpenAI 方向不调这个函数：那边是自动前缀缓存，没有标记可打，
+    协议差异收在 adapter 的约定（谁需要打标记谁调这里）。
+    """
+    messages[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
+    return messages

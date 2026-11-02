@@ -61,6 +61,25 @@ class ToolUseBlock:
 
 
 @dataclass
+class ImageBlock:
+    """一张图（眼睛，2026-11-03）。目前只作为工具结果的一部分存在：
+    工具截了图/读了图，模型在下一圈请求里「看见」它。
+
+    存的是 base64（两家协议的图像运输都用它）。media_type 如 "image/png"。
+    注意这个 dataclass 的形状不是任何一家的线上格式——出站翻译（图像
+    挂在 tool_result 里还是补一条 user 消息）全在 adapter，这是两家
+    差异最大的一块，见 adapter.message_to_anthropic / message_to_openai。
+    """
+
+    # 图的 MIME 类型，如 "image/png"。
+    media_type: str
+    # 图的二进制内容的 base64 文本。
+    data: str
+    # 类型标记，固定是 "image"。
+    type: Literal["image"] = "image"
+
+
+@dataclass
 class ToolResultBlock:
     """一次工具调用的执行结果。
 
@@ -73,13 +92,18 @@ class ToolResultBlock:
     content: str
     # 执行是否失败。失败也要交回结果，而不是抛掉，模型才能据此调整。
     is_error: bool = False
+    # 工具附带的一张图（可选）。None = 纯文本结果，绝大多数工具如此。
+    # 有图时 content 仍要写文字说明（「这是一张截图，内容是…」的占位
+    # 由工具自己写）——协议两家都要求/建议图文并存，纯图结果在
+    # OpenAI 方向连消息都发不出去。
+    image: ImageBlock | None = None
     # 类型标记，固定是 "tool_result"。
     type: Literal["tool_result"] = "tool_result"
 
 
-# 一条消息的内容由这四种块组成。用联合类型表示「其中之一」，
+# 一条消息的内容由这五种块组成。用联合类型表示「其中之一」，
 # 这样别的地方拿到一块时能明确只有这几种可能。
-ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock
+ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock | ImageBlock
 
 
 @dataclass
@@ -120,10 +144,20 @@ class Message:
             elif block["type"] == "tool_use":
                 blocks.append(ToolUseBlock(id=block["id"], name=block["name"], input=block["input"]))
             elif block["type"] == "tool_result":
+                # image 可选：只有带图的工具结果才有这个键（老数据没有，get 兜住）。
+                raw_image = block.get("image")
+                image = ImageBlock(**raw_image) if raw_image else None
                 blocks.append(ToolResultBlock(
                     tool_use_id=block["tool_use_id"],
                     content=block["content"],
                     is_error=block.get("is_error", False),
+                    image=image,
+                ))
+            elif block["type"] == "image":
+                # 独立的 image 块：当前我们的出站不会生成（图都挂在 tool_result
+                # 里），但读回来不认识就报错会连旧文件都读不了，宽容处理。
+                blocks.append(ImageBlock(
+                    media_type=block["media_type"], data=block["data"]
                 ))
             else:
                 # 走到这里说明出现了还没定义的块类型。

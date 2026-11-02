@@ -11,6 +11,7 @@
 """
 import os
 import re
+import shlex
 from configparser import ConfigParser, SectionProxy
 from dataclasses import dataclass
 from pathlib import Path
@@ -233,3 +234,92 @@ def _value(section: SectionProxy, key: str, path: Path) -> str:
             raise SystemExit(f"{path} 的 {key} 引用了环境变量 {var}，但它没有设置。")
         return os.environ[var]
     return raw
+
+
+def load_mcp_servers(path: Path = Path("config.ini")) -> list[tuple[str, list[str]]]:
+    """读 [mcp:<别名>] 配置段：每个段一个 MCP 服务器（第 5 层）。
+
+        [mcp:cnt]
+        command = python3 examples/mcp_count.py
+
+    返回 [(别名, 命令列表)]，顺序就是配置文件里的顺序。没有这类段返回
+    空列表（MCP 是可选能力，不配就只有内置工具）。文件不存在也返回空：
+    这个函数会在每次 all_tools() 时被调，启动报错的事交给 load_config。
+    """
+    if not path.exists():
+        return []
+    parser = ConfigParser()
+    parser.read(path, encoding="utf-8")
+    servers: list[tuple[str, list[str]]] = []
+    for section in parser.sections():
+        if not section.lower().startswith("mcp:"):
+            continue
+        # 别名会拼进工具名（别名__工具名），只放行安全字符，防奇怪输入。
+        alias = section.split(":", 1)[1].strip()
+        if not re.fullmatch(r"[A-Za-z0-9_]+", alias):
+            raise SystemExit(f"MCP 段名 {section} 的别名只能是字母数字下划线。")
+        command = parser[section].get("command", "").strip()
+        if not command:
+            raise SystemExit(f"[{section}] 缺 command。写一行启动命令，如 python3 examples/mcp_count.py")
+        # shlex.split：让引号里的参数（路径带空格）正确切开，
+        # 和 shell 看到的分词一致。
+        servers.append((alias, shlex.split(command)))
+    return servers
+
+
+def load_triggers(path: Path = Path("config.ini")) -> list[dict]:
+    """读 [trigger:<名字>] 配置段：主动性触发器（D27 第一阶段）。
+
+        [trigger:morning]
+        kind = interval
+        every_seconds = 3600
+        message = 做一次项目状态小结：TODO 剩什么、最近的 trace 有没有异常。
+        [trigger:inbox]
+        kind = file
+        path = data/inbox.md
+        message = 有人给你留了话（见下），处理它。
+
+    kind 三种：interval（每 every_seconds 秒）、file（path 的内容变化）、
+    jobdone（任何一个后台任务跑完）。message 是触发时注入的指令；
+    file/jobdone 的触发内容会接在 message 后面一起注入。
+
+    和 [mcp:*] 同样的约定：没有这类段 = 没有主动性，行为和以前完全一样；
+    配置错误（缺字段、kind 不认识）启动即退——无人值守的东西错着跑
+    一晚上比不跑更糟。
+    """
+    if not path.exists():
+        return []
+    parser = ConfigParser()
+    parser.read(path, encoding="utf-8")
+    KINDS = ("interval", "file", "jobdone")
+    specs: list[dict] = []
+    for section in parser.sections():
+        if not section.lower().startswith("trigger:"):
+            continue
+        name = section.split(":", 1)[1].strip()
+        if not re.fullmatch(r"[A-Za-z0-9_]+", name):
+            raise SystemExit(f"触发器段名 {section} 只能是字母数字下划线。")
+        options = parser[section]
+        kind = options.get("kind", "").strip()
+        if kind not in KINDS:
+            raise SystemExit(f"[{section}] 的 kind 只能是 {'/'.join(KINDS)} 之一。")
+        message = options.get("message", "").strip()
+        if not message:
+            raise SystemExit(f"[{section}] 缺 message：触发时注入给模型的指令。")
+        spec: dict = {"name": name, "kind": kind, "message": message}
+        if kind == "interval":
+            raw = options.get("every_seconds", "").strip()
+            try:
+                every = float(raw)
+            except ValueError:
+                every = 0
+            if every < 60:
+                raise SystemExit(f"[{section}] 的 every_seconds 至少 60（防触发风暴）。")
+            spec["every_seconds"] = every
+        if kind == "file":
+            watch = options.get("path", "").strip()
+            if not watch:
+                raise SystemExit(f"[{section}] 缺 path：要盯哪个文件。")
+            spec["path"] = watch
+        specs.append(spec)
+    return specs

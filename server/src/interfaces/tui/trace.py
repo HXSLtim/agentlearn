@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from application.trace_view import answer_texts, answers_for_requests
 from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
@@ -393,21 +394,7 @@ class TraceInspector(App):
         self.notify("trace reloaded", severity="information")
 
     def _answers_for_requests(self) -> dict[str, str]:
-        mapping: dict[str, str] = {}
-        cursor = 0
-        for span in self.spans:
-            if span["name"] != "llm_request":
-                continue
-            # 只有成功请求才会落盘 assistant 消息；error / running 不消费回答，
-            # 否则一个半截请求会让之后所有回答整体错一位。
-            if span["status"] == "ok":
-                mapping[span["span_id"]] = (
-                    self.answers[cursor] if cursor < len(self.answers) else ""
-                )
-                cursor += 1
-            else:
-                mapping[span["span_id"]] = ""
-        return mapping
+        return answers_for_requests(self.spans, self.answers)
 
     def _summary(self) -> str:
         turns = sum(1 for span in self.spans if span["name"] == "turn")
@@ -437,11 +424,8 @@ def _local_time(value: str) -> str:
 
 
 def _answer_texts(messages) -> list[str]:
-    return [
-        "".join(block.text for block in message.content if block.type == "text").strip()
-        for message in messages
-        if message.role == "assistant"
-    ]
+    # 薄别名：调用点写的是它，逻辑在 application.trace_view（web 端点共用）。
+    return answer_texts(messages)
 
 
 def run_trace(session_id: str) -> None:

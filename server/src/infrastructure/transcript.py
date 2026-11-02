@@ -42,6 +42,25 @@ class Transcript:
             raise ValueError(f"session_id 越出了目录: {session_id}")
         return path
 
+    def summary_path_for(self, session_id: str) -> Path:
+        """一个会话的压缩摘要文件路径（第 4 层的派生层）。
+
+        校验复用 path_for 的逻辑：session_id 同样要过 UUID 检查。
+        摘要和正文放同一目录，生命周期一致——删掉正文它就没有意义了。
+        """
+        return self.path_for(session_id).with_suffix(".summary.json")
+
+    def delete(self, session_id: str) -> None:
+        """永久删除一个会话的正文文件和摘要派生物。不存在时静默（幂等）。
+
+        「删掉正文摘要就没有意义了」——summary_path_for 注释里的承诺
+        在这里兑现。摘要先删：万一第二步失败，孤儿的摘要文件无害
+        （下次压缩会重建），反过来留的却是没有正文的假历史。
+        """
+        summary = self.summary_path_for(session_id)
+        summary.unlink(missing_ok=True)
+        self.path_for(session_id).unlink(missing_ok=True)
+
     def append(self, session_id: str, message: Message) -> None:
         """在会话末尾追加一条消息。不修改已有的行。"""
         # parents=True 连同父目录一起建，exist_ok=True 目录已在时不报错。

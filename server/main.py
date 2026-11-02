@@ -51,6 +51,7 @@ def run() -> None:
 
 def _run_tui(session_id: str | None) -> None:
     """装配会话依赖，然后把输入输出全部交给 Textual。"""
+    from application.approval import ApprovalBroker
     from application.conversation import Conversation
     from infrastructure.config import (
         SettingsValues,
@@ -65,6 +66,7 @@ def _run_tui(session_id: str | None) -> None:
 
     transcript = Transcript(Path("data") / "sessions")
     store = Store(Path("data") / "agent.db")
+    approval = ApprovalBroker()
 
     def load_sessions() -> list[SessionSummary]:
         """把持久化索引映射成 ResumeScreen 需要的轻量列表。"""
@@ -117,6 +119,7 @@ def _run_tui(session_id: str | None) -> None:
                 transcript,
                 store,
                 session_id,
+                approval=approval,
             )
         except ValueError as exc:
             raise SystemExit(str(exc))
@@ -133,6 +136,7 @@ def _run_tui(session_id: str | None) -> None:
             settings_loader=load_settings,
             settings_saver=save_runtime_settings,
             session_loader=load_sessions,
+            approval=approval,
         )
         if next_session_id is None:
             return

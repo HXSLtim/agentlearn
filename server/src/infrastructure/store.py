@@ -60,6 +60,31 @@ class Store:
         self._lock = threading.RLock()
         # 每次启动都确保表存在。
         self._create_tables()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """加列式迁移：已存在的库补上后来加的列。
+
+        create table if not exists 不会给旧表加新列，所以每个新列一条
+        ALTER + 捞重复列的 OperationalError。没有版本表：新列就这么几个、
+        幂等无害，学习项目不配升版本号机制（表多到需要迁移记录再重评，
+        和 WAL 那条欠账同一个边界）。
+        """
+        migrations = (
+            # P1 会话管理（2026-11-03）：软删除标记。0 = 活跃，1 = 已归档
+            # （默认列表不出现，数据全在，可恢复）。
+            "alter table sessions add column archived integer not null default 0",
+            # 会话库 pin（P1）：置顶标记，列表排序 pinned 优先于最近活动。
+            "alter table sessions add column pinned integer not null default 0",
+        )
+        for statement in migrations:
+            try:
+                self.conn.execute(statement)
+                self.conn.commit()
+            except sqlite3.OperationalError as e:
+                # duplicate column name：这列已经有了，正是想要的状态。
+                if "duplicate column" not in str(e):
+                    raise
 
     @_locked
     def _create_tables(self) -> None:
@@ -69,7 +94,7 @@ class Store:
             """
             create table if not exists sessions (
                 id         text primary key,   -- 会话 id，也是 JSONL 的文件名
-                title      text,               -- 预留，现在还没有起标题的地方
+                title      text,               -- 会话标题：第一条用户消息截断（set_title_if_empty）
                 model      text,               -- 这个会话用的模型
                 created_at text,               -- 创建时间，ISO 格式的字符串
                 jsonl_path text                -- 正文文件的路径
@@ -106,17 +131,107 @@ class Store:
         return row is not None
 
     @_locked
-    def list_sessions(self, limit: int = 50) -> list[sqlite3.Row]:
-        """最近创建的会话，最新的排在前面。
+    def list_sessions(
+        self, limit: int = 50, include_archived: bool = False
+    ) -> list[sqlite3.Row]:
+        """最近有活动的会话，最新在前（按最近活动排序，不是创建时间）。
 
-        TUI 的 /resume 用它生成选择器；限制条数避免历史很长时一次读太多正文。
+        默认不含已归档（软删除）的会话；要归档视图就 include_archived=True
+        （归档列表同样按最近活动排，方便找回刚归档的）。
+
+        updated_at / turns / stop_reason 不在 sessions 表里，用子查询从
+        spans 推导：那是已有信息的派生值，落库就要维护两处（哪个 span
+        落库时忘了更新，索引就开始说谎）。量级是学习项目的几十个会话，
+        三个子查询毫无压力；真到了慢的那天再谈反范式。
+        - updated_at = 该会话最后一个 span 的开始时间（没跑过模型的新会话
+          退回 created_at）；
+        - turns = turn span 的个数（一次 turn() 一个）；
+        - stop_reason = 最后一次带 stop_reason 的 llm_request（压缩请求
+          没有这个键，json_extract 出 NULL 自然跳过）。
+        ISO 字符串同格式，字典序就是时间序，直接 order by。
         """
         return list(
             self.conn.execute(
-                "select * from sessions order by created_at desc limit ?",
-                (limit,),
+                """
+                select s.id, s.title, s.model, s.created_at, s.jsonl_path,
+                       s.archived, s.pinned,
+                       coalesce(
+                           (select max(p.start_time) from spans p
+                            where p.session_id = s.id), s.created_at
+                       ) as updated_at,
+                       (select count(*) from spans p
+                        where p.session_id = s.id and p.name = 'turn') as turns,
+                       (select json_extract(p.data, '$.stop_reason') from spans p
+                        where p.session_id = s.id and p.name = 'llm_request'
+                          and p.data is not null
+                          and json_extract(p.data, '$.stop_reason') is not null
+                        order by p.id desc limit 1) as stop_reason
+                from sessions s
+                where s.archived = 0 or ?
+                order by s.pinned desc, updated_at desc
+                limit ?
+                """,
+                (1 if include_archived else 0, limit),
             )
         )
+
+    @_locked
+    def rename_session(self, session_id: str, title: str) -> bool:
+        """改会话标题（用户起正式名字）。返回是否真的改了（会话不存在 = False）。
+
+        和 set_title_if_empty 是两个动作：那个只补空位、这个无条件覆盖，
+        名字分开免得调用处一个参数切语义。
+        """
+        cursor = self.conn.execute(
+            "update sessions set title = ? where id = ?", (title, session_id)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    @_locked
+    def set_archived(self, session_id: str, archived: bool) -> bool:
+        """归档 / 取消归档（软删除标记）。返回会话是否存在。"""
+        cursor = self.conn.execute(
+            "update sessions set archived = ? where id = ?",
+            (1 if archived else 0, session_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    @_locked
+    def set_pinned(self, session_id: str, pinned: bool) -> bool:
+        """置顶 / 取消置顶（会话库 pin）。返回会话是否存在。"""
+        cursor = self.conn.execute(
+            "update sessions set pinned = ? where id = ?",
+            (1 if pinned else 0, session_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    @_locked
+    def delete_session(self, session_id: str) -> None:
+        """永久删除：sessions 行和 spans 一起清（正文文件由调用方删）。
+
+        spans 留着会变成「指向不存在会话的孤儿行」——trace、索引的
+        派生子查询都会碰它。SQLite 没建外键（建表时就没建，学习项目
+        没有删库级联的需求），一致性由这里显式保证。
+        """
+        self.conn.execute("delete from spans where session_id = ?", (session_id,))
+        self.conn.execute("delete from sessions where id = ?", (session_id,))
+        self.conn.commit()
+
+    @_locked
+    def set_title_if_empty(self, session_id: str, title: str) -> None:
+        """给还没有标题的会话补标题（第一条用户消息的截断）。
+
+        只在空的时候写：用户或前端后来起的正式标题不被第一条消息覆盖。
+        title 列建表时就有（当时注了「预留」），现在是兑现。
+        """
+        self.conn.execute(
+            "update sessions set title = ? where id = ? and (title is null or title = '')",
+            (title, session_id),
+        )
+        self.conn.commit()
 
     @_locked
     def start_span(
