@@ -50,6 +50,37 @@ def message_to_anthropic(message: Message) -> dict:
     return message.to_dict()
 
 
+def history_to_anthropic(history: list[Message]) -> list[dict]:
+    """整段历史 -> Anthropic 的 messages 数组，连续 user 消息合并成一条。
+
+    什么时候会出现连续 user：软中断（cooperative steering）把新消息追加在
+    user(tool_result) 后面——agent loop 的圈界既是「请求间隙」也是「插入点」。
+    Anthropic 要求 user / assistant 交替，两条 user 连发会被拒；合并就是
+    把内容块列表拼进同一条消息（tool_result 块 + text 块同条是合法的）。
+    OpenAI 方向不需要这步：role="tool" 后面跟 role="user" 本来就合法，
+    所以这个函数只服务 Anthropic 出站——协议差异收在 adapter 的约定。
+    """
+    out: list[dict] = []
+    for message in history:
+        raw = message_to_anthropic(message)
+        if out and message.role == "user" and out[-1]["role"] == "user":
+            out[-1]["content"] = [*out[-1]["content"], *raw["content"]]
+        else:
+            out.append(raw)
+    return out
+
+
+def prepend_system(messages: list[dict], system: str) -> list[dict]:
+    """把 system 提示词放进 OpenAI 请求的消息列表（返回新列表，不改原列表）。
+
+    两家对「系统提示词」的走法不同，这是记忆注入要过的第一道协议差异：
+    Anthropic 是请求体里一个顶层的 system 字符串字段（llm.py 直接放，
+    那是它的原生形状，不需要翻译）；OpenAI 没有这个字段，约定是消息列表
+    的第一条 role="system"。同一个「system 文本」，两种挂法，差异收在这里。
+    """
+    return [{"role": "system", "content": system}, *messages]
+
+
 def message_to_openai(message: Message) -> list[dict]:
     """一条 Message -> OpenAI 请求要的字典列表。
 

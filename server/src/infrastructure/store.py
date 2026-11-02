@@ -15,11 +15,31 @@
 spans 表取代了原来的 logs 表（一行一个点事件）：点事件算不出耗时，
 也没有父子关系，撑不起回放。选型记录是 D11。
 """
+import functools
 import json
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _locked(method):
+    """实例方法包一层锁。
+
+    Store 在 web 进程里是全进程一个实例（SessionManager 收归复用），
+    FastAPI 的同步端点跑在线程池里，多个请求线程会共用 self.conn。
+    SQLite 的写锁本来就是库级的，这里串行化防的是另一件事：同一条
+    sqlite3 连接上两个线程交错 execute/commit，事务会互相吞并。
+    本地低频写入，锁开销可忽略。
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class Store:
@@ -35,9 +55,13 @@ class Store:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         # 默认一行结果是元组，只能靠下标取值。换成 Row 后能用列名：row["id"]。
         self.conn.row_factory = sqlite3.Row
+        # 见 _locked 的说明：多线程共用这条连接的串行化。必须在
+        # _create_tables 之前就位（它也要过锁）。
+        self._lock = threading.RLock()
         # 每次启动都确保表存在。
         self._create_tables()
 
+    @_locked
     def _create_tables(self) -> None:
         """建表。if not exists 保证重复调用不会报错，也不会覆盖已有数据。"""
         # executescript 一次执行多条语句，execute 只能执行一条。
@@ -64,6 +88,7 @@ class Store:
             """
         )
 
+    @_locked
     def create_session(self, session_id: str, model: str, jsonl_path: str, title: str = "") -> None:
         """登记一个新会话。id 是主键，同一个 id 再登记一次会抛 IntegrityError。"""
         # 问号是参数占位符。用参数而不是拼字符串，避免值里出现引号时语句出错。
@@ -74,18 +99,26 @@ class Store:
         # execute 只是改了内存里的事务，commit 才真正写进文件。
         self.conn.commit()
 
+    @_locked
     def has_session(self, session_id: str) -> bool:
         """这个会话是否已登记过。Conversation 靠它决定要不要 create_session。"""
         row = self.conn.execute("select 1 from sessions where id = ?", (session_id,)).fetchone()
         return row is not None
 
-    def list_sessions(self) -> list[sqlite3.Row]:
-        """全部会话，最近创建的排在前面。
+    @_locked
+    def list_sessions(self, limit: int = 50) -> list[sqlite3.Row]:
+        """最近创建的会话，最新的排在前面。
 
-        预留：给以后的 web 端 /sessions 列表端点用，暂时没有调用方。
+        TUI 的 /resume 用它生成选择器；限制条数避免历史很长时一次读太多正文。
         """
-        return list(self.conn.execute("select * from sessions order by created_at desc"))
+        return list(
+            self.conn.execute(
+                "select * from sessions order by created_at desc limit ?",
+                (limit,),
+            )
+        )
 
+    @_locked
     def start_span(
         self,
         session_id: str,
@@ -107,6 +140,7 @@ class Store:
         self.conn.commit()
         return span_id
 
+    @_locked
     def end_span(self, span_id: str, status: str = "ok", data: dict | None = None) -> None:
         """回填一段操作的结束：结束时间、状态、补充信息。
 
@@ -124,6 +158,7 @@ class Store:
         )
         self.conn.commit()
 
+    @_locked
     def span_duration_ms(self, span_id: str) -> int | None:
         """一个 span 的耗时，单位毫秒。还没结束（end_time 为空）返回 None。
 
@@ -140,6 +175,7 @@ class Store:
         ).total_seconds()
         return round(seconds * 1000)
 
+    @_locked
     def spans_for(self, session_id: str) -> list[sqlite3.Row]:
         """一个会话的全部 span，按开始顺序排列。id 自增，所以按 id 排就是按开始排。
 

@@ -41,7 +41,7 @@ agent 框架（LangChain、LangGraph、Claude Agent SDK、OpenCode）把循环�
 - **执行模型给的参数禁止 eval。** calculator 用 ast 白名单求值，
   只放行数字和四则运算。模型提交的任何表达式都是不可信输入。
 
-循环本体在 `application/conversation.py` 的 `turn()`，CLI 和 web 只消费它吐出的事件。
+循环本体在 `application/conversation.py` 的 `turn()`，TUI 和 desktop/web 只消费它吐出的事件。
 
 ## 第 3 层 多工具、并行、失败
 
@@ -89,7 +89,7 @@ agent 框架（LangChain、LangGraph、Claude Agent SDK、OpenCode）把循环�
 
 **观测（trace）。** 每一层的判断都要有数可看，不然就是凭感觉。
 一次请求花了多久、首 token 延迟多少、读了多少缓存、工具算了什么，都在
-`main.py trace` 里。spans 记「怎么走的」，JSONL 记「说了什么」，回放时拼在一起。
+`main.py trace` 的只读 TUI 里。spans 记「怎么走的」，JSONL 记「说了什么」，回放时拼在一起。
 
 **协议差异收口。** 两家协议的字段名只允许出现在 `adapter.py`。
 看到 `if provider == ...` 散落到别处，就是这个边界破了。

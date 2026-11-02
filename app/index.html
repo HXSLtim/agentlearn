@@ -1,43 +1,375 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <meta name="description" content="AgentLearn local agent workbench" />
+    <title>AgentLearn</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/src/styles.css" />
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <div class="app-shell" id="app-shell">
+      <aside class="thread-rail" id="thread-rail" aria-label="会话列表">
+        <header class="rail-header">
+          <a class="wordmark" href="/" aria-label="AgentLearn 首页">
+            <span class="wordmark-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <path d="M4 19.5 12 4l8 15.5-8-3.8-8 3.8Z" />
+                <path d="m8.2 17.1 3.8-7.6 3.8 7.6" />
+              </svg>
+            </span>
+            <span>AGENTLEARN</span>
+          </a>
+          <button
+            class="icon-button rail-close"
+            id="rail-close"
+            type="button"
+            aria-label="关闭会话列表"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m4 4 12 12M16 4 4 16" />
+            </svg>
+          </button>
+        </header>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+        <button class="new-thread-button" id="new-thread" type="button">
+          <span class="new-thread-plus" aria-hidden="true">＋</span>
+          <span>新建会话</span>
+          <kbd>⌘ N</kbd>
+        </button>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
-    </main>
+        <div class="rail-section-heading">
+          <span>THREADS</span>
+          <span id="thread-count">0</span>
+        </div>
+        <nav class="thread-list" id="thread-list" aria-label="历史会话"></nav>
+
+        <footer class="rail-footer">
+          <div class="runtime-row">
+            <span class="status-light is-ready" id="runtime-light"></span>
+            <span>LOCAL RUNTIME</span>
+          </div>
+          <div class="runtime-meta">
+            <span>127.0.0.1:8000</span>
+            <span>SSE</span>
+          </div>
+        </footer>
+      </aside>
+
+      <main class="main-stage">
+        <header class="stage-header">
+          <button
+            class="icon-button rail-open"
+            id="rail-open"
+            type="button"
+            aria-label="打开会话列表"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M3 5h14M3 10h14M3 15h14" />
+            </svg>
+          </button>
+          <div class="stage-heading">
+            <span class="eyebrow" id="thread-kicker">NEW SESSION</span>
+            <h1 id="thread-title">未命名运行</h1>
+          </div>
+          <div class="stage-actions">
+            <span class="connection-pill" id="connection-pill">
+              <span class="status-light is-ready"></span>
+              READY
+            </span>
+            <button
+              class="icon-button text-icon-button run-rail-toggle"
+              id="run-rail-toggle"
+              type="button"
+              aria-label="切换运行账本"
+              aria-pressed="true"
+            >
+              <span class="icon-code">LOG</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="conversation-scroll" id="conversation-scroll">
+          <section
+            class="conversation"
+            id="conversation"
+            aria-live="polite"
+            aria-label="对话内容"
+          ></section>
+        </div>
+
+        <form class="composer-zone" id="composer" novalidate>
+          <div
+            class="command-palette"
+            id="command-palette"
+            aria-label="命令面板"
+            hidden
+          >
+            <div class="command-palette-heading">
+              <span>COMMAND INDEX</span>
+              <span>TYPE TO FILTER</span>
+            </div>
+            <div class="command-list" id="command-list" role="listbox"></div>
+            <div class="command-palette-footer">
+              <span>↑↓ SELECT</span>
+              <span>TAB COMPLETE</span>
+              <span>ENTER RUN</span>
+              <span>ESC CLOSE</span>
+            </div>
+          </div>
+          <div class="composer-shell">
+            <div class="composer-heading">
+              <span>COMPOSE</span>
+              <span id="composer-status">ENTER TO SEND · SHIFT+ENTER FOR NEWLINE</span>
+            </div>
+            <label class="sr-only" for="prompt">向 agent 发消息</label>
+            <textarea
+              id="prompt"
+              name="prompt"
+              rows="1"
+              placeholder="输入任务或命令…"
+              autocomplete="off"
+              spellcheck="false"
+            ></textarea>
+            <div class="composer-footer">
+              <div class="composer-hints">
+                <span><kbd>↵</kbd> 发送</span>
+                <span><kbd>/</kbd> 命令</span>
+                <span><kbd>⇧ ↵</kbd> 换行</span>
+                <span><kbd>⌘ N</kbd> 新会话</span>
+              </div>
+              <button class="send-button" id="send" type="submit">
+                <span id="send-label">RUN</span>
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M4 10h11M10 5l5 5-5 5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <p class="composer-note">
+            本地模型调用 · 工具执行与 trace 留在本机
+          </p>
+        </form>
+      </main>
+
+      <aside class="run-rail" id="run-rail" aria-label="运行状态">
+        <header class="run-rail-heading">
+          <div>
+            <span class="eyebrow">RUN LOG</span>
+            <h2>运行日志</h2>
+          </div>
+          <span class="status-light is-ready" id="ledger-light"></span>
+        </header>
+
+        <section class="run-status-card">
+          <span class="mini-label">STATE</span>
+          <strong id="run-state">READY</strong>
+          <p id="run-state-copy">等待第一条消息</p>
+        </section>
+
+        <dl class="run-metrics">
+          <div>
+            <dt>SESSION</dt>
+            <dd id="run-session">—</dd>
+          </div>
+          <div>
+            <dt>TURNS</dt>
+            <dd id="run-turns">0</dd>
+          </div>
+          <div>
+            <dt>TOOL CALLS</dt>
+            <dd id="run-tools">0</dd>
+          </div>
+          <div>
+            <dt>ELAPSED</dt>
+            <dd id="run-elapsed">—</dd>
+          </div>
+        </dl>
+
+        <section class="activity-section">
+          <div class="section-heading">
+            <span>LIVE ACTIVITY</span>
+            <span class="section-count" id="activity-count">0</span>
+          </div>
+          <ol class="activity-list" id="activity-list">
+            <li class="activity-empty">工具与思考事件会出现在这里。</li>
+          </ol>
+        </section>
+
+        <section class="stop-section">
+          <span class="mini-label">STOP REASON</span>
+          <code id="run-stop">—</code>
+        </section>
+
+        <footer class="run-rail-footer">
+          <span>JSONL 正文</span>
+          <span>SQLite trace</span>
+          <span>LOCAL ONLY</span>
+        </footer>
+      </aside>
+      <div class="scrim" id="scrim"></div>
+    </div>
+
+    <div class="settings-modal" id="settings-modal" hidden>
+      <div class="settings-backdrop" data-settings-close></div>
+      <section
+        class="settings-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+      >
+        <header class="settings-header">
+          <div>
+            <span class="eyebrow">RUNTIME CONFIG</span>
+            <h2 id="settings-title">模型设置</h2>
+          </div>
+          <button
+            class="icon-button settings-close"
+            id="settings-close"
+            type="button"
+            aria-label="关闭设置"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m4 4 12 12M16 4 4 16" />
+            </svg>
+          </button>
+        </header>
+
+        <form class="settings-form" id="settings-form">
+          <div class="settings-intro">
+            <span class="settings-index">01</span>
+            <p>
+              这些值写入本机 <code>server/config.ini</code>。
+              保存后下一次模型请求立即使用新配置。
+            </p>
+          </div>
+
+          <div class="settings-grid">
+            <label class="settings-field">
+              <span>PROVIDER</span>
+              <select id="settings-provider" name="provider">
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+
+            <label class="settings-field">
+              <span>MODEL ID</span>
+              <input id="settings-model" name="model_id" type="text" autocomplete="off" />
+            </label>
+
+            <label class="settings-field settings-field-wide">
+              <span>BASE URL</span>
+              <input
+                id="settings-base-url"
+                name="base_url"
+                type="url"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+
+            <label class="settings-field">
+              <span>MAX TOKENS</span>
+              <input
+                id="settings-max-tokens"
+                name="max_tokens"
+                type="number"
+                min="1"
+                step="1"
+              />
+            </label>
+
+            <label class="settings-field">
+              <span>THINKING EFFORT</span>
+              <select id="settings-effort" name="effort">
+                <option value="">默认 · 不发送</option>
+                <option value="off">off</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="max">max</option>
+              </select>
+            </label>
+
+            <label class="settings-field settings-field-wide">
+              <span>API KEY</span>
+              <input
+                id="settings-api-key"
+                name="api_key"
+                type="password"
+                autocomplete="new-password"
+                placeholder="留空保持当前密钥"
+              />
+              <small id="settings-key-source">正在读取密钥来源…</small>
+            </label>
+          </div>
+
+          <div class="settings-status-row">
+            <p id="settings-status" role="status" aria-live="polite">等待读取配置</p>
+            <div class="settings-actions">
+              <button class="settings-secondary" id="settings-cancel" type="button">
+                取消
+              </button>
+              <button class="settings-primary" id="settings-save" type="submit">
+                <span id="settings-save-label">保存并应用</span>
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M4 10h11M10 5l5 5-5 5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <footer class="settings-footer">
+            <span>LOCAL CONFIG</span>
+            <span>API KEY NEVER ECHOED</span>
+            <span>NEXT REQUEST APPLIES</span>
+          </footer>
+        </form>
+      </section>
+    </div>
+
+    <div class="resume-modal" id="resume-modal" hidden>
+      <div class="resume-backdrop" data-resume-close></div>
+      <section
+        class="resume-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resume-title"
+      >
+        <header class="resume-header">
+          <div>
+            <span class="eyebrow">SESSION INDEX</span>
+            <h2 id="resume-title">续接会话</h2>
+          </div>
+          <button
+            class="icon-button resume-close"
+            id="resume-close"
+            type="button"
+            aria-label="关闭会话选择"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m4 4 12 12M16 4 4 16" />
+            </svg>
+          </button>
+        </header>
+        <div class="resume-index-line">
+          <span>↑↓ SELECT</span>
+          <span>ENTER RESUME</span>
+          <span>ESC CLOSE</span>
+          <span>LOCAL UI INDEX</span>
+        </div>
+        <p class="resume-summary" id="resume-summary"></p>
+        <div class="resume-list" id="resume-list" role="listbox"></div>
+        <footer class="resume-footer">
+          正文和执行轨迹仍在 server/data；这里只切换界面索引。
+        </footer>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </body>
 </html>

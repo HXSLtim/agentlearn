@@ -31,6 +31,34 @@ class LLMConfig:
     # 思考强度：off / low / medium / high / max，或空字符串。
     # 空 = 请求里不带这个参数。这一个键允许缺省，见 load_config 里的说明。
     effort: str = ""
+    # 模型流量绕过代理的主机列表（NO_PROXY 语义，逗号分隔，* = 全部绕过）。
+    # 空 = 完全尊重环境里的代理变量，不替用户做决定。允许缺省。
+    no_proxy: str = ""
+
+
+@dataclass(frozen=True)
+class SettingsSnapshot:
+    """给界面看的配置，不含真实密钥。"""
+
+    provider: str
+    base_url: str
+    model_id: str
+    max_tokens: int
+    effort: str
+    api_key_configured: bool
+    api_key_source: str
+
+
+@dataclass(frozen=True)
+class SettingsValues:
+    """设置界面提交的值；api_key 为空表示保留原值。"""
+
+    provider: str
+    base_url: str
+    model_id: str
+    max_tokens: int
+    effort: str = ""
+    api_key: str | None = None
 
 
 def load_config(path: Path = Path("config.ini")) -> LLMConfig:
@@ -59,6 +87,15 @@ def load_config(path: Path = Path("config.ini")) -> LLMConfig:
     if effort and effort not in ("off", "low", "medium", "high", "max"):
         raise SystemExit(f"effort 只能是 off / low / medium / high / max 或留空，现在写的是 {effort}。")
 
+    # no_proxy 同样允许缺省或留空：默认尊重环境代理，不做任何绕行。
+    # 值就是标准 NO_PROXY 的主机列表（逗号分隔，* 表示全部）。
+    # 换行直接拒（多行不是一个合法的主机列表）；空格归一掉，
+    # 存进 LLMConfig 的永远是干净的逗号列表。
+    raw_no_proxy = section["no_proxy"] if "no_proxy" in section else ""
+    if "\n" in raw_no_proxy or "\r" in raw_no_proxy:
+        raise SystemExit("no_proxy 是逗号分隔的主机列表，不能包含换行。")
+    no_proxy = ",".join(item.strip() for item in raw_no_proxy.split(",") if item.strip())
+
     return LLMConfig(
         provider=provider,
         base_url=_value(section, "base_url", path),
@@ -66,7 +103,122 @@ def load_config(path: Path = Path("config.ini")) -> LLMConfig:
         model_id=_value(section, "model_id", path),
         max_tokens=int(max_tokens_raw),
         effort=effort,
+        no_proxy=no_proxy,
     )
+
+
+def load_settings(path: Path = Path("config.ini")) -> SettingsSnapshot:
+    """读取可展示的设置。真实 api_key 只判断来源，不返回给界面。"""
+    config = load_config(path)
+    parser = ConfigParser()
+    parser.read(path, encoding="utf-8")
+    raw_key = parser["llm"].get("api_key", "").strip()
+    match = _ENV_REF.match(raw_key)
+    if match:
+        key_source = f"环境变量 {match.group(1)}"
+    elif raw_key:
+        key_source = "config.ini（明文）"
+    else:
+        key_source = "未配置"
+    return SettingsSnapshot(
+        provider=config.provider,
+        base_url=config.base_url,
+        model_id=config.model_id,
+        max_tokens=config.max_tokens,
+        effort=config.effort,
+        api_key_configured=bool(raw_key),
+        api_key_source=key_source,
+    )
+
+
+def save_settings(
+    values: SettingsValues,
+    path: Path = Path("config.ini"),
+) -> SettingsSnapshot:
+    """只改 [llm] 的已知键，保留注释和未提交的 api_key。"""
+    _validate_values(values)
+    if not path.exists():
+        raise ValueError(f"找不到 {path}，先复制 config.example.ini。")
+
+    old_text = path.read_text(encoding="utf-8")
+    updates = {
+        "provider": values.provider,
+        "base_url": values.base_url,
+        "model_id": values.model_id,
+        "max_tokens": str(values.max_tokens),
+        "effort": values.effort,
+    }
+    if values.api_key and values.api_key.strip():
+        updates["api_key"] = values.api_key.strip()
+    new_text = _rewrite_llm_section(old_text, updates)
+
+    # 先写临时文件并用真实加载器验证；失败不动原配置。
+    temp_path = path.with_name(f".{path.name}.tmp")
+    temp_path.write_text(new_text, encoding="utf-8")
+    try:
+        load_config(temp_path)
+    except SystemExit as exc:
+        temp_path.unlink(missing_ok=True)
+        raise ValueError(str(exc).replace(str(temp_path), str(path))) from exc
+    temp_path.replace(path)
+    return load_settings(path)
+
+
+def _validate_values(values: SettingsValues) -> None:
+    if values.provider not in ("anthropic", "openai"):
+        raise ValueError("provider 只能是 anthropic 或 openai。")
+    for name, value in (
+        ("base_url", values.base_url),
+        ("model_id", values.model_id),
+        ("effort", values.effort),
+        ("api_key", values.api_key or ""),
+    ):
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"{name} 不能包含换行。")
+    if not values.base_url.strip():
+        raise ValueError("base_url 不能为空。")
+    if not values.model_id.strip():
+        raise ValueError("model_id 不能为空。")
+    if values.max_tokens <= 0:
+        raise ValueError("max_tokens 必须大于 0。")
+    if values.effort not in ("", "off", "low", "medium", "high", "max"):
+        raise ValueError("effort 只能是 off / low / medium / high / max 或留空。")
+
+
+def _rewrite_llm_section(text: str, updates: dict[str, str]) -> str:
+    """替换 [llm] 里的键，保留注释和其他段落。"""
+    lines = text.splitlines()
+    section_start: int | None = None
+    section_end = len(lines)
+    in_llm = False
+    seen: set[str] = set()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_llm:
+                section_end = index
+                break
+            in_llm = stripped == "[llm]"
+            if in_llm:
+                section_start = index
+            continue
+        if not in_llm or not stripped or stripped.startswith((";", "#")):
+            continue
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in updates:
+            lines[index] = f"{key} = {updates[key]}"
+            seen.add(key)
+
+    if section_start is None:
+        raise ValueError("config.ini 缺少 [llm] 这一段。")
+    insertion = section_end
+    for key, value in updates.items():
+        if key not in seen:
+            lines.insert(insertion, f"{key} = {value}")
+            insertion += 1
+    return "\n".join(lines) + "\n"
 
 
 def _value(section: SectionProxy, key: str, path: Path) -> str:

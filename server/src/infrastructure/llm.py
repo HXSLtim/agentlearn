@@ -23,6 +23,8 @@ thinking 的 signature 只在最终消息里——片段流里拼不出这两样
 - build_chat：按配置造客户端，选哪家由 config.ini 决定，不用改代码。
 - merge_fragment：把文字片段并成完整的内容块，OpenAI 路径组块用。
 """
+import os
+
 import anthropic
 from openai import OpenAI
 
@@ -30,9 +32,11 @@ from domain.message import Message, TextBlock, ThinkingBlock
 from domain.tool import Tool
 from infrastructure.adapter import (
     block_from_anthropic,
+    history_to_anthropic,
     message_to_anthropic,
     message_to_openai,
     merge_tool_call_delta,
+    prepend_system,
     tool_to_anthropic,
     tool_to_openai,
     tool_uses_from_acc,
@@ -71,17 +75,20 @@ class AnthropicChat:
         # 这一轮的用量，流跑完才有。中转不给时保持空字典，调用方要容忍缺字段。
         self.usage: dict = {}
 
-    def stream(self, history: list[Message], tools: list[Tool] | None = None):
+    def stream(self, history: list[Message], tools: list[Tool] | None = None, system: str = ""):
         """逐个产出 (kind, text)。这是一个生成器，调用方用 for 循环来消费。
 
+        system 是随请求重发的提示词（跨会话记忆住在这里），不进对话历史。
         流跑完后：结束原因在 self.stop_reason，完整内容块在 self.blocks。
         """
         # 请求参数先攒成字典：tools 是可选的，没有工具就不带这个键。
         params: dict = {
             "model": self.model,
             "max_tokens": self.max_tokens,
-            # 出站翻译在 adapter 里：Message -> Anthropic 请求格式。
-            "messages": [message_to_anthropic(message) for message in history],
+            # 出站翻译在 adapter 里：整段历史 -> Anthropic 请求格式。
+            # 走 history_to_anthropic 而不是逐条翻译：它顺带把连续 user
+            # 消息合并（软中断会造出这种序列，Anthropic 要求角色交替）。
+            "messages": history_to_anthropic(history),
         }
         if tools:
             # 「注册工具」就是这一行：定义随请求重申。API 无状态，
@@ -91,6 +98,10 @@ class AnthropicChat:
             # 思考强度。None（off 或没配）就不带这个键：发一个模型不认识的
             # 参数是 400，省略则用服务端默认。
             params["output_config"] = {"effort": self.effort_wire}
+        if system:
+            # 系统提示词在这家协议里是顶层字符串字段（OpenAI 那边是首条
+            # 消息，见 prepend_system）——这是原生形状，直接放，不用过 adapter。
+            params["system"] = system
 
         # messages.stream 返回一个上下文管理器，退出 with 时流会被关闭。
         with self.client.messages.stream(**params) as msg:
@@ -144,7 +155,7 @@ class OpenAIChat:
         self.blocks: list = []
         self.usage: dict = {}
 
-    def stream(self, history: list[Message], tools: list[Tool] | None = None):
+    def stream(self, history: list[Message], tools: list[Tool] | None = None, system: str = ""):
         """逐个产出 (kind, text)。流跑完后看 self.stop_reason 和 self.blocks。"""
         params: dict = {
             "model": self.model,
@@ -158,6 +169,10 @@ class OpenAIChat:
             # chunk 上，而且那个 chunk 的 choices 是空的——下面不能把它当尾包丢掉。
             "stream_options": {"include_usage": True},
         }
+        if system:
+            # 系统提示词：这家的挂法是消息列表首条 role="system"（Anthropic 是
+            # 顶层字段）。怎么挂是协议差异，翻译在 adapter.prepend_system。
+            params["messages"] = prepend_system(params["messages"], system)
         if tools:
             params["tools"] = [tool_to_openai(tool) for tool in tools]
         if self.effort_wire:
@@ -211,20 +226,58 @@ class OpenAIChat:
         self.blocks = blocks + tool_uses_from_acc(tool_acc)
 
 
+def _apply_no_proxy(value: str) -> None:
+    """把配置里的 no_proxy 合并进进程环境，只影响本进程的出站连接。
+
+    标准 NO_PROXY 语义：逗号分隔的主机列表，* 表示全部绕过。
+    合并而不是覆盖：环境里已有的条目保留。大小写两个名字都设，
+    httpx 两套都会读，只设一套可能被另一套盖住。
+    只在 build_chat 建客户端前调用——httpx 是在构造时读环境变量的。
+    """
+    entries = [item.strip() for item in value.split(",") if item.strip()]
+    if not entries:
+        return
+    for name in ("NO_PROXY", "no_proxy"):
+        current = [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
+        os.environ[name] = ",".join(current + [e for e in entries if e not in current])
+
+
 def build_chat(config: LLMConfig) -> AnthropicChat | OpenAIChat:
     """按配置里的 provider 造对应的客户端。
 
     放在两个类的后面：先读类，再看挑类的工厂。
     provider 的合法性在读配置时已经校验过，这里再兜一次底。
     """
-    if config.provider == "anthropic":
-        return AnthropicChat(url=config.base_url, key=config.api_key,
-                             model=config.model_id, max_tokens=config.max_tokens,
-                             effort=config.effort)
-    if config.provider == "openai":
-        return OpenAIChat(url=config.base_url, key=config.api_key,
-                          model=config.model_id, max_tokens=config.max_tokens,
-                          effort=config.effort)
+    # 配置里写了 no_proxy 才绕行；没写就完全尊重环境里的代理变量。
+    _apply_no_proxy(config.no_proxy)
+    try:
+        if config.provider == "anthropic":
+            return AnthropicChat(url=config.base_url, key=config.api_key,
+                                 model=config.model_id, max_tokens=config.max_tokens,
+                                 effort=config.effort)
+        if config.provider == "openai":
+            return OpenAIChat(url=config.base_url, key=config.api_key,
+                              model=config.model_id, max_tokens=config.max_tokens,
+                              effort=config.effort)
+    except ImportError as e:
+        # 本机代理坑：shell 里挂着 all_proxy=socks5://… 时，httpx 建客户端
+        # 就要 SOCKS 支持，环境里没有 socksio 直接 ImportError。这里翻译成
+        # 带解法的人话，而不是让它以原始 traceback 糊脸。
+        # 抛 ValueError 而不是 SystemExit：build_chat 在运行中也会被调
+        # （设置保存、desktop 每个请求），SystemExit 会把常驻服务带走；
+        # TUI 启动路径由 main.py 把 ValueError 转成一句提示退出。
+        if "socksio" in str(e) or "SOCKS" in str(e):
+            raise ValueError(
+                "环境里挂着 SOCKS 代理（all_proxy 等），但缺 socksio 包，"
+                "模型客户端建不起来。三种解法任选：\n"
+                "  1) config.ini 的 [llm] 里加 no_proxy = *（或具体主机列表），"
+                "让模型流量绕过代理；\n"
+                "  2) 模型接口不用走代理，剥掉代理变量再启动：\n"
+                "     env -u all_proxy -u ALL_PROXY -u http_proxy -u https_proxy "
+                "-u HTTP_PROXY -u HTTPS_PROXY uv run python main.py tui\n"
+                "  3) 模型流量就是要走代理，装上 SOCKS 支持：uv add socksio"
+            ) from e
+        raise
     raise ValueError(f"不认识的 provider: {config.provider}")
 
 

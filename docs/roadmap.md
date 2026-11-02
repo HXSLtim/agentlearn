@@ -61,16 +61,39 @@
 
 验收：一个没加载 skill 时答不好的任务，加载后明显变好，且不占用常驻上下文。
 
+## 待排期：意图识别模型（2026-11-03 记入）
+
+在主模型之前加一个小而快的分类模型，先判用户这句话想干什么，再决定怎么走。
+动机：现在每句话都进完整的 agent loop（带工具定义、带记忆、带全部历史），
+而大量输入其实是闲聊、改口、或一句话就能答的简单问题——分类先行可以把
+「要不要进循环、带哪些工具、用哪一档 steering」这些决定从主模型身上拿下来。
+
+候选用途（做的时候挑，不预设全做）：
+
+- 路由：闲聊直接答 / 任务进 agent loop / 明确的命令走快捷路径；
+- 工具裁剪：只把相关工具的定义放进请求，工具多了以后省 token（和第 5 层 MCP 衔接）；
+- steering 档位建议：判断新消息是补充（cooperative）还是改口推翻（preemptive），
+  现在这个选择完全靠前端传参。
+
+约束：分类器是新增的一次模型调用，本身有延迟和成本，省不下主模型的开销就
+不值得加；分类结果记进 span（和 effort 一样留痕），错分要能从 trace 里看见。
+选型（用谁、什么粒度、失败时的降级）定了记 decisions.md。
+
 ## 基建线（与学习线并行，按需启动）
 
 | 项 | 内容 | 状态 |
-|---|---|---|
+| --- | --- | --- |
 | 会话持久化 | JSONL + SQLite（见 docs/decisions.md D2） | ✅ |
 | 配置体系 | config.ini + ${ENV}（D4） | ✅ |
-| conversation.py | 把 cli/web 两份循环收成 application 层一份（D9） | ✅ |
-| trace | spans 表（父子 + 耗时，D10/D11）+ `main.py trace` 回放；turn/llm_request 已埋，tool_call span 随第二层接入 | ✅ 骨架 |
+| conversation.py | TUI/desktop 共用 application 层一份会话循环（D9/D14） | ✅ |
+| TUI | 黑绿控制台：流式正文、thinking 滚动预览、按事件顺序挂载工具卡、运行账本、窄终端布局（D14/D16） | ✅ |
+| trace | spans 表（D10/D11）+ `main.py trace` 只读 TUI：span 树、耗时、token、工具入参/出参、回答 | ✅ |
+| 设置界面 | TUI / desktop 共用 `GET/PUT /settings`；只改 `[llm]`，密钥不回显，下一请求生效（D15） | ✅ |
+| 快捷命令 | TUI / desktop 输入 `/` 打开面板；模型切换与预置 prompt 均走界面层白名单（D18） | ✅ |
+| 跨会话记忆 | `data/sandbox/memory.md` 每轮注入为 system 提示词；不进 JSONL，协议差异在 adapter；span 记 system_chars | ✅ |
+| steering | 同会话连发消息三档（D19）：queue 等整轮 / cooperative 圈界并入 / preemptive 检查点打断；spans 加 cancelled；抢占让位于 tool_use/tool_result 配对不变式 | ✅ |
 | 评测 | 从 trace 回放打分：工具调用对不对、答案准不准、花了多少 token | 未开始 |
-| 桌面端接通 | app 前端接 POST /chat；Tauri 启动时拉起 server | 未开始 |
+| 桌面端 | app 已接 POST /chat + SSE、会话侧栏、运行账本和设置抽屉；Tauri 自动拉起 server 未做 | 🟡 |
 
 ## 文档维护节奏
 
