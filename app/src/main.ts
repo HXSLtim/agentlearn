@@ -15,11 +15,18 @@ type ApprovalMode = "approve" | "auto" | "yolo";
 type SteeringMode = "queue" | "cooperative" | "preemptive";
 type ToolState = "waiting" | "running" | "done";
 
+interface ImageAttachment {
+  media_type: string;
+  data: string;
+}
+
 interface ToolEvent {
   id: string;
   name: string;
   input: Record<string, unknown>;
   output?: string;
+  image?: ImageAttachment;
+  hasImage?: boolean;
   isError?: boolean;
   elapsedMs?: number;
   approvalId?: string;
@@ -47,6 +54,7 @@ interface UiMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
+  images?: ImageAttachment[];
   thinking: string;
   parts: AssistantPart[];
   error: string;
@@ -125,6 +133,7 @@ interface ChatEvent {
   message?: string;
   approval_id?: string;
   mode?: ApprovalMode;
+  has_image?: boolean;
 }
 
 interface ApprovalModeResponse {
@@ -154,6 +163,9 @@ interface ServerContentBlock {
   input?: Record<string, unknown>;
   content?: string;
   is_error?: boolean;
+  media_type?: string;
+  data?: string;
+  image?: ImageAttachment | null;
 }
 
 interface ServerMessage {
@@ -443,10 +455,37 @@ function createThread(): Thread {
   };
 }
 
+const IMAGE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+]);
+
+function parseImage(
+  image: Pick<Partial<ImageAttachment>, "media_type" | "data"> | null | undefined,
+): ImageAttachment | undefined {
+  const mediaType = image?.media_type ?? "";
+  const data = image?.data ?? "";
+  if (
+    !IMAGE_MEDIA_TYPES.has(mediaType) ||
+    !data ||
+    data.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(data)
+  ) {
+    return undefined;
+  }
+  return { media_type: mediaType, data };
+}
+
 function normalizeStoredMessage(message: UiMessage): UiMessage {
   const parts: AssistantPart[] = Array.isArray(message.parts)
     ? message.parts
     : [];
+  const images = (message.images ?? [])
+    .map(parseImage)
+    .filter((image): image is ImageAttachment => Boolean(image));
   if (
     message.thinking &&
     !parts.some((part) => part.type === "thinking")
@@ -455,6 +494,7 @@ function normalizeStoredMessage(message: UiMessage): UiMessage {
   }
   return {
     ...message,
+    images,
     thinking: message.thinking ?? "",
     parts,
     error: message.error ?? "",
@@ -577,17 +617,26 @@ function parseServerMessages(
 
     let userMessage: UiMessage | undefined;
     for (const block of message.content) {
+      const image = parseImage(block.image ?? block);
       if (block.type === "text" && block.text) {
         userMessage ??= {
           ...createUserMessage(""),
           createdAt,
         };
         userMessage.text += block.text;
+      } else if (block.type === "image" && image) {
+        userMessage ??= {
+          ...createUserMessage(""),
+          createdAt,
+        };
+        userMessage.images = [...(userMessage.images ?? []), image];
       } else if (block.type === "tool_result" && block.tool_use_id) {
         const tool = tools.get(block.tool_use_id);
         if (tool) {
           tool.state = "done";
           tool.output = block.content ?? "";
+          tool.image = image;
+          tool.hasImage = Boolean(image);
           tool.isError = Boolean(block.is_error);
           tool.elapsedMs = undefined;
         }
@@ -797,6 +846,7 @@ function createUserMessage(text: string): UiMessage {
     id: createId(),
     role: "user",
     text,
+    images: [],
     thinking: "",
     parts: [],
     error: "",
@@ -911,6 +961,11 @@ function emptyStateMarkup(): string {
 
 function renderTool(tool: ToolEvent): string {
   const args = JSON.stringify(tool.input, null, 2);
+  const toolImage = tool.image
+    ? renderImages([tool.image], "工具结果图片")
+    : tool.hasImage
+      ? `<div class="tool-image-pending">IMAGE ATTACHED · RELOADING FROM TRANSCRIPT</div>`
+      : "";
   const output =
     tool.state === "waiting"
       ? `
@@ -924,7 +979,7 @@ function renderTool(tool: ToolEvent): string {
       `
       : tool.state === "running"
         ? `<span class="tool-pending">waiting for result…</span>`
-        : `<pre>${escapeHtml(tool.output || "(no output)")}</pre>`;
+        : `<pre>${escapeHtml(tool.output || "(no output)")}</pre>${toolImage}`;
   const duration =
     tool.elapsedMs === undefined ? "" : `<span>${tool.elapsedMs}ms</span>`;
   const label =
@@ -949,6 +1004,25 @@ function renderTool(tool: ToolEvent): string {
       <pre class="tool-input">${escapeHtml(args === "{}" ? "(no arguments)" : args)}</pre>
       ${output}
     </section>
+  `;
+}
+
+function renderImages(images: ImageAttachment[], label: string): string {
+  const safeImages = images
+    .map(parseImage)
+    .filter((image): image is ImageAttachment => Boolean(image));
+  if (!safeImages.length) {
+    return "";
+  }
+  return `
+    <figure class="message-image-group" aria-label="${escapeHtml(label)}">
+      ${safeImages
+        .map(
+          (image, index) =>
+            `<img src="data:${image.media_type};base64,${image.data}" alt="${escapeHtml(label)} ${index + 1}" loading="lazy" />`,
+        )
+        .join("")}
+    </figure>
   `;
 }
 
@@ -1059,6 +1133,7 @@ function renderUser(message: UiMessage): string {
         })}</time>
       </header>
       <p>${escapeHtml(message.text)}</p>
+      ${renderImages(message.images ?? [], "用户附件")}
     </article>
   `;
 }
@@ -1406,6 +1481,7 @@ function handleChatEvent(event: ChatEvent, context: StreamContext): boolean {
     }
     tool.state = "done";
     tool.output = event.output ?? "";
+    tool.hasImage = Boolean(event.has_image);
     tool.isError = Boolean(event.is_error);
     tool.approvalId = undefined;
     tool.elapsedMs = event.elapsed_ms;
@@ -1742,6 +1818,13 @@ async function runChatRequest(
   let receivedError = false;
   let acknowledged = false;
   let finalStopReason = "";
+  const shouldHydrateImages = () =>
+    gotDone &&
+    !receivedError &&
+    finalStopReason !== "injected" &&
+    thread.messages.some((message) =>
+      assistantTools(message).some((tool) => tool.hasImage),
+    );
   try {
     const response = await fetch(`${API_BASE}/chat`, {
       method: "POST",
@@ -1792,6 +1875,9 @@ async function runChatRequest(
     context.assistant.streaming = false;
     context.assistant.queued = false;
     thread.stopping = false;
+    if (shouldHydrateImages()) {
+      await hydrateThread(thread, true);
+    }
     context.assistant.durationMs ??=
       Date.now() - context.assistant.createdAt;
     if (acknowledged && finalStopReason === "injected") {
