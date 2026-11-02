@@ -173,7 +173,8 @@ def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
       remember 是唯一被预授权的写（D27 第一阶段，容器化前不放宽）；
     - 会话锁拿不到就放弃这一 tick（run_turn 返回 ran=false），
       不排队等人——调度线程被一个长轮次挂住，所有触发器都停摆。
-    返回 {"ran": bool, "stop_reason": str, "note": str} 给调度器记账。
+    返回 {"ran", "stop_reason", "note", "token_count"} 给调度器记账；
+    token_count 是本轮全部成功模型请求的 usage 实数总和，供预算熔断使用。
     """
     slot = _manager.slot(session_id)
     # acquire(timeout=0)：会话正被人用（或上一轮还没收尾）就立刻让路。
@@ -198,12 +199,24 @@ def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
         try:
             for _event_ in conv.turn(message, origin=f"trigger:{trigger_name}"):
                 pass  # 丢弃事件：见 docstring
-            return {"ran": True, "stop_reason": conv.stop_reason or "?"}
+            return {
+                "ran": True,
+                "stop_reason": conv.stop_reason or "?",
+                "token_count": conv.turn_usage_tokens,
+            }
         except TurnCancelled:
             # 无人值守轮也可能被 POST /stop 打断（人有优先权，任何时候）。
-            return {"ran": True, "stop_reason": "cancelled"}
+            return {
+                "ran": True,
+                "stop_reason": "cancelled",
+                "token_count": conv.turn_usage_tokens,
+            }
         except Exception as exc:
-            return {"ran": False, "note": str(exc)}
+            return {
+                "ran": False,
+                "note": str(exc),
+                "token_count": conv.turn_usage_tokens,
+            }
         finally:
             handle.close()
     finally:

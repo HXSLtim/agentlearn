@@ -38,6 +38,11 @@ RATE_WINDOW_SECONDS = 300
 RATE_MAX_RUNS = 3
 RATE_COOLDOWN_SECONDS = 900
 
+# token 预算熔断：只记厂商 usage 实数，不估算金额。缓存读写都算 token，
+# 周期滚动；一次触发可能把预算跑超，熔断保证后续触发不再发起请求。
+TOKEN_BUDGET = 100_000
+TOKEN_BUDGET_WINDOW_SECONDS = 24 * 60 * 60
+
 # 每次醒来问一遍所有触发器的间隔。
 GRANULARITY_SECONDS = 5.0
 
@@ -69,6 +74,8 @@ class ProactivityRunner(threading.Thread):
         self._failures: dict[str, int] = {}
         self._run_times: dict[str, list[float]] = {}
         self._cooldown_until: dict[str, float] = {}
+        self._token_usage: dict[str, list[tuple[float, int]]] = {}
+        self._token_budget_until: dict[str, float] = {}
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -97,6 +104,27 @@ class ProactivityRunner(threading.Thread):
                     f"{self._cooldown_until[name] - now:.0f}s"
                 )
                 continue
+            if now < self._token_budget_until.get(name, 0):
+                trigger.mark()
+                _notice(
+                    f"trigger={name} dropped: token budget reached until "
+                    f"{self._token_budget_until[name] - now:.0f}s"
+                )
+                continue
+            token_usage = [
+                (timestamp, tokens)
+                for timestamp, tokens in self._token_usage.get(name, [])
+                if now - timestamp < TOKEN_BUDGET_WINDOW_SECONDS
+            ]
+            if sum(tokens for _, tokens in token_usage) >= TOKEN_BUDGET:
+                self._token_budget_until[name] = now + TOKEN_BUDGET_WINDOW_SECONDS
+                self._token_usage[name] = token_usage
+                trigger.mark()
+                _notice(
+                    f"trigger={name} dropped: token budget "
+                    f"{TOKEN_BUDGET} in {TOKEN_BUDGET_WINDOW_SECONDS}s reached"
+                )
+                continue
             run_times = [
                 timestamp
                 for timestamp in self._run_times.get(name, [])
@@ -120,6 +148,16 @@ class ProactivityRunner(threading.Thread):
                 self._failures[name] = 0
                 continue
             result = self._run_turn(trigger_session_id(name), message, name)
+            token_count = max(0, int(result.get("token_count", 0) or 0))
+            if token_count:
+                token_usage.append((now, token_count))
+                self._token_usage[name] = token_usage
+                if sum(tokens for _, tokens in token_usage) >= TOKEN_BUDGET:
+                    self._token_budget_until[name] = now + TOKEN_BUDGET_WINDOW_SECONDS
+                    _notice(
+                        f"trigger={name} token budget reached after run: "
+                        f"{sum(tokens for _, tokens in token_usage)}/{TOKEN_BUDGET}"
+                    )
             if result.get("ran"):
                 trigger.mark()
                 self._failures[name] = 0

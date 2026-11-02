@@ -138,6 +138,21 @@ class Conversation:
         # 最近一轮的结束原因，turn 完整跑完才有值。
         # 带 tools 的一轮可能经历多次请求，这里是最后一次的。
         self.stop_reason: str | None = None
+        # 最近一轮所有成功模型请求的 token 总和。chat.usage 每次请求都会
+        # 被覆盖，工具循环不能只看最后一次；预算熔断要的是整轮累计。
+        self.turn_usage_tokens = 0
+
+    @staticmethod
+    def _usage_tokens(usage: dict) -> int:
+        return sum(
+            int(usage.get(key, 0) or 0)
+            for key in (
+                "input_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "output_tokens",
+            )
+        )
 
     def _system_prompt(self, chat: AnthropicChat | OpenAIChat, summary_text: str = "") -> str:
         """拼这一圈的 system。四段顺序固定，见本文件顶部的说明。
@@ -252,6 +267,7 @@ class Conversation:
     def _apply_compaction(
         self, history: list, chat: AnthropicChat | OpenAIChat, turn_span: str,
         force: bool = False,
+        count_turn_tokens: bool = False,
     ) -> tuple[list, str, int]:
         """圈界处的上下文压缩：返回 (发给模型的尾部历史, 摘要文本, covered)。
 
@@ -314,6 +330,8 @@ class Conversation:
                 status="ok",
                 data={**chat.usage, "summary_chars": len(new_text)},
             )
+            if count_turn_tokens:
+                self.turn_usage_tokens += self._usage_tokens(chat.usage)
             compaction.save_summary(path, cut, new_text)
             covered, summary_text = cut, new_text
         tail = history[covered:] if covered else history
@@ -397,6 +415,7 @@ class Conversation:
         # 一轮开始后固定同一个客户端：TUI 里可以随时改模型或思考档位，
         # 但当前轮的工具循环不能中途换客户端，否则同一条 trace 会混两套配置。
         chat = self.chat
+        self.turn_usage_tokens = 0
         if not append_user and images:
             raise ValueError("重试不落新消息，不能带图。")
         if append_user:
@@ -473,7 +492,9 @@ class Conversation:
 
             # 第 4 层的圈界动作：超预算就把前缀压成摘要，请求只发尾部。
             # 放在圈界而不是 turn 开头——工具循环里历史也会长，每圈都要看。
-            history, summary_text, covered = self._apply_compaction(history, chat, turn_span)
+            history, summary_text, covered = self._apply_compaction(
+                history, chat, turn_span, count_turn_tokens=True
+            )
             # system 每圈拼一次：四段固定（准则、运行态、记忆、会话摘要）。
             # 字符串不变时字节就不变，前缀稳定，缓存断点（打在最后一条消息上，
             # 见 llm.py）命中的整段前缀里包含它；变的只有压缩刚发生的那一圈。
@@ -538,6 +559,7 @@ class Conversation:
                     **chat.usage}
             if chat.effort:
                 data["effort"] = chat.effort_note
+            self.turn_usage_tokens += self._usage_tokens(chat.usage)
             self.store.end_span(llm_span, status="ok", data=data)
 
             if stop != "tool_use":
