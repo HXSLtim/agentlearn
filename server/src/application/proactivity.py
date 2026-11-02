@@ -18,6 +18,7 @@ application 层不该知道 FastAPI 长什么样。方向和 Conversation
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,11 @@ UNATTENDED_MAX_TOOL_ROUNDS = 4
 # 同一个触发器连续失败这么多次后丢弃这几次触发（记账但不跑）：
 # 配置坏了会永远失败，每 5 秒重试一晚上既是日志风暴也是无意义功。
 MAX_CONSECUTIVE_FAILURES = 3
+
+# 频率熔断：窗口内最多跑这么多次无人值守轮；下一次触发进入冷却。
+RATE_WINDOW_SECONDS = 300
+RATE_MAX_RUNS = 3
+RATE_COOLDOWN_SECONDS = 900
 
 # 每次醒来问一遍所有触发器的间隔。
 GRANULARITY_SECONDS = 5.0
@@ -61,6 +67,8 @@ class ProactivityRunner(threading.Thread):
         self._triggers = [(build_trigger(spec), spec["name"]) for spec in specs]
         self._run_turn = run_turn
         self._failures: dict[str, int] = {}
+        self._run_times: dict[str, list[float]] = {}
+        self._cooldown_until: dict[str, float] = {}
         self._stop = threading.Event()
 
     def stop(self) -> None:
@@ -81,6 +89,29 @@ class ProactivityRunner(threading.Thread):
             message = trigger.check()
             if message is None:
                 continue
+            now = time.monotonic()
+            if now < self._cooldown_until.get(name, 0):
+                trigger.mark()
+                _notice(
+                    f"trigger={name} dropped: rate limited until "
+                    f"{self._cooldown_until[name] - now:.0f}s"
+                )
+                continue
+            run_times = [
+                timestamp
+                for timestamp in self._run_times.get(name, [])
+                if now - timestamp < RATE_WINDOW_SECONDS
+            ]
+            if len(run_times) >= RATE_MAX_RUNS:
+                self._cooldown_until[name] = now + RATE_COOLDOWN_SECONDS
+                self._run_times[name] = []
+                trigger.mark()
+                _notice(
+                    f"trigger={name} dropped: {RATE_MAX_RUNS} runs in "
+                    f"{RATE_WINDOW_SECONDS}s exceeded; cooldown "
+                    f"{RATE_COOLDOWN_SECONDS}s"
+                )
+                continue
             if self._failures.get(name, 0) >= MAX_CONSECUTIVE_FAILURES:
                 # 放弃这几次触发但继续记账，下一次变化/到点再来。
                 # 「丢弃」写进 notices：静默吞触发是调试地狱。
@@ -92,6 +123,8 @@ class ProactivityRunner(threading.Thread):
             if result.get("ran"):
                 trigger.mark()
                 self._failures[name] = 0
+                run_times.append(now)
+                self._run_times[name] = run_times
                 _notice(
                     f"trigger={name} stop_reason={result.get('stop_reason', '?')}"
                 )
