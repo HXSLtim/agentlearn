@@ -146,6 +146,14 @@ def _detail(name: str, data: dict) -> str:
             parts.append(f"ttft={data['ttft_ms']}ms")
         if data.get("stop_reason"):
             parts.append(f"stop={data['stop_reason']}")
+        # 用量：in 是没走缓存的部分，read/write 是缓存读和写。
+        # 三者相加才是真正的输入总量，单看 in 会低估。
+        if "input_tokens" in data:
+            parts.append(
+                f"in={data['input_tokens']} out={data['output_tokens']}"
+                f" cache={data['cache_read_tokens']}/{data['cache_write_tokens']}"
+                f" hit={data['cache_hit_ratio']}‰"
+            )
         if data.get("message"):
             parts.append(data["message"])
         return ("  " + "  ".join(parts)) if parts else ""

@@ -139,11 +139,13 @@ class Conversation:
             blocks = self.chat.blocks
             self.transcript.append(self.session_id, Message("assistant", blocks))
             stop = self.chat.stop_reason
-            # ttft 拆开记：总耗时里藏着它，第四层 prompt caching 前后对比要靠它。
+            # ttft 和用量都拆开记：总耗时里藏着 ttft，token 和缓存比例藏在 usage 里。
+            # 第四层 prompt caching 前后对比靠这几个数。usage 为空（中转没给）就只有前两项。
             self.store.end_span(
                 llm_span,
                 status="ok",
-                data={"stop_reason": stop, "ttft_ms": round(ttft * 1000) if ttft is not None else None},
+                data={"stop_reason": stop, "ttft_ms": round(ttft * 1000) if ttft is not None else None,
+                      **self.chat.usage},
             )
 
             if stop != "tool_use":

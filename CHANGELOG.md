@@ -2,6 +2,19 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-02：用量与缓存比例进 span
+
+- llm_request span 增加五个字段：input_tokens / output_tokens /
+  cache_read_tokens / cache_write_tokens / cache_hit_ratio（千分比）。
+  翻译在 adapter.py：usage_from_anthropic / usage_from_openai 翻成同一套键。
+  两家口径不同——Anthropic 的 input_tokens 不含缓存，OpenAI 的 prompt_tokens
+  是总量，要减掉 cached_tokens 才对齐，这个减法收在 adapter 里。
+- OpenAI 路径加 stream_options.include_usage：用量在 [DONE] 前最后一个 chunk，
+  且该 chunk 的 choices 为空，原来「choices 为空就跳过」会把它丢掉。
+- 实测中转透传这些字段。同一轮工具循环：第一圈 cache 0/0，第二圈
+  cache_read=192、hit=747‰——没写 cache_control 也有命中，第四层是稳住它
+  而不是从零打开。
+
 ## 2026-11-01（四）：第 2 层——工具循环
 
 - agent loop 本体落在 conversation.py：stop_reason == "tool_use" 时执行工具、

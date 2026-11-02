@@ -147,3 +147,60 @@ def tool_uses_from_acc(acc: dict[int, dict]) -> list[ToolUseBlock]:
         ToolUseBlock(id=slot["id"], name=slot["name"], input=json.loads(slot["arguments"] or "{}"))
         for _, slot in sorted(acc.items())
     ]
+
+
+def usage_from_anthropic(usage) -> dict:
+    """Anthropic 的 usage 对象 -> 统一的用量字典。
+
+    三个输入字段各算一块，互不重叠：
+        input_tokens        这次既没读缓存也没写缓存的部分
+        cache_write_tokens  这次新写进缓存的（cache_creation_input_tokens，约 1.25 倍价）
+        cache_read_tokens   这次从缓存读出来的（cache_read_input_tokens，约 0.1 倍价）
+    所以真正的输入总量是三者相加，不能只看 input_tokens——跑久了它只剩没缓存的
+    那一小截，其余全在 cache_read 里，单看会把用量低估一个数量级。
+
+    缓存字段要请求里放了 cache_control 才有数，没放就是 0，不是中转丢了。
+    getattr：中转不一定原样透传这些字段，缺了就当 0，不让一次调用崩掉。
+    """
+    return _usage(
+        input_tokens=getattr(usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        cache_read=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        cache_write=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+    )
+
+
+def usage_from_openai(usage) -> dict:
+    """OpenAI 的 usage 对象 -> 同一个用量字典。
+
+    和 Anthropic 的差别在于 prompt_tokens 是总量，缓存的部分已经算在里面，
+    所以要减掉 cached_tokens 和 cache_write_tokens 才对得上那边的 input_tokens。
+    缓存明细藏在 prompt_tokens_details 里，普通模型或中转可能整个不给。
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    cache_read = getattr(details, "cached_tokens", 0) or 0 if details else 0
+    cache_write = getattr(details, "cache_write_tokens", 0) or 0 if details else 0
+    prompt = getattr(usage, "prompt_tokens", 0) or 0
+    return _usage(
+        input_tokens=prompt - cache_read - cache_write,
+        output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        cache_read=cache_read,
+        cache_write=cache_write,
+    )
+
+
+def _usage(input_tokens: int, output_tokens: int, cache_read: int, cache_write: int) -> dict:
+    """两家翻完都进这里，保证字典的键一模一样。
+
+    cache_hit_ratio 用千分位整数而不是小数：回放时直接看「千分之几」比看
+    0.333 清楚，也避开浮点尾巴。分母是输入总量；一次请求什么都没读到
+    （理论上看不到）时给 0 而不是除零。
+    """
+    total_input = input_tokens + cache_read + cache_write
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+        "cache_hit_ratio": round(cache_read / total_input * 1000) if total_input else 0,
+    }

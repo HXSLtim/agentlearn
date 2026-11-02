@@ -36,6 +36,8 @@ from infrastructure.adapter import (
     tool_to_anthropic,
     tool_to_openai,
     tool_uses_from_acc,
+    usage_from_anthropic,
+    usage_from_openai,
 )
 from infrastructure.config import LLMConfig
 
@@ -60,6 +62,8 @@ class AnthropicChat:
         self.stop_reason: str | None = None
         # 流跑完之前这一轮的内容块也是空的，同样是读完 stream 再看。
         self.blocks: list = []
+        # 这一轮的用量，流跑完才有。中转不给时保持空字典，调用方要容忍缺字段。
+        self.usage: dict = {}
 
     def stream(self, history: list[Message], tools: list[Tool] | None = None):
         """逐个产出 (kind, text)。这是一个生成器，调用方用 for 循环来消费。
@@ -102,6 +106,9 @@ class AnthropicChat:
             # "tool_use" 表示模型想调工具——调用方的循环该执行工具再来一轮。
             final = msg.get_final_message()
             self.stop_reason = final.stop_reason
+            # 用量和结束原因一样，要等整条流读完。缓存比例也在这里面，
+            # 字段翻译在 adapter.usage_from_anthropic。
+            self.usage = usage_from_anthropic(final.usage)
             # SDK 的块是对象不是字典，model_dump() 转成字典再进 adapter。
             # thinking 的 signature 只在最终消息里，从这里落盘它才不会丢。
             self.blocks = [
@@ -123,6 +130,7 @@ class OpenAIChat:
         self.client = OpenAI(base_url=url, api_key=key)
         self.stop_reason: str | None = None
         self.blocks: list = []
+        self.usage: dict = {}
 
     def stream(self, history: list[Message], tools: list[Tool] | None = None):
         """逐个产出 (kind, text)。流跑完后看 self.stop_reason 和 self.blocks。"""
@@ -134,6 +142,9 @@ class OpenAIChat:
             # （工具结果各自一条 role="tool"），所以这里要摊平。
             "messages": [m for message in history for m in message_to_openai(message)],
             "stream": True,
+            # 不带这个，流里根本没有 usage。带了之后它出现在 [DONE] 前的最后一个
+            # chunk 上，而且那个 chunk 的 choices 是空的——下面不能把它当尾包丢掉。
+            "stream_options": {"include_usage": True},
         }
         if tools:
             params["tools"] = [tool_to_openai(tool) for tool in tools]
@@ -146,7 +157,11 @@ class OpenAIChat:
         tool_acc: dict[int, dict] = {}
         announced: set[int] = set()
         for chunk in msg:
-            # 有些兼容中转会发 choices 为空的 chunk（比如带用量的尾包），跳过。
+            # choices 为空有两种：中转的尾包，和带用量的最后一个 chunk。
+            # 后者是我们要的，先把用量拿走再跳过。中转不支持 include_usage 时
+            # 这个字段一直是 None，self.usage 就保持空字典。
+            if getattr(chunk, "usage", None):
+                self.usage = usage_from_openai(chunk.usage)
             if not chunk.choices:
                 continue
             # 流的单元是 chunk。一个 chunk 里思考和回答可能同时出现。

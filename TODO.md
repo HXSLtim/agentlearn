@@ -51,9 +51,10 @@ calculator + agent loop + tool_call span。
 - [ ] 思考块 signature 现在存空字符串：流式片段里没有它，只在最终消息里。
       **Anthropic 路径已从最终消息回填（第二层顺带解决）**；OpenAI 路径
       的 reasoning 不回传历史，signature 仍是空串，换会校验的接口前确认它不校验
-- [ ] token 用量没记进 span：Anthropic 路径 get_final_message().usage 现成可取；
-      OpenAI 路径要加 stream_options={"include_usage": true} 才有。
-      第四层（上下文管理）和评测都需要，届时补在 llm_request span 的 data 里
+- [ ] token 用量与缓存比例已记进 llm_request span（2026-11-02）：
+      input/output/cache_read/cache_write/cache_hit_ratio（千分比），
+      两家在 adapter 里翻成同一套键。实测中转透传，且没放 cache_control 也有命中
+      （第二圈 747‰）。还没做的是主动放断点把命中率稳住，那是第四层的事
 - [ ] SQLite 并发写：现在靠默认 busy_timeout（5 秒）扛——库级写锁，第二个写者
       等锁释放，超时抛 database is locked。四五个会话的写入量碰不到；
       并发真上来时连接加 `PRAGMA journal_mode=WAL`（读写互不挡），
