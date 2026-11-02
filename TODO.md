@@ -13,7 +13,7 @@ P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未
 
 - [x] 压缩预算按整份历史估算，已覆盖的前缀仍被算进去 ✅（2026-11-03）：`plan_cut` 改按「摘要 + covered 之后的尾部」决策。离线验证：covered=2 且尾部在预算内时不切割；covered=0 且全文超预算时仍切到 2。
 - [x] 压缩请求失败时退回全文，同时 system 仍带旧摘要，covered 段出现两遍 ✅（2026-11-03）：失败时沿用旧摘要和原 covered 边界，只返回未覆盖尾部；离线假 client 抛错验证不重复发送已覆盖原文，span 记 error。
-- [ ] trace 把 `purpose=compaction` 的成功 `llm_request` 也拿去配 assistant 正文，后面的回答整体错位。验收：压缩 span 不消费回答，主请求仍按顺序配对。依据：`server/src/application/trace_view.py` 的 `answers_for_requests` 只看 `llm_request` + `ok`。
+- [x] trace 把 `purpose=compaction` 的成功 `llm_request` 也拿去配 assistant 正文，后面的回答整体错位 ✅（2026-11-03）：共用配对函数识别 `purpose=compaction` 并返回空回答；web 的 dict data 与 TUI 的 JSON 字符串两种形状离线验证，主请求仍按顺序配对。
 - [ ] `tool_use` / `tool_approval` 已经 yield、工具结果还没落盘时客户端断开，JSONL 留下没有 `tool_result` 的 `tool_use`。验收：断连后每个已落盘 `tool_use` 都有配对结果，下一次请求能被协议接受。依据：`conversation.py` 工具循环先 yield 再 `run_tool`，`GeneratorExit` 只收审批、不补结果。
 - [ ] `turn(append_user=False)` 收到 `images` 时静默丢掉。验收：重试带图在创建 turn span 和写 JSONL 之前报错。依据：图片只在 `append_user` 分支扩展；web 层拒绝了组合，conversation 本身没有。
 - [ ] `append_memory` 只 `strip` 首尾，中间换行会把一条 remember 写成多行。验收：含换行的内容被拒绝或折成一条记录，`memory.md` 每次只多一行带来源前缀的记录。依据：`server/src/application/tools.py` 的 `append_memory`。

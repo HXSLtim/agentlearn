@@ -7,6 +7,8 @@ import TUI 包（会把 Textual 拖进 HTTP 服务）。两个界面共用的
 """
 from __future__ import annotations
 
+import json
+
 
 def answer_texts(messages) -> list[str]:
     """取出已落盘的 assistant 正文，按时间顺序排列。"""
@@ -21,11 +23,21 @@ def answers_for_requests(spans, answers: list[str]) -> dict[str, str]:
     """把成功的 LLM 请求和落盘的回答按发生顺序配对。
 
     error / running 请求不消费回答，否则一个半截请求会让后续回答整体错位。
+    compaction 请求也不消费回答——它生成的是派生摘要，不落 assistant 正文。
     """
     mapping: dict[str, str] = {}
     cursor = 0
     for span in spans:
         if span["name"] != "llm_request":
+            continue
+        data = span.get("data") or {}
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                data = {}
+        if isinstance(data, dict) and data.get("purpose") == "compaction":
+            mapping[span["span_id"]] = ""
             continue
         if span["status"] == "ok":
             mapping[span["span_id"]] = (
