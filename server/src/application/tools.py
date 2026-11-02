@@ -58,7 +58,8 @@ def append_memory(note: str, author: str = "用户", path: Path | None = None) -
     """
     target = path if path is not None else MEMORY_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
-    line = f"- [{author} {datetime.now().strftime('%Y-%m-%d %H:%M')}] {note.strip()}"
+    clean_note = " ".join(note.split())
+    line = f"- [{author} {datetime.now().strftime('%Y-%m-%d %H:%M')}] {clean_note}"
     # 文件可能没有结尾换行（模型 echo >> 时不会带）；先补一个再追加。
     existing = target.read_text(encoding="utf-8") if target.exists() else ""
     prefix = "" if not existing else "" if existing.endswith("\n") else "\n"
