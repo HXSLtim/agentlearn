@@ -19,15 +19,18 @@ job_status，等的时候可以干别的。轮询烧 MAX_TOOL_ROUNDS（每查一
 否掉的另一条路（事件注入：任务完成时像软中断一样把「job 好了」塞进
 圈界）要 turn 级的暂停/唤醒，是新架构；轮询式今天就能用，代价诚实。
 
-任务进程的账本只在内存（JOBS 字典）：server 重启后进程还活着但查不到
-了——输出文件还在 data/sandbox/jobs/<id>.log，bash 里能看。学习期接受，
-记在 TODO。
+任务账本有一份磁盘元数据（data/sandbox/jobs/<id>.json）：server 重启后
+按 PID + 进程启动 token 认领。token 对不上（PID 复用/系统重启）就报告
+不可接管，绝不按旧 PID 杀进程。
 """
+import json
 import os
 import subprocess
 import threading
+import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from application.sandbox import CHILD_ENV, SANDBOX
@@ -43,23 +46,132 @@ WAIT_MAX_SECONDS = 120
 # 内存里最多记多少个任务（含已结束的）。到了就清最老的已结束任务；
 # 全在跑就先不清。防长寿命进程把账本养到无限大。
 MAX_REMEMBERED_JOBS = 50
+EXIT_UNKNOWN = "unknown"
 
 
 @dataclass
 class Job:
-    """一个后台任务：进程句柄 + 输出文件路径 + 结果（结束时回填）。"""
+    """一个后台任务：进程句柄或重启后认领的 PID + 输出文件路径 + 结果。"""
 
     id: str
     command: str
-    proc: subprocess.Popen
+    proc: subprocess.Popen | None
+    pid: int
     log_path: Path
-    # poll() 谁先调谁回填，纯缓存；状态真源是 proc.poll()。
-    exit_code: int | None = field(default=None)
+    identity: str | None = None
+    started_at: str | None = None
+    # owned 进程是 int；重启后只知道它结束、拿不到退出码时是 EXIT_UNKNOWN。
+    exit_code: int | str | None = None
+    note: str = ""
 
 
 # 账本 + 锁：web 的同步端点一线程一请求，两个请求可能同时查/停同一任务。
 _lock = threading.Lock()
 JOBS: dict[str, Job] = {}
+
+
+def _metadata_path(job_id: str) -> Path:
+    return JOBS_DIR / f"{job_id}.json"
+
+
+def _process_identity(pid: int) -> str | None:
+    """进程启动 token + 进程组，用来防重启后的 PID 复用。"""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=,pgid=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    parts = result.stdout.strip().split()
+    if len(parts) < 2:
+        return None
+    return f"{' '.join(parts[:-1])}:{parts[-1]}"
+
+
+def _write_metadata(job: Job) -> None:
+    """原子写任务元数据；崩溃时要么旧文件在，要么新文件完整。"""
+    data = {
+        "version": 1,
+        "id": job.id,
+        "command": job.command,
+        "pid": job.pid,
+        "identity": job.identity,
+        "log_path": str(job.log_path),
+        "started_at": job.started_at or datetime.now(
+            timezone.utc
+        ).isoformat(timespec="seconds"),
+        "exit_code": job.exit_code,
+    }
+    path = _metadata_path(job.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporary.replace(path)
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def restore_jobs() -> None:
+    """server 启动时从磁盘账本认领旧任务。
+
+    只在进程启动 token 完全一致时恢复 running；否则报告不可接管。
+    这不是安全边界，只是防止 PID 复用后 stop_job 杀到无关进程。
+    """
+    if not JOBS_DIR.exists():
+        return
+    with _lock:
+        for path in sorted(JOBS_DIR.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                job_id = str(data["id"])
+                command = str(data["command"])
+                pid = int(data["pid"])
+                identity = str(data.get("identity") or "")
+                exit_code = data.get("exit_code")
+                started_at = str(data.get("started_at") or "") or None
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                continue
+            if job_id in JOBS:
+                continue
+            log_path = JOBS_DIR / f"{job_id}.log"
+            if exit_code is not None:
+                JOBS[job_id] = Job(
+                    id=job_id, command=command, proc=None, pid=pid,
+                    log_path=log_path, identity=identity or None,
+                    exit_code=exit_code,
+                    started_at=started_at,
+                )
+                continue
+            current_identity = _process_identity(pid)
+            if current_identity is not None and current_identity == identity:
+                JOBS[job_id] = Job(
+                    id=job_id, command=command, proc=None, pid=pid,
+                    log_path=log_path, identity=current_identity,
+                    started_at=started_at,
+                )
+            else:
+                JOBS[job_id] = Job(
+                    id=job_id, command=command, proc=None, pid=pid,
+                    log_path=log_path, identity=identity or None,
+                    exit_code=EXIT_UNKNOWN,
+                    note="PID 不再是原任务进程，不能接管",
+                    started_at=started_at,
+                )
 
 
 def _prune_locked() -> None:
@@ -71,12 +183,22 @@ def _prune_locked() -> None:
         JOBS.pop(job.id, None)
 
 
-def _poll(job: Job) -> int | None:
+def _poll(job: Job) -> int | str | None:
     """进程结束了吗。结束则回填 exit_code 并返回它，没结束返回 None。"""
     if job.exit_code is None:
-        code = job.proc.poll()
-        if code is not None:
-            job.exit_code = code
+        if job.proc is not None:
+            code = job.proc.poll()
+            if code is not None:
+                job.exit_code = code
+                _write_metadata(job)
+        elif job.identity is not None:
+            current_identity = _process_identity(job.pid)
+            if current_identity != job.identity and not (
+                current_identity is None and _pid_alive(job.pid)
+            ):
+                job.exit_code = EXIT_UNKNOWN
+                job.note = "server 重启后进程已退出，退出码不可得"
+                _write_metadata(job)
     return job.exit_code
 
 
@@ -119,8 +241,16 @@ def start_job(command: str) -> str:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    identity = _process_identity(proc.pid)
     with _lock:
-        JOBS[job_id] = Job(id=job_id, command=command, proc=proc, log_path=log_path)
+        job = Job(
+            id=job_id, command=command, proc=proc, pid=proc.pid,
+            log_path=log_path, identity=identity,
+            started_at=started_at,
+        )
+        JOBS[job_id] = job
+        _write_metadata(job)
         _prune_locked()
     return (
         f"任务已启动：{job_id}（{command}）。\n"
@@ -134,6 +264,8 @@ def _describe(job: Job) -> str:
     code = _poll(job)
     if code is None:
         state = "还在跑"
+    elif code == EXIT_UNKNOWN:
+        state = f"不可接管（{job.note or '退出码不可得'}）"
     else:
         state = f"已结束（exit {code}）"
     head = f"任务 {job.id}（{job.command}）{state}。输出：\n"
@@ -149,12 +281,21 @@ def wait_job(job_id: str, seconds: float = 30) -> str:
     """等一个任务结束（最多 seconds 秒，上限 120）。"""
     seconds = max(0.5, min(float(seconds), WAIT_MAX_SECONDS))
     job = _find(job_id)
-    try:
-        job.proc.wait(timeout=seconds)
-    except subprocess.TimeoutExpired:
-        # 超时不是错误：任务还在跑，如实报告目前的输出，模型自己决定
-        # 再等一次还是先去干别的。
-        return f"等了 {seconds:g} 秒还没结束。{_describe(job)}"
+    if job.proc is None:
+        deadline = time.monotonic() + seconds
+        while _poll(job) is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if _poll(job) is None:
+            # 超时不是错误：任务还在跑，如实报告目前的输出，模型自己决定
+            # 再等一次还是先去干别的。
+            return f"等了 {seconds:g} 秒还没结束。{_describe(job)}"
+    else:
+        try:
+            job.proc.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            # 超时不是错误：任务还在跑，如实报告目前的输出，模型自己决定
+            # 再等一次还是先去干别的。
+            return f"等了 {seconds:g} 秒还没结束。{_describe(job)}"
     return _describe(job)
 
 
@@ -167,14 +308,18 @@ def stop_job(job_id: str) -> str:
     # 会变孤儿继续跑（bash 工具超时路径就有这个坑，这里修掉）。
     import signal
     try:
-        os.killpg(job.proc.pid, signal.SIGTERM)
+        os.killpg(job.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    try:
-        job.proc.wait(timeout=3)
-    except subprocess.TimeoutExpired:
+    deadline = time.monotonic() + 3
+    while _poll(job) is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if _poll(job) is None:
         try:
-            os.killpg(job.proc.pid, signal.SIGKILL)
+            os.killpg(job.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    deadline = time.monotonic() + 3
+    while _poll(job) is None and time.monotonic() < deadline:
+        time.sleep(0.05)
     return f"任务 {job.id} 已停止。{_describe(job)}"

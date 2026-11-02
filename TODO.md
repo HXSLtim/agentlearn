@@ -21,7 +21,7 @@ P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未
 
 眼睛、耐心、MCP：
 
-- [ ] 任务账本落盘，并在启动时认领 `data/sandbox/jobs/` 里还活着的进程。验收：重启后 `job_status` 能报 running / finished / 不可接管，running 仍能被 `stop_job` 按进程组杀掉。依据：`jobs.py` 的 `JOBS` 只在内存。
+- [x] 任务账本落盘，并在启动时认领 `data/sandbox/jobs/` 里还活着的进程 ✅（2026-11-03）：每个任务写 JSON 元数据；desktop lifespan 按 PID + 进程启动 token 认领，token 不一致报不可接管。离线验证 running 重启后仍可 stop、finished 保留 exit、伪造 token 拒绝接管。
 - [ ] 后台任务加墙上寿命，超时杀整个进程组。验收：超时后状态不再是 running，log 或 notices 留有 lifetime 原因。依据：`jobs.py` 只有 `MAX_REMEMBERED_JOBS`，没有寿命。
 - [ ] desktop 渲染用户图片和 `tool_result` 上的图。验收：截图工具的 JPEG 在界面里看得见，不靠手开 JSONL。依据：`app/src/main.ts` 的 `parseServerMessages` 只处理 text / thinking / tool_use / tool_result 文本；SSE 仍只给 `has_image`。
 - [ ] MCP `tools/call` 的 image 内容块转成 `ImageBlock`，不要在客户端里丢掉。验收：带图的 MCP 结果进 JSONL，下一圈请求看得到图，span 只记 `image_bytes`。依据：`mcp_client.py` 的 `call` 只拼 `type=text`；`tools.py` 对 MCP 固定返回 `image=None`。

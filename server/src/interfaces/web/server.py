@@ -71,6 +71,7 @@ from pydantic import BaseModel
 from domain.message import ImageBlock
 from application.approval import APPROVAL_MODES, ApprovalBroker
 from application.conversation import Conversation, TurnCancelled
+from application.jobs import restore_jobs
 from application.tools import (
     REGISTRY,
     SANDBOX,
@@ -124,6 +125,7 @@ _proactivity: ProactivityRunner | None = None
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     global _proactivity
+    restore_jobs()
     _proactivity = ProactivityRunner(load_triggers(), _run_unattended)
     _proactivity.start()
     yield
