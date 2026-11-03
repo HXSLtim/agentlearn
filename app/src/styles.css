@@ -2661,8 +2661,13 @@ kbd {
   gap: 6px;
 }
 
+.resume-session-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .resume-view-toggle button,
-#resume-archive {
+.resume-session-actions button {
   height: 28px;
   padding: 0 10px;
   color: var(--green);
@@ -2673,6 +2678,10 @@ kbd {
   letter-spacing: 0.09em;
 }
 
+.resume-session-actions button {
+  min-width: 78px;
+}
+
 .resume-view-toggle button[aria-pressed="true"] {
   color: var(--void);
   background: var(--green);
@@ -2680,15 +2689,83 @@ kbd {
 
 .resume-view-toggle button:hover,
 .resume-view-toggle button:focus-visible,
-#resume-archive:hover:not(:disabled),
-#resume-archive:focus-visible {
+.resume-session-actions button:hover:not(:disabled),
+.resume-session-actions button:focus-visible {
   color: var(--void);
   background: var(--green);
 }
 
-#resume-archive:disabled {
+#resume-delete {
+  color: var(--red);
+  border-color: rgba(255, 96, 77, 0.5);
+}
+
+#resume-delete:hover:not(:disabled),
+#resume-delete:focus-visible {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.resume-session-actions button:disabled {
   color: var(--dim);
   cursor: not-allowed;
+}
+
+.resume-delete-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 10px 22px 12px;
+  border-bottom: 1px solid rgba(255, 96, 77, 0.35);
+  background: var(--red-soft);
+}
+
+.resume-delete-confirm[hidden] {
+  display: none;
+}
+
+.resume-delete-confirm p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.resume-delete-confirm strong {
+  color: var(--red);
+}
+
+.resume-delete-confirm > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.resume-delete-confirm button {
+  height: 28px;
+  padding: 0 10px;
+  color: var(--red);
+  background: transparent;
+  border: 1px solid rgba(255, 96, 77, 0.5);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
+
+.resume-delete-confirm button:hover,
+.resume-delete-confirm button:focus-visible {
+  color: var(--red);
+  background: rgba(255, 96, 77, 0.16);
+}
+
+#resume-delete-confirm-button {
+  color: var(--void);
+  background: var(--red);
+}
+
+#resume-delete-confirm-button:hover,
+#resume-delete-confirm-button:focus-visible {
+  color: var(--red);
+  background: var(--red-soft);
 }
 
 .resume-search-field {
@@ -3667,6 +3744,7 @@ kbd {
   .resume-index-line,
   .resume-summary,
   .resume-actions,
+  .resume-delete-confirm,
   .resume-search-field,
   .resume-rename-form,
   .resume-item {
@@ -3685,8 +3763,14 @@ kbd {
   }
 
   .resume-view-toggle,
-  #resume-archive {
+  .resume-session-actions,
+  .resume-session-actions button {
     width: 100%;
+  }
+
+  .resume-session-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 
   .resume-index-line span:last-child {

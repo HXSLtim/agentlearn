@@ -461,6 +461,17 @@ const resumeArchiveViewButton = requireElement<HTMLButtonElement>(
   "#resume-archive-view",
 );
 const resumeArchiveButton = requireElement<HTMLButtonElement>("#resume-archive");
+const resumeDeleteButton = requireElement<HTMLButtonElement>("#resume-delete");
+const resumeDeleteConfirm = requireElement<HTMLElement>(
+  "#resume-delete-confirm",
+);
+const resumeDeleteTitle = requireElement<HTMLElement>("#resume-delete-title");
+const resumeDeleteCancelButton = requireElement<HTMLButtonElement>(
+  "#resume-delete-cancel",
+);
+const resumeDeleteConfirmButton = requireElement<HTMLButtonElement>(
+  "#resume-delete-confirm-button",
+);
 const resumeRenameForm = requireElement<HTMLFormElement>("#resume-rename-form");
 const resumeRenameInput = requireElement<HTMLInputElement>("#resume-rename-input");
 const resumeRenameCancel = requireElement<HTMLButtonElement>("#resume-rename-cancel");
@@ -495,6 +506,7 @@ let resumeArchived = false;
 let contentHits = new Map<string, SessionSearchHit>();
 let contentSearchSequence = 0;
 let renameThreadId = "";
+let deleteThreadId = "";
 let traceSpans: TraceSpan[] = [];
 let traceAnswers: Record<string, string> = {};
 let traceSelectedSpanId = "";
@@ -2562,6 +2574,9 @@ function renderResumeList(): void {
     activeThread().sessionId,
   )}`;
   const selectedThread = resumeMatches[resumeSelection];
+  if (deleteThreadId && selectedThread?.id !== deleteThreadId) {
+    cancelResumeDelete();
+  }
   resumeRenameButton.disabled = !selectedThread?.sessionId;
   resumePinButton.disabled = !selectedThread?.sessionId;
   resumePinButton.textContent = selectedThread?.pinned ? "UNPIN" : "PIN";
@@ -2569,6 +2584,7 @@ function renderResumeList(): void {
   resumeArchiveButton.textContent = selectedThread?.archived
     ? "UNARCHIVE"
     : "ARCHIVE";
+  resumeDeleteButton.disabled = !selectedThread?.sessionId;
   resumeList.innerHTML = resumeMatches
     .map((thread, index) => {
       const turns =
@@ -2838,9 +2854,78 @@ async function toggleResumeArchive(): Promise<void> {
   }
 }
 
+function cancelResumeDelete(): void {
+  deleteThreadId = "";
+  resumeDeleteConfirm.hidden = true;
+  resumeDeleteTitle.textContent = "";
+  resumeDeleteButton.disabled = false;
+}
+
+function requestResumeDelete(): void {
+  const thread = resumeMatches[resumeSelection];
+  if (!thread?.sessionId) {
+    showToast("当前会话还没有 server id，不能删除");
+    return;
+  }
+  deleteThreadId = thread.id;
+  resumeDeleteTitle.textContent = thread.title;
+  resumeDeleteConfirm.hidden = false;
+  resumeDeleteConfirmButton.focus();
+}
+
+async function confirmResumeDelete(): Promise<void> {
+  const thread = state.threads.find((item) => item.id === deleteThreadId);
+  if (!thread?.sessionId) {
+    cancelResumeDelete();
+    return;
+  }
+  resumeDeleteButton.disabled = true;
+  resumeDeleteConfirmButton.disabled = true;
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
+      { method: "DELETE" },
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    state.threads = state.threads.filter((item) => item.id !== thread.id);
+    if (state.activeThreadId === thread.id) {
+      const nextThread = state.threads.find((item) => !item.archived);
+      if (nextThread) {
+        state.activeThreadId = nextThread.id;
+      } else {
+        const created = createThread();
+        state.threads.push(created);
+        state.activeThreadId = created.id;
+      }
+    }
+    cancelResumeDelete();
+    persistState();
+    filterResumeThreads();
+    resumeSelection = Math.min(
+      resumeSelection,
+      Math.max(0, resumeMatches.length - 1),
+    );
+    renderResumeList();
+    renderEverything();
+    showToast("会话已永久删除");
+  } catch (error) {
+    showToast(
+      `永久删除失败：${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    resumeDeleteButton.disabled = false;
+    resumeDeleteConfirmButton.disabled = false;
+  }
+}
+
 function closeResume(): void {
   resumeModal.hidden = true;
   cancelResumeRename();
+  cancelResumeDelete();
 }
 
 function moveResumeSelection(delta: number): void {
@@ -3542,6 +3627,11 @@ resumeArchiveViewButton.addEventListener("click", () => {
 });
 resumeArchiveButton.addEventListener("click", () => {
   void toggleResumeArchive();
+});
+resumeDeleteButton.addEventListener("click", requestResumeDelete);
+resumeDeleteCancelButton.addEventListener("click", cancelResumeDelete);
+resumeDeleteConfirmButton.addEventListener("click", () => {
+  void confirmResumeDelete();
 });
 resumeRenameCancel.addEventListener("click", cancelResumeRename);
 resumeRenameForm.addEventListener("submit", (event) => {

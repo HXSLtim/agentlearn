@@ -521,7 +521,22 @@
               ARCHIVED
             </button>
           </div>
-          <button id="resume-archive" type="button">ARCHIVE</button>
+          <div class="resume-session-actions">
+            <button id="resume-archive" type="button">ARCHIVE</button>
+            <button id="resume-delete" type="button">DELETE</button>
+          </div>
+        </div>
+        <div class="resume-delete-confirm" id="resume-delete-confirm" hidden>
+          <p>
+            永久删除 <strong id="resume-delete-title"></strong>？
+            JSONL、trace 和摘要会一起消失，不可恢复。
+          </p>
+          <div>
+            <button id="resume-delete-cancel" type="button">CANCEL</button>
+            <button id="resume-delete-confirm-button" type="button">
+              DELETE FOREVER
+            </button>
+          </div>
         </div>
         <label class="resume-search-field">
           <span>FILTER INDEX</span>

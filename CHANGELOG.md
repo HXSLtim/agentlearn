@@ -27,6 +27,8 @@
   `pinned`，左侧会话列表与恢复列表均 pin 优先于最近活动。
 - 恢复框增加 ACTIVE / ARCHIVED 视图：归档走同一 PATCH 的
   `archived`，默认列表移除会话；归档视图可直接续接正文，也可恢复。
+- 恢复框提供独立归档与永久删除动作：删除先展示不可恢复警告，
+  二次确认后才调用 `DELETE /sessions/{id}` 并清理本地索引。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
