@@ -317,6 +317,19 @@ def build_chat(config: LLMConfig) -> AnthropicChat | OpenAIChat:
     raise ValueError(f"不认识的 provider: {config.provider}")
 
 
+def list_models(config: LLMConfig) -> list[str]:
+    """向当前 provider 读取可用 model id；中转不支持时由调用方降级。"""
+    chat = build_chat(config)
+    models: list[str] = []
+    seen: set[str] = set()
+    for model in chat.client.models.list():
+        model_id = model.id if hasattr(model, "id") else str(model)
+        if model_id not in seen:
+            seen.add(model_id)
+            models.append(model_id)
+    return models
+
+
 def merge_fragment(blocks: list[TextBlock | ThinkingBlock], kind: str, text: str) -> None:
     """把一个流式片段并进块列表，就地修改，不返回新列表。
 

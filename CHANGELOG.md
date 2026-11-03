@@ -54,6 +54,9 @@
   纯文本粘贴保持浏览器默认行为。
 - TUI 新增 `/attach <path>`：白名单读取本地图片并挂到下一条 user 消息；
   支持 image-only 空提交，带图只走 queue，retry 不携带新图。
+- 新增只读 `GET /models`：复用当前 provider/base_url 调用上游
+  `models.list()`，只返回模型 ID；desktop 设置页的 MODEL ID 改为下拉，
+  保存后按新配置刷新列表，列表失败时保留当前模型并显示错误。
 - 两端新增 `/find [关键词]` 会话内查找：desktop 用当前 active thread 的
   已渲染消息索引弹出查找框并滚动高亮命中的 message；TUI 用当前时间线
   的 UserMessage / AssistantMessage 原件过滤、定位与高亮。查找不请求

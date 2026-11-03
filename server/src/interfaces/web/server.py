@@ -43,6 +43,10 @@ POST /chat
 GET /settings
     返回可展示的模型设置和密钥来源，不包含真实密钥。
 
+GET /models
+    读取当前 provider/base_url 暴露的模型 ID；只做设置页下拉的数据源，
+    不回显密钥。中转没实现 models.list 时返回 502，前端保留当前模型。
+
 PUT /settings
     写入 config.ini 的 [llm] 已知键；api_key 为空表示保留原值。
     保存后清掉配置缓存，下一轮模型请求使用新配置。
@@ -98,6 +102,7 @@ from infrastructure.config import (
     save_settings,
 )
 from infrastructure.llm import build_chat
+from infrastructure.llm import list_models
 from infrastructure.store import Store
 from infrastructure.transcript import Transcript
 
@@ -324,6 +329,20 @@ class SessionForkRequest(BaseModel):
 def get_settings():
     """返回可展示的设置；真实密钥永远不出现在响应里。"""
     return asdict(load_settings())
+
+
+@app.get("/models")
+def get_models():
+    """读取当前 provider/base_url 暴露的模型列表，只代理 ID，不回显密钥。"""
+    config = get_config()
+    try:
+        models = list_models(config)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"模型列表接口不可用：{exc}",
+        ) from exc
+    return {"provider": config.provider, "models": models}
 
 
 @app.put("/settings")

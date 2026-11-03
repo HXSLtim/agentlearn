@@ -133,6 +133,11 @@ interface SettingsPayload {
   api_key: string | null;
 }
 
+interface ModelListResponse {
+  provider: "anthropic" | "openai";
+  models: string[];
+}
+
 interface ChatEvent {
   kind:
     | "thinking"
@@ -507,7 +512,10 @@ const settingsCloseButton = requireElement<HTMLButtonElement>("#settings-close")
 const settingsCancelButton = requireElement<HTMLButtonElement>("#settings-cancel");
 const settingsForm = requireElement<HTMLFormElement>("#settings-form");
 const settingsProvider = requireElement<HTMLSelectElement>("#settings-provider");
-const settingsModel = requireElement<HTMLInputElement>("#settings-model");
+const settingsModel = requireElement<HTMLSelectElement>("#settings-model");
+const settingsModelCount = requireElement<HTMLElement>(
+  "#settings-model-count",
+);
 const settingsBaseUrl = requireElement<HTMLInputElement>("#settings-base-url");
 const settingsMaxTokens = requireElement<HTMLInputElement>("#settings-max-tokens");
 const settingsEffort = requireElement<HTMLSelectElement>("#settings-effort");
@@ -593,6 +601,7 @@ const workspaceDiffList = requireElement<HTMLElement>("#workspace-diff-list");
 let state = loadState();
 let currentEffort: SettingsSnapshot["effort"] = "";
 let currentPricing: SettingsSnapshot["pricing"] = null;
+let currentModelOptions: string[] = [];
 let approvalModeSync: Promise<void> = Promise.resolve();
 const autoApprovedApprovalIds = new Set<string>();
 let toastTimer: number | undefined;
@@ -2045,11 +2054,31 @@ function setSettingsStatus(
   settingsStatus.className = `settings-status is-${tone}`;
 }
 
+function renderModelOptions(models: string[], selectedModel: string): void {
+  const options = [...models];
+  if (selectedModel && !options.includes(selectedModel)) {
+    options.unshift(selectedModel);
+  }
+  settingsModel.replaceChildren(
+    ...options.map((modelId) => {
+      const option = document.createElement("option");
+      option.value = modelId;
+      option.textContent = modelId;
+      return option;
+    }),
+  );
+  settingsModel.value = selectedModel;
+  currentModelOptions = options;
+  settingsModelCount.textContent = models.length
+    ? `${models.length} MODELS`
+    : "NO MODELS RETURNED";
+}
+
 function applySettings(snapshot: SettingsSnapshot): void {
   currentEffort = snapshot.effort;
   currentPricing = snapshot.pricing;
   settingsProvider.value = snapshot.provider;
-  settingsModel.value = snapshot.model_id;
+  renderModelOptions(currentModelOptions, snapshot.model_id);
   settingsBaseUrl.value = snapshot.base_url;
   settingsMaxTokens.value = String(snapshot.max_tokens);
   settingsEffort.value = snapshot.effort;
@@ -2059,6 +2088,35 @@ function applySettings(snapshot: SettingsSnapshot): void {
     : "输入 API Key，或写 ${ENV_VAR}";
   settingsKeySource.textContent = `当前密钥：${snapshot.api_key_source} · 留空不改`;
   runEffort.textContent = effortLabel(currentEffort);
+}
+
+async function loadModelOptions(
+  selectedModel: string,
+  loadedLabel = "配置已读取",
+): Promise<void> {
+  settingsModel.disabled = true;
+  settingsModelCount.textContent = "READING MODELS…";
+  renderModelOptions([selectedModel], selectedModel);
+  try {
+    const response = await fetch(`${API_BASE}/models`);
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const parsed = (await response.json()) as ModelListResponse;
+    renderModelOptions(parsed.models, selectedModel);
+    setSettingsStatus(
+      `${loadedLabel}；模型列表 ${parsed.models.length} 个可选项。`,
+      "ok",
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    renderModelOptions([selectedModel], selectedModel);
+    settingsModelCount.textContent = "MODEL LIST UNAVAILABLE";
+    setSettingsStatus(`${loadedLabel}；模型列表不可用：${message}`, "error");
+  } finally {
+    settingsModel.disabled = false;
+  }
 }
 
 function setSettingsBusy(busy: boolean): void {
@@ -2084,7 +2142,7 @@ async function loadSettings(): Promise<void> {
     applySettings(snapshot);
     setSettingsStatus("配置已读取，修改后保存即可生效。", "ok");
     settingsModel.focus();
-    settingsModel.select();
+    await loadModelOptions(snapshot.model_id);
   } catch (error) {
     const message =
       error instanceof TypeError
@@ -2128,6 +2186,7 @@ async function saveSettings(): Promise<void> {
     return;
   }
   const apiKey = settingsApiKey.value.trim();
+  let savedModelId = "";
   const payload: SettingsPayload = {
     provider: settingsProvider.value,
     base_url: settingsBaseUrl.value.trim(),
@@ -2149,6 +2208,7 @@ async function saveSettings(): Promise<void> {
     }
     const snapshot = (await response.json()) as SettingsSnapshot;
     applySettings(snapshot);
+    savedModelId = snapshot.model_id;
     setSettingsStatus("已保存；下一次模型请求使用新配置。", "ok");
     showToast("模型设置已保存，下一轮生效");
   } catch (error) {
@@ -2158,6 +2218,9 @@ async function saveSettings(): Promise<void> {
     );
   } finally {
     setSettingsBusy(false);
+  }
+  if (savedModelId) {
+    await loadModelOptions(savedModelId, "配置已保存");
   }
 }
 
@@ -3782,7 +3845,7 @@ async function refreshEffort(): Promise<void> {
     const snapshot = (await response.json()) as SettingsSnapshot;
     currentEffort = snapshot.effort;
     currentPricing = snapshot.pricing;
-    settingsModel.value = snapshot.model_id;
+    renderModelOptions(currentModelOptions, snapshot.model_id);
     runEffort.textContent = effortLabel(currentEffort);
     renderRunLedger();
   } catch {
