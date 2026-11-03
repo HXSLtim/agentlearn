@@ -76,6 +76,7 @@ interface Thread {
   approvalMode: ApprovalMode;
   steeringMode: SteeringMode;
   model: string;
+  pinned: boolean;
   serverTurns?: number;
   runStartedAt?: number;
   stopping?: boolean;
@@ -151,6 +152,7 @@ interface ServerSession {
   updated_at: string;
   turns: number;
   stop_reason: string;
+  pinned: boolean;
 }
 
 interface SessionSearchHit {
@@ -449,6 +451,7 @@ const resumeList = requireElement<HTMLElement>("#resume-list");
 const resumeSummary = requireElement<HTMLElement>("#resume-summary");
 const resumeSearch = requireElement<HTMLInputElement>("#resume-search");
 const resumeRenameButton = requireElement<HTMLButtonElement>("#resume-rename");
+const resumePinButton = requireElement<HTMLButtonElement>("#resume-pin");
 const resumeRenameForm = requireElement<HTMLFormElement>("#resume-rename-form");
 const resumeRenameInput = requireElement<HTMLInputElement>("#resume-rename-input");
 const resumeRenameCancel = requireElement<HTMLButtonElement>("#resume-rename-cancel");
@@ -512,6 +515,7 @@ function createThread(): Thread {
     approvalMode: "approve",
     steeringMode: "queue",
     model: "",
+    pinned: false,
     messagesLoaded: true,
     messages: [],
   };
@@ -593,6 +597,7 @@ function loadState(): PersistedState {
               ? (thread.steeringMode as SteeringMode)
               : "queue",
           model: typeof thread.model === "string" ? thread.model : "",
+          pinned: thread.pinned === true,
           serverTurns:
             typeof thread.serverTurns === "number"
               ? thread.serverTurns
@@ -732,6 +737,7 @@ function mergeServerSessions(sessions: ServerSession[]): void {
     }
     thread.title = session.title || thread.title || "未命名运行";
     thread.model = session.model || thread.model;
+    thread.pinned = session.pinned === true;
     thread.serverTurns = session.turns;
     thread.stopReason = session.stop_reason || thread.stopReason;
     thread.createdAt = parseServerTime(session.created_at);
@@ -947,7 +953,9 @@ function setStatusLight(element: HTMLElement, status: string): void {
 }
 
 function renderThreadList(): void {
-  const sorted = [...state.threads].sort((a, b) => b.updatedAt - a.updatedAt);
+  const sorted = [...state.threads].sort(
+    (a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
+  );
   threadCount.textContent = String(sorted.length);
   threadList.innerHTML = sorted
     .map((thread) => {
@@ -968,7 +976,7 @@ function renderThreadList(): void {
           <span class="thread-marker ${statusClass}" aria-hidden="true"></span>
           <span class="thread-copy">
             <strong>${escapeHtml(thread.title)}</strong>
-            <small><b class="thread-state ${statusClass}">${status}</b> · ${relativeTime(thread.updatedAt)} · ${messageCount} turns</small>
+            <small><b class="thread-state ${statusClass}">${status}</b> · ${thread.pinned ? "PIN · " : ""}${relativeTime(thread.updatedAt)} · ${messageCount} turns</small>
           </span>
           <span class="thread-badge">${badge}</span>
         </button>
@@ -2496,7 +2504,9 @@ function findResumeThread(argument: string): Thread | null {
 
 function filterResumeThreads(): void {
   const query = resumeQuery.trim().toLowerCase();
-  const all = [...state.threads].sort((a, b) => b.updatedAt - a.updatedAt);
+  const all = [...state.threads].sort(
+    (a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
+  );
   const contentMatchIds = new Set(contentHits.keys());
   resumeMatches = query
     ? all.filter(
@@ -2520,7 +2530,10 @@ function renderResumeList(): void {
   resumeSummary.textContent = `${resumeMatches.length} 个会话 · 正文命中 ${contentHits.size} · 当前 ${shortSession(
     activeThread().sessionId,
   )}`;
-  resumeRenameButton.disabled = !resumeMatches[resumeSelection]?.sessionId;
+  const selectedThread = resumeMatches[resumeSelection];
+  resumeRenameButton.disabled = !selectedThread?.sessionId;
+  resumePinButton.disabled = !selectedThread?.sessionId;
+  resumePinButton.textContent = selectedThread?.pinned ? "UNPIN" : "PIN";
   resumeList.innerHTML = resumeMatches
     .map((thread, index) => {
       const turns =
@@ -2542,7 +2555,7 @@ function renderResumeList(): void {
           <span class="resume-item-turns">${turns} TURNS</span>
           ${current ? '<span class="resume-current">CURRENT</span>' : ""}
           <strong>${escapeHtml(thread.title)}</strong>
-          <small>${escapeHtml(thread.model || "model unknown")} · ${escapeHtml(
+          <small>${thread.pinned ? "PIN · " : ""}${escapeHtml(thread.model || "model unknown")} · ${escapeHtml(
             thread.stopReason || "no completed run",
           )}</small>
           ${
@@ -2672,6 +2685,47 @@ async function saveResumeRename(): Promise<void> {
     );
   } finally {
     resumeRenameButton.disabled = false;
+  }
+}
+
+async function toggleResumePin(): Promise<void> {
+  const thread = resumeMatches[resumeSelection];
+  if (!thread?.sessionId) {
+    showToast("当前会话还没有 server id，不能 pin");
+    return;
+  }
+  resumePinButton.disabled = true;
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: !thread.pinned }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const updated = (await response.json()) as ServerSession;
+    thread.pinned = updated.pinned === true;
+    persistState();
+    filterResumeThreads();
+    resumeSelection = Math.max(
+      0,
+      resumeMatches.findIndex((item) => item.id === thread.id),
+    );
+    renderResumeList();
+    renderEverything();
+    showToast(thread.pinned ? "会话已 pin" : "会话已取消 pin");
+  } catch (error) {
+    showToast(
+      `pin 状态更新失败：${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    resumePinButton.disabled = false;
   }
 }
 
@@ -3368,6 +3422,9 @@ settingsModal.addEventListener("click", (event) => {
 });
 resumeCloseButton.addEventListener("click", closeResume);
 resumeRenameButton.addEventListener("click", startResumeRename);
+resumePinButton.addEventListener("click", () => {
+  void toggleResumePin();
+});
 resumeRenameCancel.addEventListener("click", cancelResumeRename);
 resumeRenameForm.addEventListener("submit", (event) => {
   event.preventDefault();

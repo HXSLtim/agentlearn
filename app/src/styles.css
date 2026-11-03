@@ -2589,7 +2589,8 @@ kbd {
   gap: 8px;
 }
 
-#resume-rename {
+#resume-rename,
+#resume-pin {
   height: 30px;
   padding: 0 10px;
   color: var(--green);
@@ -2601,12 +2602,15 @@ kbd {
 }
 
 #resume-rename:hover:not(:disabled),
-#resume-rename:focus-visible {
+#resume-rename:focus-visible,
+#resume-pin:hover:not(:disabled),
+#resume-pin:focus-visible {
   color: var(--void);
   background: var(--green);
 }
 
-#resume-rename:disabled {
+#resume-rename:disabled,
+#resume-pin:disabled {
   color: var(--dim);
   cursor: not-allowed;
 }
