@@ -88,6 +88,7 @@ from application.proactivity import ProactivityRunner, UNATTENDED_MAX_TOOL_ROUND
 from application.session_manager import MODES, SessionManager
 from application.trace_view import answers_for_requests, answer_texts
 from application.workspace import WorkspaceError, changed_files
+from application.workspace import complete_paths
 from infrastructure.config import (
     LLMConfig,
     SettingsValues,
@@ -362,6 +363,17 @@ def get_workspace_diff(include_untracked: bool = False):
     """只读列出 Git 工作区变更文件，供 desktop diff 工作台使用。"""
     try:
         return changed_files(include_untracked=include_untracked)
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/workspace/paths")
+def get_workspace_paths(q: str = "", limit: int = 50):
+    """给 desktop `@file` 补全路径名；不读取文件内容。"""
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=422, detail="limit 要在 1..100 之间。")
+    try:
+        return complete_paths(q, limit=limit)
     except WorkspaceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

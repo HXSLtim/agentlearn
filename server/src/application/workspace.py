@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 MAX_PATCH_BYTES = 1_000_000
+MAX_PATH_COMPLETIONS = 100
 _HUNK_RE = re.compile(
     r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
     r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@"
@@ -226,4 +227,35 @@ def changed_files(include_untracked: bool = False) -> dict:
         "files": files,
         "untracked_count": untracked_count,
         "include_untracked": include_untracked,
+    }
+
+
+def complete_paths(
+    prefix: str, limit: int = 50, start: Path | None = None
+) -> dict:
+    """按前缀补全 Git 工作区路径；只取路径名，不读文件内容。"""
+    root = find_repository_root(start)
+    raw = _run_git(
+        root,
+        [
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+    )
+    paths = []
+    for raw_path in raw.split(b"\0"):
+        path = raw_path.decode("utf-8", "surrogateescape")
+        if path and path.startswith(prefix):
+            paths.append(path)
+    paths.sort()
+    bounded_limit = max(1, min(limit, MAX_PATH_COMPLETIONS))
+    return {
+        "root": str(root),
+        "prefix": prefix,
+        "paths": paths[:bounded_limit],
+        "total": len(paths),
+        "limited": len(paths) > bounded_limit,
     }

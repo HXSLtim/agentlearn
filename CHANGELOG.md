@@ -42,6 +42,10 @@
   估算与 `/context` 共用摘要 + 未覆盖尾部同一套账；`context_warning`
   span 作为跨轮去重事实，TUI 显示 warning 卡，desktop 显示 toast 与
   RUN LOG 警告，不随流式片段重复刷。
+- desktop 输入 `@` 支持文件路径补全：新增只读
+  `GET /workspace/paths`，只按前缀返回 Git tracked/untracked 路径名，
+  ignored 不进入结果，也不读取文件内容；光标处活跃 `@token` 打开
+  面板，Enter/Tab/点击只替换路径文本，第二次 Enter 才发送 `/chat`。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

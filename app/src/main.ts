@@ -275,6 +275,14 @@ interface WorkspaceDiffResponse {
   include_untracked: boolean;
 }
 
+interface WorkspacePathsResponse {
+  root: string;
+  prefix: string;
+  paths: string[];
+  total: number;
+  limited: boolean;
+}
+
 interface StopResponse {
   ok: boolean;
   active: boolean;
@@ -454,6 +462,10 @@ const sendLabel = requireElement<HTMLElement>("#send-label");
 const stopButton = requireElement<HTMLButtonElement>("#stop");
 const commandPalette = requireElement<HTMLElement>("#command-palette");
 const commandList = requireElement<HTMLElement>("#command-list");
+const commandPaletteTitle = requireElement<HTMLElement>("#command-palette-title");
+const commandPaletteEnterAction = requireElement<HTMLElement>(
+  "#command-palette-enter-action",
+);
 const runState = requireElement<HTMLElement>("#run-state");
 const runStateCopy = requireElement<HTMLElement>("#run-state-copy");
 const runSession = requireElement<HTMLElement>("#run-session");
@@ -558,6 +570,12 @@ let renderFrame: number | undefined;
 let renderTarget: { threadId: string; messageId: string } | null = null;
 let commandMatches: SlashCommand[] = [...SLASH_COMMANDS];
 let commandSelection = 0;
+type PaletteMode = "command" | "file";
+let paletteMode: PaletteMode = "command";
+let fileMatches: string[] = [];
+let fileSelection = 0;
+let fileCompletionTimer: number | undefined;
+let fileCompletionSequence = 0;
 let resumeMatches: Thread[] = [];
 let resumeSelection = 0;
 let resumeQuery = "";
@@ -3222,10 +3240,24 @@ function showToast(message: string): void {
 }
 
 function closeCommandPalette(): void {
+  fileCompletionSequence += 1;
+  if (fileCompletionTimer !== undefined) {
+    window.clearTimeout(fileCompletionTimer);
+    fileCompletionTimer = undefined;
+  }
   commandPalette.hidden = true;
+  paletteMode = "command";
+  fileMatches = [];
+  fileSelection = 0;
+  commandPaletteTitle.textContent = "COMMAND INDEX";
+  commandPaletteEnterAction.textContent = "ENTER RUN";
+  commandPalette.ariaLabel = "命令面板";
 }
 
 function renderCommandPalette(): void {
+  commandPaletteTitle.textContent = "COMMAND INDEX";
+  commandPaletteEnterAction.textContent = "ENTER RUN";
+  commandPalette.ariaLabel = "命令面板";
   let group = "";
   commandList.innerHTML = commandMatches
     .map(
@@ -3252,7 +3284,109 @@ function renderCommandPalette(): void {
     .join("");
 }
 
+function activeFileToken(
+  value: string,
+  caret: number,
+): { query: string; tokenStart: number } | null {
+  const match = value.slice(0, caret).match(/(?:^|\s)@([^\s]*)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    query: match[1],
+    tokenStart:
+      (match.index ?? 0) + match[0].length - match[1].length - 1,
+  };
+}
+
+function renderFilePalette(): void {
+  commandPaletteTitle.textContent = "FILE PATHS";
+  commandPaletteEnterAction.textContent = "ENTER COMPLETE";
+  commandPalette.ariaLabel = "文件路径补全";
+  commandList.innerHTML = fileMatches.length
+    ? fileMatches
+        .map(
+          (path, index) => `
+          <button
+            class="command-option${index === fileSelection ? " is-selected" : ""}"
+            type="button"
+            role="option"
+            aria-selected="${index === fileSelection}"
+            data-file-index="${index}"
+          >
+            <code>${escapeHtml(path)}</code>
+            <span>FILE PATH</span>
+          </button>
+        `,
+        )
+        .join("")
+    : `<div class="command-group">NO MATCHING PATH</div>`;
+}
+
+function scheduleFilePalette(token: { query: string; tokenStart: number }): void {
+  const sequence = ++fileCompletionSequence;
+  paletteMode = "file";
+  fileMatches = [];
+  fileSelection = 0;
+  renderFilePalette();
+  commandList.innerHTML = `<div class="command-group">READING PATH NAMES…</div>`;
+  commandPalette.hidden = false;
+  if (fileCompletionTimer !== undefined) {
+    window.clearTimeout(fileCompletionTimer);
+  }
+  fileCompletionTimer = window.setTimeout(() => {
+    fileCompletionTimer = undefined;
+    void loadFilePalette(token, sequence);
+  }, 120);
+}
+
+async function loadFilePalette(
+  token: { query: string; tokenStart: number },
+  sequence: number,
+): Promise<void> {
+  try {
+    const response = await fetch(
+      `${API_BASE}/workspace/paths?q=${encodeURIComponent(token.query)}&limit=50`,
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const result = (await response.json()) as WorkspacePathsResponse;
+    const current = activeFileToken(
+      promptInput.value,
+      promptInput.selectionStart ?? promptInput.value.length,
+    );
+    if (
+      sequence !== fileCompletionSequence ||
+      paletteMode !== "file" ||
+      !current ||
+      current.tokenStart !== token.tokenStart
+    ) {
+      return;
+    }
+    fileMatches = result.paths;
+    fileSelection = 0;
+    renderFilePalette();
+  } catch {
+    if (sequence !== fileCompletionSequence || paletteMode !== "file") {
+      return;
+    }
+    fileMatches = [];
+    renderFilePalette();
+    commandList.innerHTML = `<div class="command-group">PATH COMPLETION UNAVAILABLE</div>`;
+  }
+}
+
 function updateCommandPalette(): void {
+  const caret = promptInput.selectionStart ?? promptInput.value.length;
+  const fileToken = activeFileToken(promptInput.value, caret);
+  if (fileToken) {
+    scheduleFilePalette(fileToken);
+    return;
+  }
+  if (paletteMode === "file") {
+    closeCommandPalette();
+  }
   const text = promptInput.value.trim();
   if (!text.startsWith("/") || /\s/.test(text)) {
     closeCommandPalette();
@@ -3274,12 +3408,23 @@ function updateCommandPalette(): void {
 }
 
 function moveCommandSelection(delta: number): void {
-  if (commandPalette.hidden || !commandMatches.length) {
+  if (commandPalette.hidden) {
     return;
   }
-  commandSelection =
-    (commandSelection + delta + commandMatches.length) % commandMatches.length;
-  renderCommandPalette();
+  if (paletteMode === "file") {
+    if (!fileMatches.length) {
+      return;
+    }
+    fileSelection =
+      (fileSelection + delta + fileMatches.length) % fileMatches.length;
+    renderFilePalette();
+    return;
+  }
+  if (commandMatches.length) {
+    commandSelection =
+      (commandSelection + delta + commandMatches.length) % commandMatches.length;
+    renderCommandPalette();
+  }
 }
 
 function completeSelectedCommand(): void {
@@ -3292,6 +3437,30 @@ function completeSelectedCommand(): void {
   closeCommandPalette();
   promptInput.focus();
   promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+}
+
+function completeSelectedFile(): void {
+  const path = fileMatches[fileSelection];
+  if (!path) {
+    return;
+  }
+  const caret = promptInput.selectionStart ?? promptInput.value.length;
+  const token = activeFileToken(promptInput.value, caret);
+  if (!token) {
+    closeCommandPalette();
+    return;
+  }
+  promptInput.value =
+    promptInput.value.slice(0, token.tokenStart) +
+    "@" +
+    path +
+    " " +
+    promptInput.value.slice(caret);
+  const nextCaret = token.tokenStart + path.length + 2;
+  promptInput.setSelectionRange(nextCaret, nextCaret);
+  resizePrompt();
+  closeCommandPalette();
+  promptInput.focus();
 }
 
 function parseSlashCommand(raw: string): {
@@ -3996,6 +4165,17 @@ conversation.addEventListener("click", (event) => {
   }
 });
 commandList.addEventListener("click", (event) => {
+  if (paletteMode === "file") {
+    const fileButton = (event.target as Element).closest<HTMLButtonElement>(
+      "[data-file-index]",
+    );
+    if (fileButton?.dataset.fileIndex === undefined) {
+      return;
+    }
+    fileSelection = Number(fileButton.dataset.fileIndex);
+    completeSelectedFile();
+    return;
+  }
   const button = (event.target as Element).closest<HTMLButtonElement>(
     "[data-command-index]",
   );
@@ -4032,7 +4212,11 @@ promptInput.addEventListener("keydown", (event) => {
   }
   if (paletteVisible && event.key === "Tab") {
     event.preventDefault();
-    completeSelectedCommand();
+    if (paletteMode === "file") {
+      completeSelectedFile();
+    } else {
+      completeSelectedCommand();
+    }
     return;
   }
   if (paletteVisible && event.key === "Escape") {
@@ -4045,10 +4229,15 @@ promptInput.addEventListener("keydown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (paletteVisible) {
-      const parsed = parseSlashCommand(promptInput.value.trim());
-      if (!parsed?.command) {
-        completeSelectedCommand();
+      if (paletteMode === "file") {
+        completeSelectedFile();
         return;
+      } else {
+        const parsed = parseSlashCommand(promptInput.value.trim());
+        if (!parsed?.command) {
+          completeSelectedCommand();
+          return;
+        }
       }
     }
     void submitPrompt(promptInput.value);

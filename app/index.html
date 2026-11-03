@@ -125,14 +125,14 @@
             hidden
           >
             <div class="command-palette-heading">
-              <span>COMMAND INDEX</span>
+              <span id="command-palette-title">COMMAND INDEX</span>
               <span>TYPE TO FILTER</span>
             </div>
             <div class="command-list" id="command-list" role="listbox"></div>
             <div class="command-palette-footer">
               <span>↑↓ SELECT</span>
               <span>TAB COMPLETE</span>
-              <span>ENTER RUN</span>
+              <span id="command-palette-enter-action">ENTER RUN</span>
               <span>ESC CLOSE</span>
             </div>
           </div>
@@ -154,6 +154,7 @@
               <div class="composer-hints">
                 <span><kbd>↵</kbd> 发送</span>
                 <span><kbd>/</kbd> 命令</span>
+                <span><kbd>@</kbd> 文件路径</span>
                 <span><kbd>⇧ ↵</kbd> 换行</span>
                 <span><kbd>⌥ T</kbd> 思考</span>
                 <span><kbd>⌥ S</kbd> Steering</span>
