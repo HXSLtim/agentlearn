@@ -35,6 +35,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
+from textual.worker import WorkerFailed
 from textual.widgets import (
     Button,
     Collapsible,
@@ -1745,10 +1746,12 @@ class SettingsScreen(ModalScreen[bool]):
         self,
         current: SettingsSnapshot,
         saver: Callable[[SettingsValues], SettingsSnapshot],
+        model_loader: Callable[[], list[str]] | None = None,
     ) -> None:
         super().__init__()
         self.current = current
         self.saver = saver
+        self.model_loader = model_loader
 
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
@@ -1764,7 +1767,16 @@ class SettingsScreen(ModalScreen[bool]):
                 )
 
                 yield Static("MODEL ID", classes="settings-label")
-                yield Input(value=self.current.model_id, id="settings-model")
+                yield Select(
+                    [(self.current.model_id, self.current.model_id)],
+                    allow_blank=False,
+                    id="settings-model",
+                )
+                yield Static(
+                    "READING MODELS…",
+                    id="settings-model-status",
+                    classes="settings-hint",
+                )
 
                 yield Static("BASE URL", classes="settings-label")
                 yield Input(value=self.current.base_url, id="settings-base-url")
@@ -1805,11 +1817,54 @@ class SettingsScreen(ModalScreen[bool]):
                 yield Button("CANCEL", id="settings-cancel")
                 yield Button("SAVE", id="settings-save")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         # Select 在构造时设值会早于 SelectCurrent 挂载，显示会是空白。
         self.query_one("#settings-provider", Select).value = self.current.provider
         self.query_one("#settings-effort", Select).value = self.current.effort or "omit"
-        self.query_one("#settings-model", Input).focus()
+        model_select = self.query_one("#settings-model", Select)
+        model_select.value = self.current.model_id
+        model_select.focus()
+        if self.model_loader is None:
+            self._model_status("模型列表回调没有装配，仅保留当前模型。", ERROR)
+            return
+        model_select.disabled = True
+        try:
+            worker = self.run_worker(
+                self.model_loader,
+                thread=True,
+                group="settings-models",
+                exit_on_error=False,
+            )
+            models = await worker.wait()
+        except WorkerFailed as exc:
+            reason = str(worker.error or exc)
+            self._model_status(f"模型列表不可用：{reason}", ERROR)
+            return
+        except Exception as exc:
+            self._model_status(f"模型列表不可用：{exc}", ERROR)
+            return
+        self._render_models(models)
+
+    def _render_models(self, models: list[str]) -> None:
+        model_select = self.query_one("#settings-model", Select)
+        selected = str(model_select.value or self.current.model_id)
+        options = list(models)
+        if selected not in options:
+            options.insert(0, selected)
+        model_select.set_options([(model_id, model_id) for model_id in options])
+        model_select.value = selected
+        model_select.disabled = False
+        self._model_status(
+            f"模型列表 {len(models)} 个可选项。"
+            if models
+            else "接口没有返回模型，仅保留当前选择。",
+            MUTED,
+        )
+
+    def _model_status(self, message: str, color: str) -> None:
+        status = self.query_one("#settings-model-status", Static)
+        status.update(message)
+        status.styles.color = color
 
     def action_cancel(self) -> None:
         self.dismiss(False)
@@ -1831,7 +1886,7 @@ class SettingsScreen(ModalScreen[bool]):
         values = SettingsValues(
             provider=str(self.query_one("#settings-provider", Select).value),
             base_url=self.query_one("#settings-base-url", Input).value.strip(),
-            model_id=self.query_one("#settings-model", Input).value.strip(),
+            model_id=str(self.query_one("#settings-model", Select).value),
             max_tokens=int(max_tokens_raw),
             effort=effort,
             api_key=api_key,
@@ -2303,6 +2358,7 @@ class AgentLearnTUI(App[str | None]):
         settings_saver: Callable[[SettingsValues], SettingsSnapshot] | None = None,
         session_loader: Callable[[], list[SessionSummary]] | None = None,
         approval: ApprovalBroker | None = None,
+        model_loader: Callable[[], list[str]] | None = None,
     ) -> None:
         super().__init__()
         apply_agentlearn_theme(self)
@@ -2313,6 +2369,7 @@ class AgentLearnTUI(App[str | None]):
         self.settings_saver = settings_saver
         self.session_loader = session_loader
         self.approval = approval
+        self.model_loader = model_loader
         self.approval_mode = getattr(conversation, "approval_mode", "approve")
         self.steering_mode = "queue"
         self.steering_turn: RunningTurn | None = None
@@ -3622,7 +3679,7 @@ class AgentLearnTUI(App[str | None]):
             self.notify(str(exc), severity="error")
             return
         self.push_screen(
-            SettingsScreen(current, self.settings_saver),
+            SettingsScreen(current, self.settings_saver, self.model_loader),
             self._settings_closed,
         )
 
@@ -3943,6 +4000,7 @@ def run_chat(
     settings_saver: Callable[[SettingsValues], SettingsSnapshot] | None = None,
     session_loader: Callable[[], list[SessionSummary]] | None = None,
     approval: ApprovalBroker | None = None,
+    model_loader: Callable[[], list[str]] | None = None,
 ) -> str | None:
     """启动对话 TUI；返回要切换到的下一个 session_id，None 表示退出。"""
     session_id = session_id or str(uuid.uuid4())
@@ -3954,4 +4012,5 @@ def run_chat(
         settings_saver,
         session_loader,
         approval,
+        model_loader,
     ).run()

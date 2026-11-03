@@ -59,7 +59,7 @@ def _run_tui(session_id: str | None) -> None:
         load_settings,
         save_settings,
     )
-    from infrastructure.llm import build_chat
+    from infrastructure.llm import build_chat, list_models
     from infrastructure.store import Store
     from infrastructure.transcript import Transcript
     from interfaces.tui import SessionSummary, run_chat
@@ -129,6 +129,9 @@ def _run_tui(session_id: str | None) -> None:
             conversation.chat = build_chat(load_config())
             return snapshot
 
+        def load_runtime_models() -> list[str]:
+            return list_models(load_config())
+
         next_session_id = run_chat(
             conversation,
             transcript.read(session_id),
@@ -137,6 +140,7 @@ def _run_tui(session_id: str | None) -> None:
             settings_saver=save_runtime_settings,
             session_loader=load_sessions,
             approval=approval,
+            model_loader=load_runtime_models,
         )
         if next_session_id is None:
             return

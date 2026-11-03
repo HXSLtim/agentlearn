@@ -108,7 +108,7 @@ A/B 真机同问「写运行报告」：无技能 0/4 格式标记，有技能�
 | conversation.py | TUI/desktop 共用 application 层一份会话循环（D9/D14） | ✅ |
 | TUI | 黑绿控制台：流式正文、`/transcript` 三档视图、按事件顺序挂载工具卡、每轮 token usage、显式价目成本、接近预算告警、`/attach` 图片附件、`/find` 当前会话定位与 `/export` Markdown；停止、重试、历史搜索、外编辑器、复制与 `/diff` 只读 pager 闭环（D14/D16） | ✅ |
 | trace | spans 表（D10/D11）+ TUI `/trace` 与 desktop 只读抽屉：span 树、耗时、token、工具入参/出参、回答配对 | ✅ |
-| 设置界面 | TUI / desktop 共用 `GET/PUT /settings`；只改 `[llm]`，密钥不回显，下一请求生效（D15）；desktop 用 `GET /models` 提供模型下拉 | ✅ |
+| 设置界面 | TUI / desktop 共用 `GET/PUT /settings`；只改 `[llm]`，密钥不回显，下一请求生效（D15）；desktop 用 `GET /models` 提供模型下拉，TUI 接同一个 `list_models()` 能力 | ✅ |
 | 快捷命令 | TUI / desktop 输入 `/` 打开面板；模型切换与预置 prompt 均走界面层白名单（D18） | ✅ |
 | 跨会话记忆 | `data/sandbox/memory.md` 每轮注入为 system 提示词；不进 JSONL，协议差异在 adapter；span 记 system_chars | ✅ |
 | steering | 同会话连发消息三档（D19）：queue 等整轮 / cooperative 圈界并入 / preemptive 检查点打断；spans 加 cancelled；抢占让位于 tool_use/tool_result 配对不变式 | ✅ |
