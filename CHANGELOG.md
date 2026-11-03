@@ -10,9 +10,11 @@
   renamed 等状态并显示 rename 旧路径，未跟踪数量先如实报出、内容留给下一条。
 - desktop 增加 DIFF 抽屉：一键读取并刷新当前 Git 工作区变更文件，明确标注
   READ ONLY / NO INDEX WRITES；380px 窄屏下路径独占一行，列表无横向溢出。
+- 已跟踪文件显示 unified diff 逐行内容：hunk 头、旧/新行号、context、
+  红色删除、绿色新增、增删计数、binary / patch 截断标记。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
-  380×900 CDP 截图人工检查 3 条记录，`document/body/summary/list`
+  380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
   `scrollWidth` 均为 380。
 
 ## 2026-11-03（十六）：重试去重契约 + 会话库/上下文/能力面板的后端

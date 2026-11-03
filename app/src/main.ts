@@ -193,6 +193,27 @@ interface WorkspaceDiffFile {
   path: string;
   old_path: string | null;
   status: string;
+  binary: boolean;
+  truncated: boolean;
+  hunks: WorkspaceDiffHunk[];
+  additions: number;
+  deletions: number;
+}
+
+interface WorkspaceDiffHunk {
+  header: string;
+  old_start: number;
+  old_count: number;
+  new_start: number;
+  new_count: number;
+  lines: WorkspaceDiffLine[];
+}
+
+interface WorkspaceDiffLine {
+  kind: "context" | "add" | "delete" | "meta";
+  old_line: number | null;
+  new_line: number | null;
+  text: string;
 }
 
 interface WorkspaceDiffResponse {
@@ -2295,8 +2316,27 @@ function renderWorkspaceDiff(): void {
           (file) => `
             <article class="workspace-diff-item is-${escapeHtml(file.status)}">
               <span class="workspace-diff-status">${escapeHtml(file.status.toUpperCase())}</span>
-              <strong>${escapeHtml(file.path)}</strong>
-              ${file.old_path ? `<small>${escapeHtml(file.old_path)} → ${escapeHtml(file.path)}</small>` : ""}
+              <div class="workspace-diff-file-main">
+                <strong>${escapeHtml(file.path)}</strong>
+                ${file.old_path ? `<small>${escapeHtml(file.old_path)} → ${escapeHtml(file.path)}</small>` : ""}
+                <small class="workspace-diff-counts">+${file.additions} −${file.deletions}</small>
+                ${file.binary ? '<small class="workspace-diff-binary">BINARY</small>' : ""}
+                ${file.truncated ? '<small class="workspace-diff-truncated">PATCH TRUNCATED</small>' : ""}
+                ${file.hunks.map((hunk) => `
+                  <section class="workspace-diff-hunk">
+                    <header>${escapeHtml(hunk.header)}</header>
+                    <div class="workspace-diff-lines">
+                      ${hunk.lines.map((line) => `
+                        <div class="workspace-diff-line is-${line.kind}">
+                          <span>${line.old_line ?? ""}</span>
+                          <span>${line.new_line ?? ""}</span>
+                          <code>${escapeHtml(line.text)}</code>
+                        </div>
+                      `).join("")}
+                    </div>
+                  </section>
+                `).join("")}
+              </div>
             </article>
           `,
         )

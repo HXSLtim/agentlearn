@@ -2082,6 +2082,87 @@ kbd {
   font-size: 7px;
 }
 
+.workspace-diff-file-main {
+  min-width: 0;
+}
+
+.workspace-diff-counts {
+  color: var(--green);
+}
+
+.workspace-diff-binary,
+.workspace-diff-truncated {
+  color: var(--amber);
+}
+
+.workspace-diff-hunk {
+  margin-top: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.workspace-diff-hunk > header {
+  padding: 6px 7px;
+  overflow-wrap: anywhere;
+  color: var(--green-dim);
+  background: var(--void);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 7px;
+}
+
+.workspace-diff-lines {
+  display: grid;
+}
+
+.workspace-diff-line {
+  display: grid;
+  grid-template-columns: 26px 26px minmax(0, 1fr);
+  gap: 5px;
+  align-items: start;
+  padding: 2px 6px 2px 0;
+  border-left: 2px solid transparent;
+  font-family: var(--mono);
+  font-size: 7px;
+  line-height: 1.65;
+}
+
+.workspace-diff-line > span {
+  min-width: 0;
+  padding-left: 5px;
+  color: var(--dim);
+  text-align: right;
+}
+
+.workspace-diff-line > code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+}
+
+.workspace-diff-line.is-add {
+  border-left-color: var(--green);
+  background: rgba(59, 130, 66, 0.12);
+}
+
+.workspace-diff-line.is-add > code {
+  color: var(--green);
+}
+
+.workspace-diff-line.is-delete {
+  border-left-color: var(--red);
+  background: rgba(172, 49, 42, 0.12);
+}
+
+.workspace-diff-line.is-delete > code {
+  color: var(--red);
+}
+
+.workspace-diff-line.is-meta > code {
+  color: var(--dim);
+}
+
 .workspace-diff-empty {
   padding: 24px 20px;
   color: var(--dim);
