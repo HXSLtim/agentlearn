@@ -21,6 +21,8 @@ turn() 产出的事件是 dict，两个入口消费同一份：
     {"kind": "tool_result", "id", "name", "output",
      "is_error", "elapsed_ms"}                          工具跑完，带结果和耗时
     {"kind": "usage", "usage"}                           每次成功模型请求后，发本轮累计 token
+    {"kind": "context_warning", "estimate_tokens",
+     "budget_tokens", "ratio"}                           工作集接近预算时，每会话发一次
     {"kind": "steering_injected", "text"}               软中断的消息并入当前轮（圈界处）
 id 是这一次调用的标识，和落盘的 ToolUseBlock.id 是同一个值：
 一次回复里并行多个工具时，前端靠它把 tool_result 填回对应的 tool_use，
@@ -57,6 +59,7 @@ from application import compaction
 # 这是全局默认；Conversation 可以按会话覆盖（max_tool_rounds 参数，
 # TUI 的 /rounds 命令运行中改），见 Conversation.__init__。
 MAX_TOOL_ROUNDS = 8
+CONTEXT_WARNING_RATIO = 0.8
 
 class TurnCancelled(Exception):
     """这一轮被抢占（steering 的 preemptive 档）打断。
@@ -186,6 +189,57 @@ class Conversation:
             )
         )
 
+    def _context_warning(
+        self, history: list[Message], summary_text: str, covered: int,
+        turn_span: str,
+    ) -> dict | None:
+        """工作集接近预算时，给两个入口发一次告警。
+
+        这里的估算与 context_report/plan_cut 用同一套账：摘要 + 未覆盖尾部。
+        span 是去重事实——web 每轮新建 Conversation，不能把去重放在实例里；
+        有过 context_warning 后，同会话不再重复刷。
+        """
+        _, _, estimate_tokens_total = self._context_estimate(
+            history, summary_text, covered
+        )
+        ratio = estimate_tokens_total / self.context_budget_tokens
+        if ratio < CONTEXT_WARNING_RATIO:
+            return None
+        if any(
+            row["name"] == "context_warning"
+            for row in self.store.spans_for(self.session_id)
+        ):
+            return None
+        span = self.store.start_span(
+            self.session_id,
+            "context_warning",
+            parent_id=turn_span,
+            data={
+                "estimate_tokens": estimate_tokens_total,
+                "budget_tokens": self.context_budget_tokens,
+                "ratio": round(ratio, 3),
+            },
+        )
+        self.store.end_span(span, status="ok")
+        return {
+            "kind": "context_warning",
+            "estimate_tokens": estimate_tokens_total,
+            "budget_tokens": self.context_budget_tokens,
+            "ratio": round(ratio, 3),
+        }
+
+    @staticmethod
+    def _context_estimate(
+        history: list[Message], summary_text: str, covered: int
+    ) -> tuple[int, int, int]:
+        summary_tokens = (
+            estimate_tokens(summary_text)
+            if summary_text
+            else compaction.SUMMARY_TOKENS_RESERVE
+        )
+        tail_tokens = compaction.estimate_history_tokens(history[covered:])
+        return summary_tokens, tail_tokens, summary_tokens + tail_tokens
+
     def _system_prompt(self, chat: AnthropicChat | OpenAIChat, summary_text: str = "") -> str:
         """拼这一圈的 system。四段顺序固定，见本文件顶部的说明。
 
@@ -265,11 +319,8 @@ class Conversation:
         summary = compaction.load_summary(path)
         summary_text = summary.text if summary else ""
         covered = min(summary.covered, len(history)) if summary else 0
-        tail_est = compaction.estimate_history_tokens(history[covered:])
-        summary_est = (
-            estimate_tokens(summary_text)
-            if summary_text
-            else compaction.SUMMARY_TOKENS_RESERVE
+        summary_est, tail_est, _ = self._context_estimate(
+            history, summary_text, covered
         )
         system_chars = len(
             self._system_prompt(self.chat, summary_text)
@@ -607,6 +658,14 @@ class Conversation:
             usage_snapshot = self._record_usage(chat.usage)
             self.store.end_span(llm_span, status="ok", data=data)
             yield {"kind": "usage", "usage": usage_snapshot}
+            warning = self._context_warning(
+                self.transcript.read(self.session_id),
+                summary_text,
+                covered,
+                turn_span,
+            )
+            if warning is not None:
+                yield warning
 
             if stop != "tool_use":
                 # 模型不再要工具，这一轮到此为止。

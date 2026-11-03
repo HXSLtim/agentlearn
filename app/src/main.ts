@@ -74,6 +74,12 @@ interface TurnUsage {
   cache_hit_ratio: number;
 }
 
+interface ContextWarning {
+  estimate_tokens: number;
+  budget_tokens: number;
+  ratio: number;
+}
+
 interface Thread {
   id: string;
   sessionId: string;
@@ -87,6 +93,7 @@ interface Thread {
   pinned: boolean;
   archived: boolean;
   usage?: TurnUsage;
+  contextWarning?: ContextWarning;
   serverTurns?: number;
   runStartedAt?: number;
   stopping?: boolean;
@@ -134,6 +141,7 @@ interface ChatEvent {
     | "tool_approval"
     | "tool_result"
     | "usage"
+    | "context_warning"
     | "steering_ack"
     | "steering_injected"
     | "steering_cancelled"
@@ -154,6 +162,9 @@ interface ChatEvent {
   mode?: ApprovalMode;
   has_image?: boolean;
   usage?: TurnUsage;
+  estimate_tokens?: number;
+  budget_tokens?: number;
+  ratio?: number;
 }
 
 interface ApprovalModeResponse {
@@ -1420,6 +1431,15 @@ function renderRunLedger(): void {
   connectionPill.innerHTML = `<span class="status-light ${statusClass}"></span>${status}`;
 
   const activity: ActivityItem[] = [];
+  if (thread.contextWarning) {
+    activity.push({
+      key: "context-warning",
+      tag: "WARN",
+      title: "CONTEXT NEAR BUDGET",
+      detail: `${thread.contextWarning.estimate_tokens.toLocaleString()} / ${thread.contextWarning.budget_tokens.toLocaleString()} tokens`,
+      status: "error",
+    });
+  }
   if (assistant?.thinking) {
     activity.push({
       key: "reasoning",
@@ -1741,6 +1761,23 @@ function handleChatEvent(event: ChatEvent, context: StreamContext): boolean {
   if (event.kind === "usage") {
     thread.usage = event.usage;
     schedulePersist();
+    if (thread.id === state.activeThreadId) {
+      renderRunLedger();
+    }
+    return false;
+  }
+  if (event.kind === "context_warning") {
+    thread.contextWarning = {
+      estimate_tokens: event.estimate_tokens ?? 0,
+      budget_tokens: event.budget_tokens ?? 0,
+      ratio: event.ratio ?? 0,
+    };
+    schedulePersist();
+    showToast(
+      `工作集接近预算：${Math.round(
+        (event.ratio ?? 0) * 100,
+      )}%（可运行 /compact）`,
+    );
     if (thread.id === state.activeThreadId) {
       renderRunLedger();
     }

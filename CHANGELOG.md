@@ -38,6 +38,10 @@
   声明 currency 与四类每百万 token 单价；没有当前模型的价目时显示
   “不算钱（无价目）” / `NOT CALCULATED`，绝不估算美元。TUI 用
   `Decimal` 计算，desktop 在启动、保存设置和 `/model` 后同步价目。
+- 上下文工作集达到预算 80% 时发出一次 `context_warning`：
+  估算与 `/context` 共用摘要 + 未覆盖尾部同一套账；`context_warning`
+  span 作为跨轮去重事实，TUI 显示 warning 卡，desktop 显示 toast 与
+  RUN LOG 警告，不随流式片段重复刷。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

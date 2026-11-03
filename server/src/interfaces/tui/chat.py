@@ -311,13 +311,20 @@ class CommandPalette(Static):
 class CommandResult(Static):
     """命令的本地结果；不会写进 JSONL，也不会发给模型。"""
 
-    def __init__(self, title: str, body: str, *, error: bool = False) -> None:
-        tone = ERROR if error else TOOL
+    def __init__(
+        self,
+        title: str,
+        body: str,
+        *,
+        error: bool = False,
+        warning: bool = False,
+    ) -> None:
+        tone = ERROR if error else WARN if warning else TOOL
         text = Text.assemble(
-            ("COMMAND  /  ", f"bold {tone}"),
+            ("WARNING  /  " if warning else "COMMAND  /  ", f"bold {tone}"),
             (title, f"bold {PAPER}"),
             ("\n", DIM),
-            (body, ERROR if error else MUTED),
+            (body, ERROR if error else WARN if warning else MUTED),
         )
         super().__init__(text, classes="command-result")
 
@@ -2441,6 +2448,19 @@ class AgentLearnTUI(App[str | None]):
             self.turn_usage = dict(event.get("usage", {}))
             self._update_ledger()
             return
+        if kind == "context_warning":
+            self._finish_live_blocks()
+            estimate = event["estimate_tokens"]
+            budget = event["budget_tokens"]
+            ratio = event["ratio"]
+            await self._show_command_result(
+                "CONTEXT",
+                f"工作集接近预算：{estimate} / {budget} token"
+                f"（{round(ratio * 100)}%）。超过预算会自动压缩；可 /compact 手动压缩。",
+                warning=True,
+            )
+            self.notify("工作集接近预算", severity="warning")
+            return
         if kind == "steering_injected":
             self._finish_live_blocks()
             timeline = self.query_one("#timeline", VerticalScroll)
@@ -3178,13 +3198,20 @@ class AgentLearnTUI(App[str | None]):
         )
 
     async def _show_command_result(
-        self, title: str, body: str, *, error: bool = False
+        self,
+        title: str,
+        body: str,
+        *,
+        error: bool = False,
+        warning: bool = False,
     ) -> None:
         empty = self.query("#empty")
         if empty:
             await empty.remove()
         timeline = self.query_one("#timeline", VerticalScroll)
-        await timeline.mount(CommandResult(title, body, error=error))
+        await timeline.mount(
+            CommandResult(title, body, error=error, warning=warning)
+        )
         timeline.scroll_end(animate=False)
 
     def action_settings(self) -> None:
