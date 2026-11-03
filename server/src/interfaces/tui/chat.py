@@ -164,6 +164,13 @@ COMMANDS = (
         "SESSION",
         takes_argument=True,
     ),
+    SlashCommand(
+        "find",
+        "/find [关键词]",
+        "定位当前会话里的一条已渲染消息",
+        "SESSION",
+        takes_argument=True,
+    ),
     SlashCommand("status", "/status", "查看当前会话与运行状态", "RUNTIME"),
     SlashCommand(
         "context",
@@ -1226,6 +1233,7 @@ def _user_text(message: DomainMessage) -> str:
 
 class UserMessage(Static):
     def __init__(self, text: str, image_count: int = 0) -> None:
+        self.search_text = text
         body = Text(text or "(image only)")
         body.stylize(PAPER)
         if image_count:
@@ -1248,6 +1256,10 @@ class AssistantMessage(Vertical):
     def _kicker_text(self) -> str:
         return "AGENT  /  " + ("RESTORED RESPONSE" if self._restored else "LIVE RESPONSE")
 
+    @property
+    def search_text(self) -> str:
+        return self._text
+
     def append_text(self, fragment: str) -> None:
         self._text += fragment
         self.body.update(self._text)
@@ -1257,6 +1269,173 @@ class AssistantMessage(Vertical):
             self.add_class("-empty")
         elif not self._restored:
             self._kicker.update("AGENT  /  RESPONSE")
+
+
+class ConversationSearchScreen(ModalScreen[UserMessage | AssistantMessage | None]):
+    """在当前时间线里定位已经渲染出来的用户/回答卡片。"""
+
+    CSS = f"""
+    ConversationSearchScreen {{
+        align: center middle;
+        background: rgba(0,0,0,0.86);
+    }}
+
+    #conversation-search-dialog {{
+        width: 84;
+        max-width: 94%;
+        height: 68%;
+        background: {PANEL};
+        border: thick {WARN};
+        padding: 1 2;
+    }}
+
+    #conversation-search-title {{
+        height: 2;
+        color: {WARN};
+        text-style: bold;
+    }}
+
+    #conversation-search-input {{
+        height: 3;
+        margin-bottom: 1;
+        background: {INK};
+        border: solid {LINE};
+        color: {PAPER};
+    }}
+
+    #conversation-search-input:focus {{
+        border: solid {WARN};
+    }}
+
+    #conversation-search-list {{
+        height: 1fr;
+        background: {INK};
+        border: solid {LINE};
+    }}
+
+    #conversation-search-list > .option-list--option {{
+        padding: 1;
+        border-bottom: solid {LINE};
+        color: {MUTED};
+    }}
+
+    #conversation-search-list > .option-list--option-highlighted {{
+        color: {INK};
+        background: {WARN};
+        text-style: bold;
+    }}
+
+    #conversation-search-footer {{
+        height: 2;
+        padding-top: 1;
+        color: {DIM};
+    }}
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel", show=False),
+        Binding("up", "previous", "previous", show=False),
+        Binding("down", "next", "next", show=False),
+    ]
+
+    def __init__(
+        self,
+        candidates: list[tuple[UserMessage | AssistantMessage, str]],
+        initial_query: str = "",
+    ) -> None:
+        super().__init__()
+        self.candidates = list(candidates)
+        self.matches = list(self.candidates)
+        self.initial_query = initial_query
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="conversation-search-dialog"):
+            yield Static("SESSION  /  RENDERED MESSAGE SEARCH", id="conversation-search-title")
+            yield Input(
+                placeholder="输入内容过滤当前会话…",
+                id="conversation-search-input",
+            )
+            yield OptionList(id="conversation-search-list")
+            yield Static(
+                "↑↓ SELECT · ENTER LOCATE · ESC CLOSE",
+                id="conversation-search-footer",
+            )
+
+    def on_mount(self) -> None:
+        search_input = self.query_one("#conversation-search-input", Input)
+        search_input.value = self.initial_query
+        search_input.focus()
+        self._refresh(self.initial_query)
+
+    def _snippet(self, text: str, query: str) -> str:
+        compact = " ".join(text.split())
+        normalized = query.strip().casefold()
+        position = compact.casefold().find(normalized) if normalized else 0
+        start = max(0, position - 30)
+        return compact[start : start + 160] or "(empty message)"
+
+    def _refresh(self, query: str) -> None:
+        normalized = query.strip().casefold()
+        self.matches = [
+            candidate
+            for candidate in self.candidates
+            if not normalized or normalized in candidate[1].casefold()
+        ]
+        option_list = self.query_one("#conversation-search-list", OptionList)
+        option_list.clear_options()
+        if not self.matches:
+            option_list.add_option(Option(Text("没有匹配的已渲染消息", style=DIM)))
+            return
+        option_list.add_options(
+            Option(
+                Text.assemble(
+                    (f"{index + 1:02d}  ", f"bold {WARN}"),
+                    (self._snippet(text, query), PAPER),
+                ),
+                id=str(index),
+            )
+            for index, (_, text) in enumerate(self.matches)
+        )
+        option_list.highlighted = 0
+
+    @on(Input.Changed, "#conversation-search-input")
+    def _changed(self, event: Input.Changed) -> None:
+        self._refresh(event.value)
+
+    @on(Input.Submitted, "#conversation-search-input")
+    def _submitted(self) -> None:
+        option_list = self.query_one("#conversation-search-list", OptionList)
+        if not self.matches:
+            return
+        index = option_list.highlighted or 0
+        self.dismiss(self.matches[index][0])
+
+    @on(OptionList.OptionSelected, "#conversation-search-list")
+    def _selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_id is None:
+            return
+        index = int(event.option_id)
+        if 0 <= index < len(self.matches):
+            self.dismiss(self.matches[index][0])
+
+    def action_previous(self) -> None:
+        self._move_highlight(-1)
+
+    def action_next(self) -> None:
+        self._move_highlight(1)
+
+    def _move_highlight(self, delta: int) -> None:
+        if not self.matches:
+            return
+        option_list = self.query_one("#conversation-search-list", OptionList)
+        current = option_list.highlighted or 0
+        option_list.highlighted = (
+            current + delta + len(self.matches)
+        ) % len(self.matches)
+        option_list.scroll_to_highlight()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ReasoningPanel(Collapsible):
@@ -1832,6 +2011,11 @@ class AgentLearnTUI(App[str | None]):
         display: none;
     }}
 
+    .user-message.search-highlight,
+    .assistant-message.search-highlight {{
+        border: round {WARN};
+    }}
+
     .message-kicker {{
         color: {MUTED};
         margin-bottom: 1;
@@ -2248,7 +2432,7 @@ class AgentLearnTUI(App[str | None]):
                 )
                 yield Button("RUN  ↵", id="send")
             yield Static(
-                "/resume SESSIONS · /trace SPANS · /diff WORKSPACE · /copy ANSWER · / ALL COMMANDS",
+                "/resume SESSIONS · /find CURRENT · /trace SPANS · /diff WORKSPACE · /copy ANSWER · / ALL COMMANDS",
                 id="composer-help",
             )
 
@@ -2902,6 +3086,9 @@ class AgentLearnTUI(App[str | None]):
         if command.name == "copy":
             self.action_copy_answer()
             return
+        if command.name == "find":
+            self._command_find(argument)
+            return
         if command.name == "config":
             self.action_settings()
             return
@@ -3479,6 +3666,57 @@ class AgentLearnTUI(App[str | None]):
             HistorySearchScreen(self.input_history),
             self._history_search_closed,
         )
+
+    def _conversation_search_candidates(
+        self,
+    ) -> list[tuple[UserMessage | AssistantMessage, str]]:
+        timeline = self.query_one("#timeline", VerticalScroll)
+        return [
+            (widget, widget.search_text)
+            for widget in timeline.children
+            if isinstance(widget, (UserMessage, AssistantMessage))
+            and widget.search_text
+        ]
+
+    def _highlight_rendered_message(
+        self, widget: UserMessage | AssistantMessage
+    ) -> None:
+        timeline = self.query_one("#timeline", VerticalScroll)
+        for child in timeline.children:
+            if isinstance(child, (UserMessage, AssistantMessage)):
+                child.remove_class("search-highlight")
+        widget.add_class("search-highlight")
+        timeline.scroll_to_widget(widget, animate=False)
+
+    def _clear_rendered_message_highlight(self) -> None:
+        timeline = self.query_one("#timeline", VerticalScroll)
+        for child in timeline.children:
+            if isinstance(child, (UserMessage, AssistantMessage)):
+                child.remove_class("search-highlight")
+
+    def _command_find(self, argument: str) -> None:
+        if not argument:
+            self.push_screen(
+                ConversationSearchScreen(self._conversation_search_candidates()),
+                self._conversation_search_closed,
+            )
+            return
+        normalized = argument.casefold()
+        for widget, text in self._conversation_search_candidates():
+            if normalized in text.casefold():
+                self._highlight_rendered_message(widget)
+                self.notify("已定位当前会话的匹配消息")
+                return
+        self._clear_rendered_message_highlight()
+        self.notify("当前会话没有匹配的已渲染消息", severity="warning")
+
+    def _conversation_search_closed(
+        self, widget: UserMessage | AssistantMessage | None
+    ) -> None:
+        if widget is None:
+            self.query_one("#composer", PromptComposer).focus()
+            return
+        self._highlight_rendered_message(widget)
 
     def _history_search_closed(self, value: str | None) -> None:
         if value:

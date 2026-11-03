@@ -616,6 +616,52 @@
       </section>
     </div>
 
+    <div class="conversation-find-modal" id="conversation-find-modal" hidden>
+      <div class="conversation-find-backdrop" data-conversation-find-close></div>
+      <section
+        class="conversation-find-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="conversation-find-title"
+      >
+        <header class="conversation-find-header">
+          <div>
+            <span class="eyebrow">CURRENT SESSION / RENDERED MESSAGES</span>
+            <h2 id="conversation-find-title">会话内查找</h2>
+          </div>
+          <button
+            class="icon-button conversation-find-close"
+            id="conversation-find-close"
+            type="button"
+            aria-label="关闭会话内查找"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m4 4 12 12M16 4 4 16" />
+            </svg>
+          </button>
+        </header>
+        <label class="conversation-find-field">
+          <span>FIND</span>
+          <input
+            id="conversation-find-input"
+            type="search"
+            placeholder="在当前已渲染消息中查找…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
+        <div
+          class="conversation-find-list"
+          id="conversation-find-list"
+          role="listbox"
+        ></div>
+        <footer class="conversation-find-footer">
+          <span>↑↓ SELECT</span><span>ENTER LOCATE</span><span>ESC CLOSE</span>
+          <span id="conversation-find-count">0 MATCHES</span>
+        </footer>
+      </section>
+    </div>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </body>
 </html>

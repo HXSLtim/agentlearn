@@ -106,7 +106,7 @@ A/B 真机同问「写运行报告」：无技能 0/4 格式标记，有技能�
 | 会话持久化 | JSONL + SQLite（见 docs/decisions.md D2） | ✅ |
 | 配置体系 | config.ini + ${ENV}（D4） | ✅ |
 | conversation.py | TUI/desktop 共用 application 层一份会话循环（D9/D14） | ✅ |
-| TUI | 黑绿控制台：流式正文、thinking 滚动预览、按事件顺序挂载工具卡、每轮 token usage、显式价目成本、接近预算告警、`/attach` 图片附件与窄终端布局；停止、重试、历史搜索、外编辑器、复制与 `/diff` 只读 pager 闭环（D14/D16） | ✅ |
+| TUI | 黑绿控制台：流式正文、thinking 滚动预览、按事件顺序挂载工具卡、每轮 token usage、显式价目成本、接近预算告警、`/attach` 图片附件、`/find` 当前会话定位与窄终端布局；停止、重试、历史搜索、外编辑器、复制与 `/diff` 只读 pager 闭环（D14/D16） | ✅ |
 | trace | spans 表（D10/D11）+ TUI `/trace` 与 desktop 只读抽屉：span 树、耗时、token、工具入参/出参、回答配对 | ✅ |
 | 设置界面 | TUI / desktop 共用 `GET/PUT /settings`；只改 `[llm]`，密钥不回显，下一请求生效（D15） | ✅ |
 | 快捷命令 | TUI / desktop 输入 `/` 打开面板；模型切换与预置 prompt 均走界面层白名单（D18） | ✅ |
@@ -118,7 +118,7 @@ A/B 真机同问「写运行报告」：无技能 0/4 格式标记，有技能�
 | 会话索引 API | 前端接线契约落地：`GET /sessions`（活动倒序，turns/updated_at/stop_reason 从 spans 推导）、`/sessions/{id}/messages`、`POST /stop`、`/sessions/{id}/trace`；P1 rename/archive/fork/永久删除。desktop 摘掉 localStorage 唯一索引的帽子 | ✅ |
 | 主动性（一阶） | 常驻调度 + 三种触发器（interval/file/jobdone）只做消息注入，无人值守钉死 auto 地板、remember 唯一预授权写、uuid5 固定会话、notices 值班日志（D27）；二阶（容器化后放开手脚）未做 | ✅ |
 | 评测 | 从 trace 回放打分：工具调用对不对、答案准不准、花了多少 token | 未开始 |
-| 桌面端 | app 已接 POST /chat + SSE、server 会话索引、正文恢复、会话内容搜索、重命名、pin、归档视图、二次确认永久删除与 fork、三档 steering、停止、失败重试、每轮 token usage、显式价目成本与接近预算告警运行账本、设置、trace 抽屉、只读可折叠变更文件列表、逐行增删、未跟踪文件、`@file` 路径补全、拖拽与粘贴图片；Tauri 自动拉起 server 未做 | 🟡 |
+| 桌面端 | app 已接 POST /chat + SSE、server 会话索引、正文恢复、会话内容搜索、会话内 `/find` 定位、重命名、pin、归档视图、二次确认永久删除与 fork、三档 steering、停止、失败重试、每轮 token usage、显式价目成本与接近预算告警运行账本、设置、trace 抽屉、只读可折叠变更文件列表、逐行增删、未跟踪文件、`@file` 路径补全、拖拽与粘贴图片；Tauri 自动拉起 server 未做 | 🟡 |
 
 ## 文档维护节奏
 
