@@ -2647,6 +2647,50 @@ kbd {
   font-size: 8px;
 }
 
+.resume-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.resume-view-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.resume-view-toggle button,
+#resume-archive {
+  height: 28px;
+  padding: 0 10px;
+  color: var(--green);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
+
+.resume-view-toggle button[aria-pressed="true"] {
+  color: var(--void);
+  background: var(--green);
+}
+
+.resume-view-toggle button:hover,
+.resume-view-toggle button:focus-visible,
+#resume-archive:hover:not(:disabled),
+#resume-archive:focus-visible {
+  color: var(--void);
+  background: var(--green);
+}
+
+#resume-archive:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+
 .resume-search-field {
   display: grid;
   grid-template-columns: 84px minmax(0, 1fr);
@@ -3622,6 +3666,7 @@ kbd {
 
   .resume-index-line,
   .resume-summary,
+  .resume-actions,
   .resume-search-field,
   .resume-rename-form,
   .resume-item {
@@ -3632,6 +3677,16 @@ kbd {
   .resume-search-field {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+
+  .resume-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .resume-view-toggle,
+  #resume-archive {
+    width: 100%;
   }
 
   .resume-index-line span:last-child {

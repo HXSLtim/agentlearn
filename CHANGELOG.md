@@ -25,6 +25,8 @@
   `PATCH /sessions/{id}` 后同步 server 标题、本地列表与当前页头。
 - 恢复框支持 PIN / UNPIN 当前选中会话：调用同一 PATCH 更新
   `pinned`，左侧会话列表与恢复列表均 pin 优先于最近活动。
+- 恢复框增加 ACTIVE / ARCHIVED 视图：归档走同一 PATCH 的
+  `archived`，默认列表移除会话；归档视图可直接续接正文，也可恢复。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

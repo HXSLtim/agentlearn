@@ -47,7 +47,7 @@ desktop / TUI 还没接上的界面：
 - [x] desktop 内容搜索接 `GET /sessions/search`，展示每个会话的第一处命中 ✅（2026-11-03）：恢复框输入非空关键词时同时保留本地 id/标题/模型/stop reason 匹配与 server 正文命中，异步防串包；每个正文命中会话在列表行展示第一处 snippet，空词清空正文结果。`npm run build` 通过；380×900 mock 页面验证请求 `q=blueprint` 后只保留正文命中会话、snippet 可见，document/body/list `scrollWidth` 均 380，截图人工检查。
 - [x] desktop 会话重命名，接 `PATCH /sessions/{id}` ✅（2026-11-03）：恢复框对当前选中会话提供 RENAME 表单，空标题前端拦截；保存时发送 `{"title":"..."}` 到 PATCH，成功后用 server 返回标题更新本地索引、列表和当前页头，Cancel/Esc 关闭表单。`npm run build` 通过；380×900 mock 验证 PATCH body、200 响应、表单隐藏、新标题显示，document/body/list `scrollWidth` 均 380，表单与保存后截图人工检查。
 - [x] desktop 会话 pin，接同一 PATCH，列表 pin 优先 ✅（2026-11-03）：恢复框对当前选中会话提供 PIN / UNPIN，发送 `{"pinned":true|false}` 到 PATCH，成功后同步本地索引并保持选中；左侧会话列表与恢复列表均按 pin 优先于最近活动排序。`npm run build` 通过；380×900 mock 页面验证 PATCH body、200 响应、置顶排序、UNPIN/PIN 标记，document/body/list `scrollWidth` 均 380；截图人工检查。
-- [ ] desktop 会话 archive，接同一 PATCH。验收：默认列表消失，归档视图还能打开。
+- [x] desktop 会话 archive，接同一 PATCH ✅（2026-11-03）：恢复框增加 ACTIVE / ARCHIVED 视图；归档发送 `{"archived":true}` 到 PATCH，默认恢复列表与左侧会话列表都移除该会话，归档视图继续列出并可直接恢复正文；归档视图提供 UNARCHIVE。`npm run build` 通过；380×900 mock 验证 GET active/archived、PATCH body、默认列表消失、归档视图打开 user/assistant 正文，document/body/list `scrollWidth` 均 380；归档视图与打开后截图人工检查。
 - [ ] desktop 永久删除前要确认，再 `DELETE /sessions/{id}`。验收：归档和删除是两个按钮。
 - [ ] desktop fork：选择前 N 条消息后 `POST /sessions/{id}/fork`。
 - [ ] 两端运行账本显示每轮 `input` / `output` / `cache_read` / `cache_write` / `cache_hit_ratio`。验收：数字加总等于对应 `llm_request` span 的 usage。

@@ -77,6 +77,7 @@ interface Thread {
   steeringMode: SteeringMode;
   model: string;
   pinned: boolean;
+  archived: boolean;
   serverTurns?: number;
   runStartedAt?: number;
   stopping?: boolean;
@@ -153,6 +154,7 @@ interface ServerSession {
   turns: number;
   stop_reason: string;
   pinned: boolean;
+  archived: boolean;
 }
 
 interface SessionSearchHit {
@@ -452,6 +454,13 @@ const resumeSummary = requireElement<HTMLElement>("#resume-summary");
 const resumeSearch = requireElement<HTMLInputElement>("#resume-search");
 const resumeRenameButton = requireElement<HTMLButtonElement>("#resume-rename");
 const resumePinButton = requireElement<HTMLButtonElement>("#resume-pin");
+const resumeActiveViewButton = requireElement<HTMLButtonElement>(
+  "#resume-active-view",
+);
+const resumeArchiveViewButton = requireElement<HTMLButtonElement>(
+  "#resume-archive-view",
+);
+const resumeArchiveButton = requireElement<HTMLButtonElement>("#resume-archive");
 const resumeRenameForm = requireElement<HTMLFormElement>("#resume-rename-form");
 const resumeRenameInput = requireElement<HTMLInputElement>("#resume-rename-input");
 const resumeRenameCancel = requireElement<HTMLButtonElement>("#resume-rename-cancel");
@@ -482,6 +491,7 @@ let commandSelection = 0;
 let resumeMatches: Thread[] = [];
 let resumeSelection = 0;
 let resumeQuery = "";
+let resumeArchived = false;
 let contentHits = new Map<string, SessionSearchHit>();
 let contentSearchSequence = 0;
 let renameThreadId = "";
@@ -516,6 +526,7 @@ function createThread(): Thread {
     steeringMode: "queue",
     model: "",
     pinned: false,
+    archived: false,
     messagesLoaded: true,
     messages: [],
   };
@@ -598,6 +609,7 @@ function loadState(): PersistedState {
               : "queue",
           model: typeof thread.model === "string" ? thread.model : "",
           pinned: thread.pinned === true,
+          archived: thread.archived === true,
           serverTurns:
             typeof thread.serverTurns === "number"
               ? thread.serverTurns
@@ -738,6 +750,7 @@ function mergeServerSessions(sessions: ServerSession[]): void {
     thread.title = session.title || thread.title || "未命名运行";
     thread.model = session.model || thread.model;
     thread.pinned = session.pinned === true;
+    thread.archived = session.archived === true;
     thread.serverTurns = session.turns;
     thread.stopReason = session.stop_reason || thread.stopReason;
     thread.createdAt = parseServerTime(session.created_at);
@@ -745,18 +758,30 @@ function mergeServerSessions(sessions: ServerSession[]): void {
   }
 }
 
-async function fetchServerSessions(reportError = false): Promise<void> {
+async function fetchServerSessions(
+  reportError = false,
+  archived = false,
+): Promise<void> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 2500);
   try {
-    const response = await fetch(`${API_BASE}/sessions`, {
-      signal: controller.signal,
-    });
+    const response = await fetch(
+      `${API_BASE}/sessions?archived=${archived ? "true" : "false"}`,
+      { signal: controller.signal },
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }
     const sessions = (await response.json()) as ServerSession[];
     mergeServerSessions(sessions);
+    if (!archived) {
+      const activeIds = new Set(sessions.map((session) => session.id));
+      for (const thread of state.threads) {
+        if (thread.sessionId && !activeIds.has(thread.sessionId)) {
+          thread.archived = true;
+        }
+      }
+    }
     persistState();
     renderEverything();
   } catch (error) {
@@ -953,9 +978,12 @@ function setStatusLight(element: HTMLElement, status: string): void {
 }
 
 function renderThreadList(): void {
-  const sorted = [...state.threads].sort(
-    (a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
-  );
+  const sorted = state.threads
+    .filter((thread) => !thread.archived)
+    .sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
+    );
   threadCount.textContent = String(sorted.length);
   threadList.innerHTML = sorted
     .map((thread) => {
@@ -2504,9 +2532,12 @@ function findResumeThread(argument: string): Thread | null {
 
 function filterResumeThreads(): void {
   const query = resumeQuery.trim().toLowerCase();
-  const all = [...state.threads].sort(
-    (a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
-  );
+  const all = state.threads
+    .filter((thread) => thread.archived === resumeArchived)
+    .sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
+    );
   const contentMatchIds = new Set(contentHits.keys());
   resumeMatches = query
     ? all.filter(
@@ -2534,6 +2565,10 @@ function renderResumeList(): void {
   resumeRenameButton.disabled = !selectedThread?.sessionId;
   resumePinButton.disabled = !selectedThread?.sessionId;
   resumePinButton.textContent = selectedThread?.pinned ? "UNPIN" : "PIN";
+  resumeArchiveButton.disabled = !selectedThread?.sessionId;
+  resumeArchiveButton.textContent = selectedThread?.archived
+    ? "UNARCHIVE"
+    : "ARCHIVE";
   resumeList.innerHTML = resumeMatches
     .map((thread, index) => {
       const turns =
@@ -2572,6 +2607,7 @@ function renderResumeList(): void {
 }
 
 async function openResume(): Promise<void> {
+  resumeArchived = false;
   await fetchServerSessions(true);
   resumeQuery = "";
   contentHits.clear();
@@ -2584,8 +2620,39 @@ async function openResume(): Promise<void> {
   resumeSelection = alternate >= 0 ? alternate : 0;
   cancelResumeRename();
   renderResumeList();
+  renderResumeViewTabs();
   resumeModal.hidden = false;
   resumeSearch.focus();
+}
+
+function renderResumeViewTabs(): void {
+  resumeActiveViewButton.setAttribute(
+    "aria-pressed",
+    resumeArchived ? "false" : "true",
+  );
+  resumeArchiveViewButton.setAttribute(
+    "aria-pressed",
+    resumeArchived ? "true" : "false",
+  );
+}
+
+async function switchResumeView(archived: boolean): Promise<void> {
+  if (resumeArchived === archived) {
+    return;
+  }
+  resumeArchived = archived;
+  resumeQuery = "";
+  contentHits.clear();
+  contentSearchSequence += 1;
+  resumeSearch.value = "";
+  resumeSelection = 0;
+  renderResumeViewTabs();
+  filterResumeThreads();
+  renderResumeList();
+  await fetchServerSessions(true, archived);
+  resumeSelection = 0;
+  filterResumeThreads();
+  renderResumeList();
 }
 
 async function searchSessionContent(query: string): Promise<void> {
@@ -2726,6 +2793,48 @@ async function toggleResumePin(): Promise<void> {
     );
   } finally {
     resumePinButton.disabled = false;
+  }
+}
+
+async function toggleResumeArchive(): Promise<void> {
+  const thread = resumeMatches[resumeSelection];
+  if (!thread?.sessionId) {
+    showToast("当前会话还没有 server id，不能归档");
+    return;
+  }
+  resumeArchiveButton.disabled = true;
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived: !thread.archived }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const updated = (await response.json()) as ServerSession;
+    thread.archived = updated.archived === true;
+    thread.pinned = updated.pinned === true;
+    persistState();
+    filterResumeThreads();
+    resumeSelection = Math.max(
+      0,
+      resumeMatches.findIndex((item) => item.id === thread.id),
+    );
+    renderResumeList();
+    renderEverything();
+    showToast(thread.archived ? "会话已归档" : "会话已恢复");
+  } catch (error) {
+    showToast(
+      `归档状态更新失败：${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    resumeArchiveButton.disabled = false;
   }
 }
 
@@ -3424,6 +3533,15 @@ resumeCloseButton.addEventListener("click", closeResume);
 resumeRenameButton.addEventListener("click", startResumeRename);
 resumePinButton.addEventListener("click", () => {
   void toggleResumePin();
+});
+resumeActiveViewButton.addEventListener("click", () => {
+  void switchResumeView(false);
+});
+resumeArchiveViewButton.addEventListener("click", () => {
+  void switchResumeView(true);
+});
+resumeArchiveButton.addEventListener("click", () => {
+  void toggleResumeArchive();
 });
 resumeRenameCancel.addEventListener("click", cancelResumeRename);
 resumeRenameForm.addEventListener("submit", (event) => {
