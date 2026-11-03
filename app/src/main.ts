@@ -66,6 +66,14 @@ interface UiMessage {
   steeringState?: "queued" | "acknowledged" | "delivered" | "failed";
 }
 
+interface TurnUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cache_hit_ratio: number;
+}
+
 interface Thread {
   id: string;
   sessionId: string;
@@ -78,6 +86,7 @@ interface Thread {
   model: string;
   pinned: boolean;
   archived: boolean;
+  usage?: TurnUsage;
   serverTurns?: number;
   runStartedAt?: number;
   stopping?: boolean;
@@ -117,6 +126,7 @@ interface ChatEvent {
     | "tool_use"
     | "tool_approval"
     | "tool_result"
+    | "usage"
     | "steering_ack"
     | "steering_injected"
     | "steering_cancelled"
@@ -136,6 +146,7 @@ interface ChatEvent {
   approval_id?: string;
   mode?: ApprovalMode;
   has_image?: boolean;
+  usage?: TurnUsage;
 }
 
 interface ApprovalModeResponse {
@@ -410,6 +421,7 @@ const railCloseButton = requireElement<HTMLButtonElement>("#rail-close");
 const railOpenButton = requireElement<HTMLButtonElement>("#rail-open");
 const traceToggle = requireElement<HTMLButtonElement>("#trace-toggle");
 const runRailToggle = requireElement<HTMLButtonElement>("#run-rail-toggle");
+const runRail = requireElement<HTMLElement>("#run-rail");
 const scrim = requireElement<HTMLElement>("#scrim");
 const threadKicker = requireElement<HTMLElement>("#thread-kicker");
 const threadTitle = requireElement<HTMLElement>("#thread-title");
@@ -430,6 +442,11 @@ const runSession = requireElement<HTMLElement>("#run-session");
 const runTurns = requireElement<HTMLElement>("#run-turns");
 const runTools = requireElement<HTMLElement>("#run-tools");
 const runElapsed = requireElement<HTMLElement>("#run-elapsed");
+const runInputTokens = requireElement<HTMLElement>("#run-input-tokens");
+const runOutputTokens = requireElement<HTMLElement>("#run-output-tokens");
+const runCacheRead = requireElement<HTMLElement>("#run-cache-read");
+const runCacheWrite = requireElement<HTMLElement>("#run-cache-write");
+const runCacheHit = requireElement<HTMLElement>("#run-cache-hit");
 const runEffort = requireElement<HTMLElement>("#run-effort");
 const runApproval = requireElement<HTMLElement>("#run-approval");
 const runSteering = requireElement<HTMLElement>("#run-steering");
@@ -1371,6 +1388,12 @@ function renderRunLedger(): void {
     thread.messages.filter((message) => message.role === "user").length,
   );
   runTools.textContent = String(tools.length);
+  const usage = thread.usage;
+  runInputTokens.textContent = String(usage?.input_tokens ?? 0);
+  runOutputTokens.textContent = String(usage?.output_tokens ?? 0);
+  runCacheRead.textContent = String(usage?.cache_read_tokens ?? 0);
+  runCacheWrite.textContent = String(usage?.cache_write_tokens ?? 0);
+  runCacheHit.textContent = `${usage?.cache_hit_ratio ?? 0}‰`;
   runEffort.textContent = effortLabel(currentEffort);
   runApproval.textContent = thread.approvalMode.toUpperCase();
   runSteering.textContent = thread.steeringMode.toUpperCase();
@@ -1687,6 +1710,14 @@ function handleChatEvent(event: ChatEvent, context: StreamContext): boolean {
     updateAssistant(thread, assistant);
     return true;
   }
+  if (event.kind === "usage") {
+    thread.usage = event.usage;
+    schedulePersist();
+    if (thread.id === state.activeThreadId) {
+      renderRunLedger();
+    }
+    return false;
+  }
   if (event.kind === "done") {
     thread.stopping = false;
     thread.sessionId = event.session_id ?? thread.sessionId;
@@ -1902,6 +1933,7 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
   }
   thread.model = settingsModel.value.trim() || thread.model;
   thread.updatedAt = Date.now();
+  thread.usage = undefined;
   thread.runStartedAt = Date.now();
   renderEverything(true);
   schedulePersist();
@@ -3592,6 +3624,7 @@ async function retryFailedTurn(
   const assistant = createAssistantMessage();
   thread.messages.splice(failedIndex + 1, 0, assistant);
   thread.stopReason = "";
+  thread.usage = undefined;
   thread.stopping = false;
   thread.runStartedAt = Date.now();
   thread.updatedAt = Date.now();
@@ -3852,6 +3885,11 @@ settingsForm.addEventListener("submit", (event) => {
   void saveSettings();
 });
 runRailToggle.addEventListener("click", () => {
+  if (window.matchMedia("(max-width: 1180px)").matches) {
+    const open = runRail.classList.toggle("run-rail-open");
+    runRailToggle.setAttribute("aria-pressed", String(open));
+    return;
+  }
   const hidden = appShell.classList.toggle("run-rail-hidden");
   runRailToggle.setAttribute("aria-pressed", String(!hidden));
 });
@@ -4083,3 +4121,6 @@ window.setInterval(() => {
 renderEverything();
 resizePrompt();
 void refreshEffort();
+if (window.matchMedia("(max-width: 1180px)").matches) {
+  runRailToggle.setAttribute("aria-pressed", "false");
+}

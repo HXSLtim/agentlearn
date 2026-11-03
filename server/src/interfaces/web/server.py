@@ -19,6 +19,9 @@ POST /chat
             工具跑完。id 和对应的 tool_use 相同：一次回复里并行多个工具时，
             前端靠 id 把结果填回各自的卡片，不能靠事件顺序猜。
             elapsed_ms 与 `main.py trace` 回放的耗时是同一个数
+        {"kind": "usage", "usage": {...}}
+            每次成功模型请求后推送本轮累计 token 实数；字段与 llm_request
+            span 的 usage 一致，包含 input/output/cache_read/cache_write/hit
     全部推完再补一条：
         {"kind": "done", "stop_reason": "...", "session_id": "..."}
     中途出错则补一条（200 已发出，改不了状态码，只能用事件报错）：

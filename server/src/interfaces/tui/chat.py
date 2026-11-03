@@ -2094,6 +2094,13 @@ class AgentLearnTUI(App[str | None]):
             if block.type == "tool_use"
         )
         self.stop_reason = "—"
+        self.turn_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cache_hit_ratio": 0,
+        }
         self.effort = "—"
         if self.settings_loader is not None:
             try:
@@ -2153,6 +2160,16 @@ class AgentLearnTUI(App[str | None]):
                 yield Static(str(self.tool_count), id="ledger-tools", classes="ledger-value")
                 yield Static("ELAPSED", classes="ledger-label")
                 yield Static("—", id="ledger-elapsed", classes="ledger-value")
+                yield Static("INPUT TOKENS", classes="ledger-label")
+                yield Static("0", id="ledger-input", classes="ledger-value")
+                yield Static("OUTPUT TOKENS", classes="ledger-label")
+                yield Static("0", id="ledger-output", classes="ledger-value")
+                yield Static("CACHE READ", classes="ledger-label")
+                yield Static("0", id="ledger-cache-read", classes="ledger-value")
+                yield Static("CACHE WRITE", classes="ledger-label")
+                yield Static("0", id="ledger-cache-write", classes="ledger-value")
+                yield Static("CACHE HIT", classes="ledger-label")
+                yield Static("0‰", id="ledger-cache-hit", classes="ledger-value")
                 yield Static("STOP REASON", classes="ledger-label")
                 yield Static("—", id="ledger-stop", classes="ledger-value")
                 yield Static("", classes="ledger-rule")
@@ -2283,6 +2300,13 @@ class AgentLearnTUI(App[str | None]):
         self.turn_started = time.monotonic()
         self.turn_count += 1
         self.stop_reason = "—"
+        self.turn_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cache_hit_ratio": 0,
+        }
         running = RunningTurn(approval_mode=self.approval_mode)
         self.steering_turn = running
         self.conversation.steering = running
@@ -2402,6 +2426,10 @@ class AgentLearnTUI(App[str | None]):
                 await self.query_one("#timeline", VerticalScroll).mount(self._assistant)
             self._assistant.append_text(fragment)
             self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+            return
+        if kind == "usage":
+            self.turn_usage = dict(event.get("usage", {}))
+            self._update_ledger()
             return
         if kind == "steering_injected":
             self._finish_live_blocks()
@@ -2535,6 +2563,21 @@ class AgentLearnTUI(App[str | None]):
         self.query_one("#ledger-tools", Static).update(str(self.tool_count))
         self.query_one("#ledger-queued", Static).update(str(len(self.queued_prompts)))
         self.query_one("#ledger-stop", Static).update(self.stop_reason)
+        self.query_one("#ledger-input", Static).update(
+            str(self.turn_usage.get("input_tokens", 0))
+        )
+        self.query_one("#ledger-output", Static).update(
+            str(self.turn_usage.get("output_tokens", 0))
+        )
+        self.query_one("#ledger-cache-read", Static).update(
+            str(self.turn_usage.get("cache_read_tokens", 0))
+        )
+        self.query_one("#ledger-cache-write", Static).update(
+            str(self.turn_usage.get("cache_write_tokens", 0))
+        )
+        self.query_one("#ledger-cache-hit", Static).update(
+            f"{self.turn_usage.get('cache_hit_ratio', 0)}‰"
+        )
         if not self.streaming:
             self.query_one("#ledger-elapsed", Static).update(
                 f"{round((time.monotonic() - self.turn_started) * 1000)}ms"
@@ -2987,11 +3030,11 @@ class AgentLearnTUI(App[str | None]):
         usage = report["last_usage"]
         usage_lines = (
             [
-                f"input         {usage.get('input', '—')}",
-                f"cache_read    {usage.get('cache_read', '—')}"
+                f"input         {usage.get('input_tokens', '—')}",
+                f"cache_read    {usage.get('cache_read_tokens', '—')}"
                 f"（命中 {usage.get('cache_hit_ratio', '—')}‰）",
-                f"cache_write   {usage.get('cache_write', '—')}",
-                f"output        {usage.get('output', '—')}",
+                f"cache_write   {usage.get('cache_write_tokens', '—')}",
+                f"output        {usage.get('output_tokens', '—')}",
             ]
             if usage
             else ["（还没有请求记录）"]

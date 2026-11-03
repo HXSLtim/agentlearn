@@ -31,6 +31,9 @@
   二次确认后才调用 `DELETE /sessions/{id}` 并清理本地索引。
 - 恢复框支持 fork：按源会话 JSONL 消息总数选择前 N 条，
   调用 `POST /sessions/{id}/fork` 后自动切到新分支并恢复正文。
+- 运行账本显示每轮 token 实数：Conversation 发出累计 `usage`
+  事件，TUI 与 desktop 均展示 input/output/cache read/write/hit；
+  修正 `/context` 读取旧 usage 字段名导致永远为空的问题。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

@@ -20,6 +20,7 @@ turn() 产出的事件是 dict，两个入口消费同一份：
     {"kind": "tool_use", "id", "name", "input"}         模型要调工具，执行前就发
     {"kind": "tool_result", "id", "name", "output",
      "is_error", "elapsed_ms"}                          工具跑完，带结果和耗时
+    {"kind": "usage", "usage"}                           每次成功模型请求后，发本轮累计 token
     {"kind": "steering_injected", "text"}               软中断的消息并入当前轮（圈界处）
 id 是这一次调用的标识，和落盘的 ToolUseBlock.id 是同一个值：
 一次回复里并行多个工具时，前端靠它把 tool_result 填回对应的 tool_use，
@@ -141,6 +142,37 @@ class Conversation:
         # 最近一轮所有成功模型请求的 token 总和。chat.usage 每次请求都会
         # 被覆盖，工具循环不能只看最后一次；预算熔断要的是整轮累计。
         self.turn_usage_tokens = 0
+        self.turn_usage = self._empty_usage()
+
+    @staticmethod
+    def _empty_usage() -> dict:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cache_hit_ratio": 0,
+        }
+
+    def _record_usage(self, usage: dict) -> dict:
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+        ):
+            self.turn_usage[key] += int(usage.get(key, 0) or 0)
+        total_input = (
+            self.turn_usage["input_tokens"]
+            + self.turn_usage["cache_read_tokens"]
+            + self.turn_usage["cache_write_tokens"]
+        )
+        self.turn_usage["cache_hit_ratio"] = (
+            round(self.turn_usage["cache_read_tokens"] / total_input * 1000)
+            if total_input
+            else 0
+        )
+        return dict(self.turn_usage)
 
     @staticmethod
     def _usage_tokens(usage: dict) -> int:
@@ -248,8 +280,18 @@ class Conversation:
             if row["name"] != "llm_request" or not row["data"]:
                 continue
             data = json.loads(row["data"])
-            if any(k in data for k in ("input", "cache_read", "output")):
-                last_usage = data
+            if "input_tokens" in data or "cache_read_tokens" in data or "output_tokens" in data:
+                last_usage = {
+                    key: data[key]
+                    for key in (
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_read_tokens",
+                        "cache_write_tokens",
+                        "cache_hit_ratio",
+                    )
+                    if key in data
+                }
                 break
         return {
             "messages_total": len(history),
@@ -332,6 +374,7 @@ class Conversation:
             )
             if count_turn_tokens:
                 self.turn_usage_tokens += self._usage_tokens(chat.usage)
+                self._record_usage(chat.usage)
             compaction.save_summary(path, cut, new_text)
             covered, summary_text = cut, new_text
         tail = history[covered:] if covered else history
@@ -416,6 +459,7 @@ class Conversation:
         # 但当前轮的工具循环不能中途换客户端，否则同一条 trace 会混两套配置。
         chat = self.chat
         self.turn_usage_tokens = 0
+        self.turn_usage = self._empty_usage()
         if not append_user and images:
             raise ValueError("重试不落新消息，不能带图。")
         if append_user:
@@ -560,7 +604,9 @@ class Conversation:
             if chat.effort:
                 data["effort"] = chat.effort_note
             self.turn_usage_tokens += self._usage_tokens(chat.usage)
+            usage_snapshot = self._record_usage(chat.usage)
             self.store.end_span(llm_span, status="ok", data=data)
+            yield {"kind": "usage", "usage": usage_snapshot}
 
             if stop != "tool_use":
                 # 模型不再要工具，这一轮到此为止。
