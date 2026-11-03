@@ -411,6 +411,12 @@ const SLASH_COMMANDS: SlashCommand[] = [
     group: "SYSTEM",
   },
   {
+    name: "export",
+    usage: "/export",
+    description: "把当前会话导出为 Markdown",
+    group: "SYSTEM",
+  },
+  {
     name: "model",
     usage: "/model <id>",
     description: "切换运行模型；不带参数打开设置",
@@ -4186,6 +4192,46 @@ async function copyLatestAnswer(): Promise<void> {
   showToast(`已复制最近回答 · ${answer.text.length.toLocaleString()} chars`);
 }
 
+async function exportCurrentSession(): Promise<void> {
+  const thread = activeThread();
+  if (!thread.sessionId) {
+    showCommandResult("EXPORT", "当前会话还没有落盘，不能导出。", true);
+    return;
+  }
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${thread.sessionId}/markdown`,
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const filename =
+      disposition.match(/filename="([^"]+)"/)?.[1] ??
+      `agentlearn-${thread.sessionId}.md`;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showCommandResult(
+      "EXPORT",
+      `SESSION ${shortSession(thread.sessionId)}\nMarkdown 下载已开始：${filename}`,
+    );
+  } catch (error) {
+    showCommandResult(
+      "EXPORT",
+      error instanceof Error ? error.message : String(error),
+      true,
+    );
+  }
+}
+
 async function retryFailedTurn(
   thread: Thread,
   assistantId?: string,
@@ -4300,6 +4346,10 @@ async function runSlashCommand(
   }
   if (command.name === "copy") {
     await copyLatestAnswer();
+    return;
+  }
+  if (command.name === "export") {
+    await exportCurrentSession();
     return;
   }
   if (command.name === "steering") {

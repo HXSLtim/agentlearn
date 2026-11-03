@@ -64,6 +64,10 @@
 - 两端新增 `/transcript [mode]`：normal 只看正文与审批，thinking 展开
   思考块，verbose 再显示工具入参和出参；档位切换只影响渲染，不改写
   JSONL，也不改变审批决策入口。
+- 两端新增 `/export`：共享导出器把 JSONL 会话整理成 Markdown（含
+  thinking、工具入参/出参与图片 data URI）；desktop 请求只读
+  `GET /sessions/{id}/markdown` 触发下载，TUI 可指定路径或默认写
+  `data/exports/`，已存在文件拒绝覆盖；`/copy` 仍只复制最近一条回答。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

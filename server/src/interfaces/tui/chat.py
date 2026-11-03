@@ -53,6 +53,7 @@ from application.conversation import Conversation, TurnCancelled
 from application.tools import append_memory, read_memory
 from application.session_manager import MODES as STEERING_MODES
 from application.session_manager import RunningTurn
+from application.transcript_export import transcript_to_markdown
 from application.workspace import changed_files
 from domain.message import ImageBlock
 from domain.message import Message as DomainMessage
@@ -196,6 +197,13 @@ COMMANDS = (
     SlashCommand("trace", "/trace", "查看当前会话的 span 轨迹", "RUNTIME"),
     SlashCommand("diff", "/diff", "查看当前 Git 工作区差异", "RUNTIME"),
     SlashCommand("copy", "/copy", "复制最近一条完整回答", "SYSTEM"),
+    SlashCommand(
+        "export",
+        "/export [path]",
+        "把当前会话导出为 Markdown",
+        "SYSTEM",
+        takes_argument=True,
+    ),
     SlashCommand(
         "model",
         "/model <id>",
@@ -3126,6 +3134,9 @@ class AgentLearnTUI(App[str | None]):
         if command.name == "copy":
             self.action_copy_answer()
             return
+        if command.name == "export":
+            await self._command_export(argument)
+            return
         if command.name == "find":
             self._command_find(argument)
             return
@@ -3209,6 +3220,53 @@ class AgentLearnTUI(App[str | None]):
         await self._show_command_result(
             "ATTACH",
             f"{path}\n已排队到下一条用户消息；发送时只支持 queue。",
+        )
+
+    async def _command_export(self, argument: str) -> None:
+        transcript = getattr(self.conversation, "transcript", None)
+        if transcript is None:
+            await self._show_command_result(
+                "EXPORT", "会话正文没有装配，不能导出。", error=True
+            )
+            return
+        try:
+            messages = transcript.read(self.session_id)
+        except Exception as exc:
+            await self._show_command_result("EXPORT", str(exc), error=True)
+            return
+        if not messages:
+            await self._show_command_result(
+                "EXPORT", "当前会话还没有可导出的正文。", error=True
+            )
+            return
+        if argument:
+            path = Path(argument).expanduser().resolve()
+        else:
+            path = (
+                transcript.directory.parent
+                / "exports"
+                / f"agentlearn-{self.session_id}.md"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+        markdown = transcript_to_markdown(
+            messages,
+            session_id=self.session_id,
+            model=self.conversation.chat.model,
+        )
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(markdown)
+        except FileExistsError:
+            await self._show_command_result(
+                "EXPORT", f"文件已存在，不覆盖：\n{path}", error=True
+            )
+            return
+        except OSError as exc:
+            await self._show_command_result("EXPORT", str(exc), error=True)
+            return
+        await self._show_command_result(
+            "EXPORT",
+            f"{path}\nMarkdown 已导出 · {len(markdown)} chars · {len(messages)} messages",
         )
 
     async def _command_resume(self, argument: str) -> None:

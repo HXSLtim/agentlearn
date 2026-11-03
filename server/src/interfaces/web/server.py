@@ -68,7 +68,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
@@ -91,6 +91,7 @@ from application.tools import (
 from application.proactivity import ProactivityRunner, UNATTENDED_MAX_TOOL_ROUNDS
 from application.session_manager import MODES, SessionManager
 from application.trace_view import answers_for_requests, answer_texts
+from application.transcript_export import transcript_to_markdown
 from application.workspace import WorkspaceError, changed_files
 from application.workspace import complete_paths
 from infrastructure.config import (
@@ -447,6 +448,25 @@ def get_session_messages(session_id: str):
     """一个会话的完整内容块（首屏恢复用）。JSONL 仍是唯一事实来源。"""
     _validated_session(session_id)
     return [message.to_dict() for message in _transcript.read(session_id)]
+
+
+@app.get("/sessions/{session_id}/markdown")
+def get_session_markdown(session_id: str):
+    """把当前 JSONL 会话导出为 Markdown 附件；只读，不写 server 文件。"""
+    _validated_session(session_id)
+    row = _session_row(session_id) or {}
+    markdown = transcript_to_markdown(
+        _transcript.read(session_id),
+        session_id=session_id,
+        model=row.get("model", ""),
+    )
+    return Response(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="agentlearn-{session_id}.md"'
+        },
+    )
 
 
 @app.post("/stop")
