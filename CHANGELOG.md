@@ -46,6 +46,10 @@
   `GET /workspace/paths`，只按前缀返回 Git tracked/untracked 路径名，
   ignored 不进入结果，也不读取文件内容；光标处活跃 `@token` 打开
   面板，Enter/Tab/点击只替换路径文本，第二次 Enter 才发送 `/chat`。
+- desktop composer 支持拖拽图片：白名单校验并预览待发送附件，
+  提交时作为 `POST /chat` 的 `images` 传给后端；带图只允许 queue，
+  cooperative / preemptive 在前端拦截。RETRY 修正为发送
+  `{"retry":true}` 与空 question，且不携带新的 `images`。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

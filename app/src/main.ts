@@ -460,6 +460,8 @@ const composerStatus = requireElement<HTMLElement>("#composer-status");
 const sendButton = requireElement<HTMLButtonElement>("#send");
 const sendLabel = requireElement<HTMLElement>("#send-label");
 const stopButton = requireElement<HTMLButtonElement>("#stop");
+const composerShell = requireElement<HTMLElement>("#composer-shell");
+const composerAttachments = requireElement<HTMLElement>("#composer-attachments");
 const commandPalette = requireElement<HTMLElement>("#command-palette");
 const commandList = requireElement<HTMLElement>("#command-list");
 const commandPaletteTitle = requireElement<HTMLElement>("#command-palette-title");
@@ -572,6 +574,7 @@ let commandMatches: SlashCommand[] = [...SLASH_COMMANDS];
 let commandSelection = 0;
 type PaletteMode = "command" | "file";
 let paletteMode: PaletteMode = "command";
+let pendingImages: ImageAttachment[] = [];
 let fileMatches: string[] = [];
 let fileSelection = 0;
 let fileCompletionTimer: number | undefined;
@@ -645,6 +648,62 @@ function parseImage(
     return undefined;
   }
   return { media_type: mediaType, data };
+}
+
+function renderPendingImages(): void {
+  pendingImages = pendingImages
+    .map(parseImage)
+    .filter((image): image is ImageAttachment => Boolean(image));
+  composerAttachments.hidden = !pendingImages.length;
+  composerAttachments.innerHTML = pendingImages
+    .map(
+      (image, index) => `
+        <figure class="composer-attachment">
+          <img src="data:${image.media_type};base64,${image.data}" alt="待发送图片 ${index + 1}" />
+          <button type="button" data-remove-image="${index}">REMOVE</button>
+        </figure>
+      `,
+    )
+    .join("");
+}
+
+async function imageFileToAttachment(file: File): Promise<ImageAttachment | undefined> {
+  if (!IMAGE_MEDIA_TYPES.has(file.type)) {
+    return undefined;
+  }
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(typeof reader.result === "string" ? reader.result : "");
+    };
+    reader.onerror = () => {
+      reject(reader.error ?? new Error(`读取 ${file.name} 失败`));
+    };
+    reader.readAsDataURL(file);
+  });
+  const prefix = `data:${file.type};base64,`;
+  if (!dataUrl.startsWith(prefix)) {
+    return undefined;
+  }
+  return parseImage({
+    media_type: file.type,
+    data: dataUrl.slice(prefix.length),
+  });
+}
+
+async function addDroppedImages(files: FileList | undefined): Promise<void> {
+  const images = await Promise.all(
+    Array.from(files ?? []).map((file) => imageFileToAttachment(file)),
+  );
+  const valid = images.filter((image): image is ImageAttachment => Boolean(image));
+  if (!valid.length) {
+    showToast("没有可发送的图片附件");
+    return;
+  }
+  pendingImages = [...pendingImages, ...valid];
+  renderPendingImages();
+  promptInput.focus();
+  showToast(`已添加 ${valid.length} 张图片 · 发送时使用 queue`);
 }
 
 function normalizeStoredMessage(message: UiMessage): UiMessage {
@@ -1980,10 +2039,15 @@ async function saveSettings(): Promise<void> {
 
 async function submitPrompt(rawPrompt: string): Promise<void> {
   const question = rawPrompt.trim();
-  if (!question) {
+  const images = pendingImages;
+  if (!question && !images.length) {
     return;
   }
   const slashCommand = parseSlashCommand(question);
+  if (slashCommand && images.length) {
+    showToast("图片附件不能跟斜杠命令一起发送");
+    return;
+  }
   if (slashCommand) {
     promptInput.value = "";
     resizePrompt();
@@ -1996,11 +2060,17 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
     return;
   }
   const thread = activeThread();
+  if (images.length && thread.steeringMode !== "queue") {
+    showToast("带图输入只支持 queue 档；按 Alt+S 切回 queue");
+    return;
+  }
+  pendingImages = [];
+  renderPendingImages();
   promptInput.value = "";
   resizePrompt();
   closeCommandPalette();
   if (isThreadRunning(thread)) {
-    await submitSteering(thread, question);
+    await submitSteering(thread, question, images);
     return;
   }
 
@@ -2010,6 +2080,7 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
     thread.sessionId = createId();
   }
   const userMessage = createUserMessage(question);
+  userMessage.images = images;
   const assistant = createAssistantMessage();
   thread.messages.push(userMessage);
   thread.messages.push(assistant);
@@ -2026,11 +2097,17 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
     { thread, assistant, userMessage },
     question,
     thread.steeringMode,
+    images,
   );
 }
 
-async function submitSteering(thread: Thread, question: string): Promise<void> {
+async function submitSteering(
+  thread: Thread,
+  question: string,
+  images: ImageAttachment[] = [],
+): Promise<void> {
   const userMessage = createUserMessage(question);
+  userMessage.images = images;
   userMessage.steeringState = "queued";
   const assistant = createAssistantMessage(true);
   thread.messages.push(userMessage);
@@ -2056,6 +2133,7 @@ async function submitSteering(thread: Thread, question: string): Promise<void> {
     { thread, assistant, userMessage },
     question,
     thread.steeringMode,
+    images,
   );
 }
 
@@ -2063,6 +2141,8 @@ async function runChatRequest(
   context: StreamContext,
   question: string,
   steering: SteeringMode,
+  images: ImageAttachment[] = [],
+  retry = false,
 ): Promise<void> {
   const { thread } = context;
   let gotDone = false;
@@ -2081,10 +2161,12 @@ async function runChatRequest(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        question,
+        question: retry ? "" : question,
         session_id: thread.sessionId,
         approval_mode: thread.approvalMode,
         steering,
+        ...(images.length ? { images } : {}),
+        ...(retry ? { retry: true } : {}),
       }),
     });
     if (!response.ok) {
@@ -3855,7 +3937,10 @@ async function retryFailedTurn(
   const previousUser = [...thread.messages.slice(0, failedIndex)]
     .reverse()
     .find((message) => message.role === "user");
-  if (!previousUser?.text.trim()) {
+  if (
+    !previousUser ||
+    (!previousUser.text.trim() && !(previousUser.images ?? []).length)
+  ) {
     showToast("找不到这条失败请求对应的用户消息");
     return;
   }
@@ -3873,7 +3958,9 @@ async function retryFailedTurn(
   await runChatRequest(
     { thread, assistant },
     previousUser.text,
-    thread.steeringMode,
+    "queue",
+    [],
+    true,
   );
 }
 
@@ -4184,6 +4271,35 @@ commandList.addEventListener("click", (event) => {
   }
   commandSelection = Number(button.dataset.commandIndex);
   completeSelectedCommand();
+});
+composerAttachments.addEventListener("click", (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>(
+    "[data-remove-image]",
+  );
+  if (button?.dataset.removeImage === undefined) {
+    return;
+  }
+  const index = Number(button.dataset.removeImage);
+  if (!Number.isInteger(index) || index < 0 || index >= pendingImages.length) {
+    return;
+  }
+  pendingImages.splice(index, 1);
+  renderPendingImages();
+});
+composer.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  composerShell.classList.add("is-dragover");
+});
+composer.addEventListener("dragleave", (event) => {
+  if (event.relatedTarget instanceof Node && composer.contains(event.relatedTarget)) {
+    return;
+  }
+  composerShell.classList.remove("is-dragover");
+});
+composer.addEventListener("drop", (event) => {
+  event.preventDefault();
+  composerShell.classList.remove("is-dragover");
+  void addDroppedImages(event.dataTransfer?.files);
 });
 resumeList.addEventListener("click", (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>(

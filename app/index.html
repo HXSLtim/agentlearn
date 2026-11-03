@@ -136,11 +136,12 @@
               <span>ESC CLOSE</span>
             </div>
           </div>
-          <div class="composer-shell">
+          <div class="composer-shell" id="composer-shell">
             <div class="composer-heading">
               <span>COMPOSE</span>
               <span id="composer-status">ENTER TO SEND · SHIFT+ENTER FOR NEWLINE</span>
             </div>
+            <div class="composer-attachments" id="composer-attachments" hidden></div>
             <label class="sr-only" for="prompt">向 agent 发消息</label>
             <textarea
               id="prompt"
