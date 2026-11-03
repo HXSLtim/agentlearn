@@ -44,7 +44,7 @@ desktop / TUI 还没接上的界面：
 - [x] desktop diff 工作台显示未跟踪文件 ✅（2026-11-03）：`include_untracked=true` 时用 `git diff --no-index /dev/null <path>` 生成全新增 hunk，desktop 请求该档位并显示 `UNTRACKED`、路径与新增行。临时 Git 仓库验证未跟踪文件产生 `new_line=1` 的 add 行且 `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；380×900 CDP 截图人工检查未跟踪文件可见，document/body/list `scrollWidth` 均 380。
 - [x] desktop diff 工作台可以按文件折叠 ✅（2026-11-03）：每个文件改为原生 `<details open>`，摘要行保留状态、路径、旧路径、增删计数、binary/truncated 标记与折叠箭头，点击文件头只折叠该文件 hunk，不写工作区。`npm run build` 通过；380×900 CDP 点击第二个文件后 `open=[true,false]`、可见 hunk 从 2 变 1、闭合内容 `display:none`，document/body/list `scrollWidth` 均 380；截图人工检查折叠后的摘要行。
 - [x] TUI 增加 `/diff`，打开只读 pager ✅（2026-11-03）：命令面板新增 `/diff`，ModalScreen 复用 `changed_files(include_untracked=true)` 渲染根路径、已跟踪/未跟踪计数、文件状态、旧路径、增删计数、binary/truncated、hunk 与红删绿增行；支持 ↑↓/Page↑↓/Home/End/R/ESC，不写文件。Textual headless 验证打开当前工作区、向下滚动 `scroll_y=1`、reload、ESC 关闭，调用前后 `.git/index` SHA256 不变；`compileall` 通过；导出 TUI 截图并人工检查。
-- [ ] desktop 内容搜索接 `GET /sessions/search`，展示每个会话的第一处命中。验收：现有恢复框只过滤 id / 标题 / 模型，不能当作内容搜索。
+- [x] desktop 内容搜索接 `GET /sessions/search`，展示每个会话的第一处命中 ✅（2026-11-03）：恢复框输入非空关键词时同时保留本地 id/标题/模型/stop reason 匹配与 server 正文命中，异步防串包；每个正文命中会话在列表行展示第一处 snippet，空词清空正文结果。`npm run build` 通过；380×900 mock 页面验证请求 `q=blueprint` 后只保留正文命中会话、snippet 可见，document/body/list `scrollWidth` 均 380，截图人工检查。
 - [ ] desktop 会话重命名，接 `PATCH /sessions/{id}`。
 - [ ] desktop 会话 pin，接同一 PATCH，列表 pin 优先。
 - [ ] desktop 会话 archive，接同一 PATCH。验收：默认列表消失，归档视图还能打开。

@@ -153,6 +153,19 @@ interface ServerSession {
   stop_reason: string;
 }
 
+interface SessionSearchHit {
+  session_id: string;
+  title: string;
+  message_index: number;
+  role: string;
+  snippet: string;
+}
+
+interface SessionSearchResponse {
+  q: string;
+  hits: SessionSearchHit[];
+}
+
 interface ServerContentBlock {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
   text?: string;
@@ -462,6 +475,8 @@ let commandSelection = 0;
 let resumeMatches: Thread[] = [];
 let resumeSelection = 0;
 let resumeQuery = "";
+let contentHits = new Map<string, SessionSearchHit>();
+let contentSearchSequence = 0;
 let traceSpans: TraceSpan[] = [];
 let traceAnswers: Record<string, string> = {};
 let traceSelectedSpanId = "";
@@ -2477,6 +2492,7 @@ function findResumeThread(argument: string): Thread | null {
 function filterResumeThreads(): void {
   const query = resumeQuery.trim().toLowerCase();
   const all = [...state.threads].sort((a, b) => b.updatedAt - a.updatedAt);
+  const contentMatchIds = new Set(contentHits.keys());
   resumeMatches = query
     ? all.filter(
         (thread) =>
@@ -2484,7 +2500,8 @@ function filterResumeThreads(): void {
           thread.sessionId.toLowerCase().includes(query) ||
           thread.title.toLowerCase().includes(query) ||
           thread.model.toLowerCase().includes(query) ||
-          thread.stopReason.toLowerCase().includes(query),
+            thread.stopReason.toLowerCase().includes(query) ||
+            contentMatchIds.has(thread.sessionId),
       )
     : all;
   resumeSelection = Math.min(
@@ -2495,7 +2512,7 @@ function filterResumeThreads(): void {
 
 function renderResumeList(): void {
   const currentId = state.activeThreadId;
-  resumeSummary.textContent = `${resumeMatches.length} 个会话 · server 索引 · 当前 ${shortSession(
+  resumeSummary.textContent = `${resumeMatches.length} 个会话 · 正文命中 ${contentHits.size} · 当前 ${shortSession(
     activeThread().sessionId,
   )}`;
   resumeList.innerHTML = resumeMatches
@@ -2522,6 +2539,13 @@ function renderResumeList(): void {
           <small>${escapeHtml(thread.model || "model unknown")} · ${escapeHtml(
             thread.stopReason || "no completed run",
           )}</small>
+          ${
+            contentHits.has(thread.sessionId)
+              ? `<em class="resume-content-hit">${escapeHtml(
+                  contentHits.get(thread.sessionId)?.snippet ?? "",
+                )}</em>`
+              : ""
+          }
         </button>
       `;
     })
@@ -2531,6 +2555,8 @@ function renderResumeList(): void {
 async function openResume(): Promise<void> {
   await fetchServerSessions(true);
   resumeQuery = "";
+  contentHits.clear();
+  contentSearchSequence += 1;
   resumeSearch.value = "";
   filterResumeThreads();
   const alternate = resumeMatches.findIndex(
@@ -2540,6 +2566,44 @@ async function openResume(): Promise<void> {
   renderResumeList();
   resumeModal.hidden = false;
   resumeSearch.focus();
+}
+
+async function searchSessionContent(query: string): Promise<void> {
+  const sequence = ++contentSearchSequence;
+  contentHits = new Map();
+  filterResumeThreads();
+  renderResumeList();
+  const needle = query.trim();
+  if (!needle || resumeModal.hidden) {
+    return;
+  }
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/search?q=${encodeURIComponent(needle)}`,
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const result = (await response.json()) as SessionSearchResponse;
+    if (sequence !== contentSearchSequence || resumeModal.hidden) {
+      return;
+    }
+    for (const hit of result.hits) {
+      if (!contentHits.has(hit.session_id)) {
+        contentHits.set(hit.session_id, hit);
+      }
+    }
+    filterResumeThreads();
+    renderResumeList();
+  } catch (error) {
+    if (sequence === contentSearchSequence) {
+      showToast(
+        `正文搜索失败：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
 }
 
 function closeResume(): void {
@@ -3236,6 +3300,7 @@ resumeCloseButton.addEventListener("click", closeResume);
 resumeSearch.addEventListener("input", () => {
   resumeQuery = resumeSearch.value;
   resumeSelection = 0;
+  void searchSessionContent(resumeQuery);
   filterResumeThreads();
   renderResumeList();
 });

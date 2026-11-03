@@ -2724,21 +2724,39 @@ kbd {
   white-space: nowrap;
 }
 
+.resume-content-hit {
+  display: block;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  padding: 4px 0 4px 7px;
+  color: var(--green);
+  border-left: 2px solid var(--green);
+  font-family: var(--mono);
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .resume-item:hover .resume-item-id,
 .resume-item:hover .resume-item-turns,
 .resume-item:hover .resume-current,
 .resume-item:hover strong,
 .resume-item:hover small,
+.resume-item:hover .resume-content-hit,
 .resume-item:focus-visible .resume-item-id,
 .resume-item:focus-visible .resume-item-turns,
 .resume-item:focus-visible .resume-current,
 .resume-item:focus-visible strong,
 .resume-item:focus-visible small,
+.resume-item:focus-visible .resume-content-hit,
 .resume-item.is-selected .resume-item-id,
 .resume-item.is-selected .resume-item-turns,
 .resume-item.is-selected .resume-current,
 .resume-item.is-selected strong,
-.resume-item.is-selected small {
+.resume-item.is-selected small,
+.resume-item.is-selected .resume-content-hit {
   color: var(--void);
 }
 

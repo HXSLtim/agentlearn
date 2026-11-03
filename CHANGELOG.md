@@ -18,6 +18,9 @@
   点击文件头即可单独折叠 / 展开 hunk。
 - TUI 新增 `/diff` 只读 pager：命令面板可发现，支持 ↑↓/Page↑↓/Home/End
   滚动、R 重载、ESC 关闭，与 desktop 共用同一份 workspace 事实。
+- desktop 恢复框接入 `GET /sessions/search`：正文命中的会话即使标题 /
+  id / 模型不匹配也会保留，并在列表行展示第一处 snippet；空词清空正文
+  结果，异步结果用序号防串包。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
