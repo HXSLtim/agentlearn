@@ -108,6 +108,13 @@ interface SettingsSnapshot {
   effort: "" | "off" | "low" | "medium" | "high" | "max";
   api_key_configured: boolean;
   api_key_source: string;
+  pricing: {
+    currency: string;
+    input_per_million: string;
+    cache_read_per_million: string;
+    cache_write_per_million: string;
+    output_per_million: string;
+  } | null;
 }
 
 interface SettingsPayload {
@@ -447,6 +454,7 @@ const runOutputTokens = requireElement<HTMLElement>("#run-output-tokens");
 const runCacheRead = requireElement<HTMLElement>("#run-cache-read");
 const runCacheWrite = requireElement<HTMLElement>("#run-cache-write");
 const runCacheHit = requireElement<HTMLElement>("#run-cache-hit");
+const runCost = requireElement<HTMLElement>("#run-cost");
 const runEffort = requireElement<HTMLElement>("#run-effort");
 const runApproval = requireElement<HTMLElement>("#run-approval");
 const runSteering = requireElement<HTMLElement>("#run-steering");
@@ -531,6 +539,7 @@ const workspaceDiffList = requireElement<HTMLElement>("#workspace-diff-list");
 
 let state = loadState();
 let currentEffort: SettingsSnapshot["effort"] = "";
+let currentPricing: SettingsSnapshot["pricing"] = null;
 let approvalModeSync: Promise<void> = Promise.resolve();
 const autoApprovedApprovalIds = new Set<string>();
 let toastTimer: number | undefined;
@@ -1394,6 +1403,7 @@ function renderRunLedger(): void {
   runCacheRead.textContent = String(usage?.cache_read_tokens ?? 0);
   runCacheWrite.textContent = String(usage?.cache_write_tokens ?? 0);
   runCacheHit.textContent = `${usage?.cache_hit_ratio ?? 0}‰`;
+  runCost.textContent = formatCost(usage);
   runEffort.textContent = effortLabel(currentEffort);
   runApproval.textContent = thread.approvalMode.toUpperCase();
   runSteering.textContent = thread.steeringMode.toUpperCase();
@@ -1456,6 +1466,24 @@ function renderRunLedger(): void {
         )
         .join("")
     : `<li class="activity-empty">工具与思考事件会出现在这里。</li>`;
+}
+
+function formatCost(usage: TurnUsage | undefined): string {
+  if (!currentPricing) {
+    return "NOT CALCULATED";
+  }
+  const amount =
+    ((usage?.input_tokens ?? 0) * Number(currentPricing.input_per_million) +
+      (usage?.cache_read_tokens ?? 0) *
+        Number(currentPricing.cache_read_per_million) +
+      (usage?.cache_write_tokens ?? 0) *
+        Number(currentPricing.cache_write_per_million) +
+      (usage?.output_tokens ?? 0) *
+        Number(currentPricing.output_per_million)) /
+    1_000_000;
+  return `${amount.toFixed(8).replace(/\.?0+$/, "") || "0"} ${
+    currentPricing.currency
+  }`;
 }
 
 function renderEverything(forceBottom = false): void {
@@ -1781,6 +1809,7 @@ function setSettingsStatus(
 
 function applySettings(snapshot: SettingsSnapshot): void {
   currentEffort = snapshot.effort;
+  currentPricing = snapshot.pricing;
   settingsProvider.value = snapshot.provider;
   settingsModel.value = snapshot.model_id;
   settingsBaseUrl.value = snapshot.base_url;
@@ -1843,6 +1872,7 @@ function openSettings(): void {
     effort: "",
     api_key_configured: false,
     api_key_source: "正在读取",
+    pricing: null,
   });
   void loadSettings();
 }
@@ -3283,8 +3313,10 @@ async function refreshEffort(): Promise<void> {
     }
     const snapshot = (await response.json()) as SettingsSnapshot;
     currentEffort = snapshot.effort;
+    currentPricing = snapshot.pricing;
     settingsModel.value = snapshot.model_id;
     runEffort.textContent = effortLabel(currentEffort);
+    renderRunLedger();
   } catch {
     runEffort.textContent = "unavailable";
   }

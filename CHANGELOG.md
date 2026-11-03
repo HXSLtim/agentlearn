@@ -34,6 +34,10 @@
 - 运行账本显示每轮 token 实数：Conversation 发出累计 `usage`
   事件，TUI 与 desktop 均展示 input/output/cache read/write/hit；
   修正 `/context` 读取旧 usage 字段名导致永远为空的问题。
+- 运行账本按显式价目显示本轮成本：`[pricing:<model_id>]`
+  声明 currency 与四类每百万 token 单价；没有当前模型的价目时显示
+  “不算钱（无价目）” / `NOT CALCULATED`，绝不估算美元。TUI 用
+  `Decimal` 计算，desktop 在启动、保存设置和 `/model` 后同步价目。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

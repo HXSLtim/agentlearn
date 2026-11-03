@@ -12,6 +12,7 @@
 import os
 import re
 import shlex
+from decimal import Decimal, InvalidOperation
 from configparser import ConfigParser, SectionProxy
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,8 @@ class SettingsSnapshot:
     effort: str
     api_key_configured: bool
     api_key_source: str
+    # 显式价目；None = 没配置，界面必须显示“不算钱”，不能估算。
+    pricing: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,7 @@ def load_settings(path: Path = Path("config.ini")) -> SettingsSnapshot:
         key_source = "config.ini（明文）"
     else:
         key_source = "未配置"
+    pricing = _pricing_for(parser, config.model_id, path)
     return SettingsSnapshot(
         provider=config.provider,
         base_url=config.base_url,
@@ -129,7 +133,50 @@ def load_settings(path: Path = Path("config.ini")) -> SettingsSnapshot:
         effort=config.effort,
         api_key_configured=bool(raw_key),
         api_key_source=key_source,
+        pricing=pricing,
     )
+
+
+def _pricing_for(
+    parser: ConfigParser, model_id: str, path: Path
+) -> dict[str, str] | None:
+    """读取当前模型自己的 [pricing:<model_id>] 段。
+
+    价格单位是“每 1,000,000 token 的金额”。没有这段就是没有价目，
+    返回 None；写了这段则五个键都必须是合法非负数，配置错误启动即暴露。
+    """
+    section_name = f"pricing:{model_id}"
+    if section_name not in parser:
+        return None
+    section = parser[section_name]
+    currency = section.get("currency", "").strip()
+    if not currency or any(character.isspace() for character in currency):
+        raise SystemExit(
+            f"{path} 的 [{section_name}] 缺 currency，或 currency 含空白。"
+        )
+    keys = (
+        "input_per_million",
+        "cache_read_per_million",
+        "cache_write_per_million",
+        "output_per_million",
+    )
+    values: dict[str, str] = {"currency": currency}
+    for key in keys:
+        raw = section.get(key, "").strip()
+        try:
+            value = Decimal(raw)
+        except InvalidOperation:
+            raise SystemExit(
+                f"{path} 的 [{section_name}] {key} 不是合法数字：{raw}"
+            ) from None
+        if not value.is_finite():
+            raise SystemExit(
+                f"{path} 的 [{section_name}] {key} 不是有限数字：{raw}"
+            )
+        if value < 0:
+            raise SystemExit(f"{path} 的 [{section_name}] {key} 不能是负数。")
+        values[key] = str(value)
+    return values
 
 
 def save_settings(
@@ -157,7 +204,7 @@ def save_settings(
     temp_path = path.with_name(f".{path.name}.tmp")
     temp_path.write_text(new_text, encoding="utf-8")
     try:
-        load_config(temp_path)
+        load_settings(temp_path)
     except SystemExit as exc:
         temp_path.unlink(missing_ok=True)
         raise ValueError(str(exc).replace(str(temp_path), str(path))) from exc

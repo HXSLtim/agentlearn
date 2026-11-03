@@ -23,6 +23,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
@@ -2102,9 +2103,12 @@ class AgentLearnTUI(App[str | None]):
             "cache_hit_ratio": 0,
         }
         self.effort = "—"
+        self.pricing: dict[str, str] | None = None
         if self.settings_loader is not None:
             try:
-                self.effort = self._effort_label(self.settings_loader().effort)
+                snapshot = self.settings_loader()
+                self.effort = self._effort_label(snapshot.effort)
+                self.pricing = snapshot.pricing
             except Exception:
                 pass
         self._assistant: AssistantMessage | None = None
@@ -2170,6 +2174,12 @@ class AgentLearnTUI(App[str | None]):
                 yield Static("0", id="ledger-cache-write", classes="ledger-value")
                 yield Static("CACHE HIT", classes="ledger-label")
                 yield Static("0‰", id="ledger-cache-hit", classes="ledger-value")
+                yield Static("COST", classes="ledger-label")
+                yield Static(
+                    self._format_cost(),
+                    id="ledger-cost",
+                    classes="ledger-value",
+                )
                 yield Static("STOP REASON", classes="ledger-label")
                 yield Static("—", id="ledger-stop", classes="ledger-value")
                 yield Static("", classes="ledger-rule")
@@ -2578,11 +2588,31 @@ class AgentLearnTUI(App[str | None]):
         self.query_one("#ledger-cache-hit", Static).update(
             f"{self.turn_usage.get('cache_hit_ratio', 0)}‰"
         )
+        self.query_one("#ledger-cost", Static).update(self._format_cost())
         if not self.streaming:
             self.query_one("#ledger-elapsed", Static).update(
                 f"{round((time.monotonic() - self.turn_started) * 1000)}ms"
                 if self.turn_started else "—"
             )
+
+    def _format_cost(self) -> str:
+        if self.pricing is None:
+            return "不算钱（无价目）"
+        usage = self.turn_usage
+        amount = (
+            Decimal(str(usage.get("input_tokens", 0)))
+            * Decimal(self.pricing["input_per_million"])
+            + Decimal(str(usage.get("cache_read_tokens", 0)))
+            * Decimal(self.pricing["cache_read_per_million"])
+            + Decimal(str(usage.get("cache_write_tokens", 0)))
+            * Decimal(self.pricing["cache_write_per_million"])
+            + Decimal(str(usage.get("output_tokens", 0)))
+            * Decimal(self.pricing["output_per_million"])
+        ) / Decimal(1_000_000)
+        rendered = format(amount, "f")
+        if "." in rendered:
+            rendered = rendered.rstrip("0").rstrip(".")
+        return f"{rendered or '0'} {self.pricing['currency']}"
 
     def _tick_elapsed(self) -> None:
         if self.streaming:
@@ -2935,7 +2965,9 @@ class AgentLearnTUI(App[str | None]):
         except Exception as exc:
             await self._show_command_result("MODEL", str(exc), error=True)
             return
+        self.pricing = updated.pricing
         self.query_one("#ledger-model", Static).update(updated.model_id)
+        self._update_ledger()
         await self._show_command_result(
             "MODEL",
             f"{updated.model_id}\n下一轮模型请求生效。",
@@ -3175,9 +3207,11 @@ class AgentLearnTUI(App[str | None]):
             if self.settings_loader is not None:
                 try:
                     snapshot = self.settings_loader()
+                    self.pricing = snapshot.pricing
                     self.query_one("#ledger-model", Static).update(
                         snapshot.model_id
                     )
+                    self._update_ledger()
                 except Exception:
                     pass
             self.notify("设置已保存，下一轮生效")
