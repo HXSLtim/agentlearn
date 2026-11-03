@@ -448,6 +448,10 @@ const resumeCloseButton = requireElement<HTMLButtonElement>("#resume-close");
 const resumeList = requireElement<HTMLElement>("#resume-list");
 const resumeSummary = requireElement<HTMLElement>("#resume-summary");
 const resumeSearch = requireElement<HTMLInputElement>("#resume-search");
+const resumeRenameButton = requireElement<HTMLButtonElement>("#resume-rename");
+const resumeRenameForm = requireElement<HTMLFormElement>("#resume-rename-form");
+const resumeRenameInput = requireElement<HTMLInputElement>("#resume-rename-input");
+const resumeRenameCancel = requireElement<HTMLButtonElement>("#resume-rename-cancel");
 const traceModal = requireElement<HTMLElement>("#trace-modal");
 const traceCloseButton = requireElement<HTMLButtonElement>("#trace-close");
 const traceRefreshButton = requireElement<HTMLButtonElement>("#trace-refresh");
@@ -477,6 +481,7 @@ let resumeSelection = 0;
 let resumeQuery = "";
 let contentHits = new Map<string, SessionSearchHit>();
 let contentSearchSequence = 0;
+let renameThreadId = "";
 let traceSpans: TraceSpan[] = [];
 let traceAnswers: Record<string, string> = {};
 let traceSelectedSpanId = "";
@@ -2515,6 +2520,7 @@ function renderResumeList(): void {
   resumeSummary.textContent = `${resumeMatches.length} 个会话 · 正文命中 ${contentHits.size} · 当前 ${shortSession(
     activeThread().sessionId,
   )}`;
+  resumeRenameButton.disabled = !resumeMatches[resumeSelection]?.sessionId;
   resumeList.innerHTML = resumeMatches
     .map((thread, index) => {
       const turns =
@@ -2563,6 +2569,7 @@ async function openResume(): Promise<void> {
     (thread) => thread.id !== state.activeThreadId,
   );
   resumeSelection = alternate >= 0 ? alternate : 0;
+  cancelResumeRename();
   renderResumeList();
   resumeModal.hidden = false;
   resumeSearch.focus();
@@ -2606,8 +2613,71 @@ async function searchSessionContent(query: string): Promise<void> {
   }
 }
 
+function startResumeRename(): void {
+  const thread = resumeMatches[resumeSelection];
+  if (!thread?.sessionId) {
+    showToast("当前会话还没有 server id，不能重命名");
+    return;
+  }
+  renameThreadId = thread.id;
+  resumeRenameInput.value = thread.title;
+  resumeRenameForm.hidden = false;
+  resumeRenameInput.focus();
+  resumeRenameInput.select();
+}
+
+function cancelResumeRename(): void {
+  renameThreadId = "";
+  resumeRenameForm.hidden = true;
+  resumeRenameInput.value = "";
+  resumeRenameButton.disabled = false;
+}
+
+async function saveResumeRename(): Promise<void> {
+  const thread = state.threads.find((item) => item.id === renameThreadId);
+  const title = resumeRenameInput.value.trim();
+  if (!thread?.sessionId) {
+    cancelResumeRename();
+    return;
+  }
+  if (!title) {
+    showToast("标题不能为空");
+    resumeRenameInput.focus();
+    return;
+  }
+  resumeRenameButton.disabled = true;
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const updated = (await response.json()) as ServerSession;
+    thread.title = updated.title || title;
+    persistState();
+    cancelResumeRename();
+    filterResumeThreads();
+    renderResumeList();
+    renderEverything();
+    showToast("会话已重命名");
+  } catch (error) {
+    showToast(
+      `重命名失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    resumeRenameButton.disabled = false;
+  }
+}
+
 function closeResume(): void {
   resumeModal.hidden = true;
+  cancelResumeRename();
 }
 
 function moveResumeSelection(delta: number): void {
@@ -3297,6 +3367,12 @@ settingsModal.addEventListener("click", (event) => {
   }
 });
 resumeCloseButton.addEventListener("click", closeResume);
+resumeRenameButton.addEventListener("click", startResumeRename);
+resumeRenameCancel.addEventListener("click", cancelResumeRename);
+resumeRenameForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveResumeRename();
+});
 resumeSearch.addEventListener("input", () => {
   resumeQuery = resumeSearch.value;
   resumeSelection = 0;
@@ -3477,6 +3553,20 @@ document.addEventListener("keydown", (event) => {
   }
   const resumeVisible = !resumeModal.hidden;
   if (resumeVisible) {
+    if (!resumeRenameForm.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelResumeRename();
+        resumeSearch.focus();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void saveResumeRename();
+        return;
+      }
+      return;
+    }
     if (event.key === "ArrowDown") {
       event.preventDefault();
       moveResumeSelection(1);

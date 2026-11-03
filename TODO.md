@@ -45,7 +45,7 @@ desktop / TUI 还没接上的界面：
 - [x] desktop diff 工作台可以按文件折叠 ✅（2026-11-03）：每个文件改为原生 `<details open>`，摘要行保留状态、路径、旧路径、增删计数、binary/truncated 标记与折叠箭头，点击文件头只折叠该文件 hunk，不写工作区。`npm run build` 通过；380×900 CDP 点击第二个文件后 `open=[true,false]`、可见 hunk 从 2 变 1、闭合内容 `display:none`，document/body/list `scrollWidth` 均 380；截图人工检查折叠后的摘要行。
 - [x] TUI 增加 `/diff`，打开只读 pager ✅（2026-11-03）：命令面板新增 `/diff`，ModalScreen 复用 `changed_files(include_untracked=true)` 渲染根路径、已跟踪/未跟踪计数、文件状态、旧路径、增删计数、binary/truncated、hunk 与红删绿增行；支持 ↑↓/Page↑↓/Home/End/R/ESC，不写文件。Textual headless 验证打开当前工作区、向下滚动 `scroll_y=1`、reload、ESC 关闭，调用前后 `.git/index` SHA256 不变；`compileall` 通过；导出 TUI 截图并人工检查。
 - [x] desktop 内容搜索接 `GET /sessions/search`，展示每个会话的第一处命中 ✅（2026-11-03）：恢复框输入非空关键词时同时保留本地 id/标题/模型/stop reason 匹配与 server 正文命中，异步防串包；每个正文命中会话在列表行展示第一处 snippet，空词清空正文结果。`npm run build` 通过；380×900 mock 页面验证请求 `q=blueprint` 后只保留正文命中会话、snippet 可见，document/body/list `scrollWidth` 均 380，截图人工检查。
-- [ ] desktop 会话重命名，接 `PATCH /sessions/{id}`。
+- [x] desktop 会话重命名，接 `PATCH /sessions/{id}` ✅（2026-11-03）：恢复框对当前选中会话提供 RENAME 表单，空标题前端拦截；保存时发送 `{"title":"..."}` 到 PATCH，成功后用 server 返回标题更新本地索引、列表和当前页头，Cancel/Esc 关闭表单。`npm run build` 通过；380×900 mock 验证 PATCH body、200 响应、表单隐藏、新标题显示，document/body/list `scrollWidth` 均 380，表单与保存后截图人工检查。
 - [ ] desktop 会话 pin，接同一 PATCH，列表 pin 优先。
 - [ ] desktop 会话 archive，接同一 PATCH。验收：默认列表消失，归档视图还能打开。
 - [ ] desktop 永久删除前要确认，再 `DELETE /sessions/{id}`。验收：归档和删除是两个按钮。

@@ -490,16 +490,19 @@
             <span class="eyebrow">SESSION INDEX</span>
             <h2 id="resume-title">续接会话</h2>
           </div>
-          <button
-            class="icon-button resume-close"
-            id="resume-close"
-            type="button"
-            aria-label="关闭会话选择"
-          >
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <path d="m4 4 12 12M16 4 4 16" />
-            </svg>
-          </button>
+          <div class="resume-header-actions">
+            <button id="resume-rename" type="button">RENAME</button>
+            <button
+              class="icon-button resume-close"
+              id="resume-close"
+              type="button"
+              aria-label="关闭会话选择"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="m4 4 12 12M16 4 4 16" />
+              </svg>
+            </button>
+          </div>
         </header>
         <div class="resume-index-line">
           <span>↑↓ SELECT</span>
@@ -518,6 +521,20 @@
             spellcheck="false"
           />
         </label>
+        <form class="resume-rename-form" id="resume-rename-form" hidden>
+          <label for="resume-rename-input">RENAME SELECTED SESSION</label>
+          <input
+            id="resume-rename-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            maxlength="120"
+          />
+          <div>
+            <button id="resume-rename-cancel" type="button">CANCEL</button>
+            <button type="submit">SAVE</button>
+          </div>
+        </form>
         <div class="resume-list" id="resume-list" role="listbox"></div>
         <footer class="resume-footer">
           会话索引、正文和执行轨迹都来自 server；本地缓存只负责打开速度。

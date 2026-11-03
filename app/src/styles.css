@@ -2583,6 +2583,34 @@ kbd {
   line-height: 1;
 }
 
+.resume-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#resume-rename {
+  height: 30px;
+  padding: 0 10px;
+  color: var(--green);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
+
+#resume-rename:hover:not(:disabled),
+#resume-rename:focus-visible {
+  color: var(--void);
+  background: var(--green);
+}
+
+#resume-rename:disabled {
+  color: var(--dim);
+  cursor: not-allowed;
+}
+
 .resume-close {
   margin-top: -3px;
   margin-right: -5px;
@@ -2651,6 +2679,68 @@ kbd {
 
 .resume-search-field input::placeholder {
   color: var(--dim);
+}
+
+.resume-rename-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px 22px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.resume-rename-form[hidden] {
+  display: none;
+}
+
+.resume-rename-form > label {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.resume-rename-form > input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--void);
+  border: 1px solid var(--line-strong);
+  outline: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.resume-rename-form > input:focus {
+  border-color: var(--green);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.resume-rename-form > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.resume-rename-form button {
+  height: 28px;
+  padding: 0 10px;
+  color: var(--green);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 7px;
+}
+
+.resume-rename-form button:hover:not(:disabled),
+.resume-rename-form button:focus-visible {
+  color: var(--void);
+  background: var(--green);
+}
+
+.resume-rename-form button[type="submit"] {
+  color: var(--void);
+  background: var(--green);
 }
 
 .resume-list {
@@ -3529,6 +3619,7 @@ kbd {
   .resume-index-line,
   .resume-summary,
   .resume-search-field,
+  .resume-rename-form,
   .resume-item {
     padding-right: 16px;
     padding-left: 16px;
