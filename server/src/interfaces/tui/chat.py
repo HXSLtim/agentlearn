@@ -13,6 +13,7 @@ application/conversation.py；这里消费 turn() 已经定义好的事件，
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shlex
@@ -53,6 +54,7 @@ from application.tools import append_memory, read_memory
 from application.session_manager import MODES as STEERING_MODES
 from application.session_manager import RunningTurn
 from application.workspace import changed_files
+from domain.message import ImageBlock
 from domain.message import Message as DomainMessage
 from infrastructure.config import SettingsSnapshot, SettingsValues
 from .trace import SpanDetail, answer_texts, answers_for_requests
@@ -93,6 +95,21 @@ class SessionSummary:
     turns: int
 
 
+@dataclass(frozen=True)
+class QueuedPrompt:
+    question: str
+    images: tuple[ImageBlock, ...] = ()
+
+
+ATTACH_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
 COMMANDS = (
     SlashCommand(
         "resume",
@@ -103,6 +120,13 @@ COMMANDS = (
     ),
     SlashCommand("stop", "/stop", "在下一个检查点停止当前轮", "RUNTIME"),
     SlashCommand("retry", "/retry", "重跑上一条失败请求，不重复用户卡片", "RUNTIME"),
+    SlashCommand(
+        "attach",
+        "/attach <path>",
+        "给下一条用户消息附一张图片",
+        "RUNTIME",
+        takes_argument=True,
+    ),
     SlashCommand(
         "steering",
         "/steering <mode>",
@@ -205,6 +229,7 @@ class PromptComposer(TextArea):
     command_key_handler: Callable[[events.Key], bool] | None = None
     history_key_handler: Callable[[events.Key], bool] | None = None
     escape_handler: Callable[[events.Key], bool] | None = None
+    allow_empty_submit = False
 
     class Submitted(Message):
         def __init__(self, value: str) -> None:
@@ -235,7 +260,7 @@ class PromptComposer(TextArea):
             event.stop()
             event.prevent_default()
             value = self.text.strip()
-            if value:
+            if value or self.allow_empty_submit:
                 self.post_message(self.Submitted(value))
             return
         if event.key in ("shift+enter", "ctrl+j"):
@@ -1200,9 +1225,11 @@ def _user_text(message: DomainMessage) -> str:
 
 
 class UserMessage(Static):
-    def __init__(self, text: str) -> None:
-        body = Text(text)
+    def __init__(self, text: str, image_count: int = 0) -> None:
+        body = Text(text or "(image only)")
         body.stylize(PAPER)
+        if image_count:
+            body.append(f"\n[ATTACHED IMAGES {image_count}]", style=f"bold {SIGNAL}")
         super().__init__(body, classes="user-message")
 
 
@@ -2079,7 +2106,8 @@ class AgentLearnTUI(App[str | None]):
         self.approval_mode = getattr(conversation, "approval_mode", "approve")
         self.steering_mode = "queue"
         self.steering_turn: RunningTurn | None = None
-        self.queued_prompts: deque[str] = deque()
+        self.queued_prompts: deque[QueuedPrompt] = deque()
+        self.pending_images: list[ImageBlock] = []
         self.input_history: list[str] = [
             text
             for message in history
@@ -2289,17 +2317,29 @@ class AgentLearnTUI(App[str | None]):
 
     async def _submit(self, question: str) -> None:
         question = question.strip()
-        if not question:
+        images = list(self.pending_images)
+        if not question and not images:
             return
+        if images and self.steering_mode != "queue":
+            self.notify("带图输入只支持 queue；按 Alt+S 切回 queue", severity="warning")
+            return
+        if images:
+            self.pending_images = []
+            self._update_attachment_status()
         composer = self.query_one("#composer", PromptComposer)
         composer.load_text("")
         if self.streaming:
-            await self._steer(question)
+            await self._steer(question, images)
             return
-        await self._start_turn(question)
+        await self._start_turn(question, images=images)
 
     async def _start_turn(
-        self, question: str, *, show_user: bool = True, append_user: bool = True
+        self,
+        question: str,
+        *,
+        show_user: bool = True,
+        append_user: bool = True,
+        images: list[ImageBlock] | None = None,
     ) -> None:
         self._last_failed_question = None
         empty = self.query("#empty")
@@ -2308,7 +2348,8 @@ class AgentLearnTUI(App[str | None]):
 
         timeline = self.query_one("#timeline", VerticalScroll)
         if show_user:
-            await timeline.mount(UserMessage(question))
+            turn_images = list(images or []) if append_user else []
+            await timeline.mount(UserMessage(question, len(turn_images)))
         self._assistant = None
         self._reasoning = None
         self._tool_cards = {}
@@ -2331,9 +2372,16 @@ class AgentLearnTUI(App[str | None]):
         self._update_ledger()
         self._send_button(disabled=False, label="STEER  ↵")
         self.call_after_refresh(timeline.scroll_end, animate=False)
-        self._run_turn(question, running, append_user=append_user)
+        self._run_turn(
+            question,
+            running,
+            append_user=append_user,
+            images=list(images or []) if append_user else None,
+        )
 
-    async def _steer(self, question: str) -> None:
+    async def _steer(
+        self, question: str, images: list[ImageBlock] | None = None
+    ) -> None:
         """流式期间发来的消息按当前档位进入当前轮或下一轮。"""
         if self.steering_mode == "cooperative":
             running = self.steering_turn
@@ -2343,7 +2391,7 @@ class AgentLearnTUI(App[str | None]):
                     f"已送入当前轮，下一次模型请求前生效：\n{question}",
                 )
                 return
-            self.queued_prompts.append(question)
+            self.queued_prompts.append(QueuedPrompt(question, tuple(images or ())))
             self._update_ledger()
             await self._show_command_result(
                 "QUEUE",
@@ -2351,7 +2399,7 @@ class AgentLearnTUI(App[str | None]):
             )
             return
 
-        self.queued_prompts.append(question)
+        self.queued_prompts.append(QueuedPrompt(question, tuple(images or ())))
         self._update_ledger()
         if self.steering_mode == "preemptive":
             if self.steering_turn is not None:
@@ -2369,7 +2417,11 @@ class AgentLearnTUI(App[str | None]):
 
     @work(thread=True, group="agent-turn")
     def _run_turn(
-        self, question: str, running: RunningTurn, append_user: bool = True
+        self,
+        question: str,
+        running: RunningTurn,
+        append_user: bool = True,
+        images: list[ImageBlock] | None = None,
     ) -> None:
         """网络和工具执行在 worker 线程；所有 widget 修改都回主线程。
 
@@ -2382,6 +2434,7 @@ class AgentLearnTUI(App[str | None]):
                 question,
                 origin="retry" if not append_user else "",
                 append_user=append_user,
+                images=images,
             ):
                 try:
                     self.call_from_thread(self._apply_event, event)
@@ -2411,7 +2464,7 @@ class AgentLearnTUI(App[str | None]):
 
     def _queue_leftovers(self, prompts: list[str]) -> None:
         """cooperative 消息赶在轮末到达时，补进下一轮队列而不是丢掉。"""
-        self.queued_prompts.extend(prompts)
+        self.queued_prompts.extend(QueuedPrompt(prompt) for prompt in prompts)
         self._update_ledger()
 
     async def _apply_event(self, event: dict) -> None:
@@ -2573,9 +2626,18 @@ class AgentLearnTUI(App[str | None]):
     async def _start_queued_turn(self) -> bool:
         if not self.queued_prompts:
             return False
-        question = self.queued_prompts.popleft()
-        await self._start_turn(question)
+        queued = self.queued_prompts.popleft()
+        await self._start_turn(queued.question, images=list(queued.images))
         return True
+
+    def _update_attachment_status(self) -> None:
+        count = len(self.pending_images)
+        self.query_one("#composer", PromptComposer).allow_empty_submit = count > 0
+        self.query_one("#composer-label", Static).update(
+            f"COMPOSE  /  ENTER RUN  ·  ATTACHED IMAGES {count}"
+            if count
+            else "COMPOSE  /  ENTER RUN"
+        )
 
     def _set_running_state(self, state: str) -> None:
         color = TOOL if state in ("READY", "COMPLETE") else (
@@ -2767,8 +2829,9 @@ class AgentLearnTUI(App[str | None]):
 
     @on(Button.Pressed, "#send")
     async def _send_pressed(self) -> None:
-        text = self.query_one("#composer", PromptComposer).text.strip()
-        if text:
+        composer = self.query_one("#composer", PromptComposer)
+        text = composer.text.strip()
+        if text or composer.allow_empty_submit:
             self._remember_input(text)
             await self._submit(text)
             return
@@ -2795,7 +2858,7 @@ class AgentLearnTUI(App[str | None]):
         if command.name == "retry":
             if self.streaming:
                 self.notify("当前轮还在运行，不能重试", severity="warning")
-            elif self._last_failed_question:
+            elif self._last_failed_question is not None:
                 await self._start_turn(
                     self._last_failed_question, show_user=False, append_user=False
                 )
@@ -2805,6 +2868,9 @@ class AgentLearnTUI(App[str | None]):
                     "还没有失败请求可重试。",
                     error=True,
                 )
+            return
+        if command.name == "attach":
+            await self._command_attach(argument)
             return
         if command.name == "steering":
             await self._command_steering(argument)
@@ -2870,6 +2936,35 @@ class AgentLearnTUI(App[str | None]):
             "boundary": "先说明你准备怎么做，再执行，最后把结论和依据分开列出来。",
         }
         await self._submit(prompts[name])
+
+    async def _command_attach(self, argument: str) -> None:
+        if not argument:
+            await self._show_command_result(
+                "ATTACH",
+                "用法：/attach <path>（png / jpg / webp / gif）",
+                error=True,
+            )
+            return
+        path = Path(argument).expanduser().resolve()
+        media_type = ATTACH_MEDIA_TYPES.get(path.suffix.casefold())
+        if media_type is None:
+            await self._show_command_result(
+                "ATTACH",
+                f"不支持的图片类型：{path.suffix or path.name}",
+                error=True,
+            )
+            return
+        try:
+            data = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError as exc:
+            await self._show_command_result("ATTACH", str(exc), error=True)
+            return
+        self.pending_images.append(ImageBlock(media_type=media_type, data=data))
+        self._update_attachment_status()
+        await self._show_command_result(
+            "ATTACH",
+            f"{path}\n已排队到下一条用户消息；发送时只支持 queue。",
+        )
 
     async def _command_resume(self, argument: str) -> None:
         if self.session_loader is None:

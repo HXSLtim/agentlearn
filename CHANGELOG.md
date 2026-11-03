@@ -52,6 +52,8 @@
   `{"retry":true}` 与空 question，且不携带新的 `images`。
 - desktop 支持粘贴图片：clipboard 图片进入与拖拽同一份附件管线，
   纯文本粘贴保持浏览器默认行为。
+- TUI 新增 `/attach <path>`：白名单读取本地图片并挂到下一条 user 消息；
+  支持 image-only 空提交，带图只走 queue，retry 不携带新图。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
