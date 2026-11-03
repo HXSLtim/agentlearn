@@ -109,6 +109,8 @@ ATTACH_MEDIA_TYPES = {
     ".gif": "image/gif",
 }
 
+TRANSCRIPT_MODES = ("normal", "thinking", "verbose")
+
 
 COMMANDS = (
     SlashCommand(
@@ -169,6 +171,13 @@ COMMANDS = (
         "/find [关键词]",
         "定位当前会话里的一条已渲染消息",
         "SESSION",
+        takes_argument=True,
+    ),
+    SlashCommand(
+        "transcript",
+        "/transcript [mode]",
+        "切换 normal / thinking / verbose 三档正文视图",
+        "RUNTIME",
         takes_argument=True,
     ),
     SlashCommand("status", "/status", "查看当前会话与运行状态", "RUNTIME"),
@@ -2217,6 +2226,15 @@ class AgentLearnTUI(App[str | None]):
         padding: 1 1;
     }}
 
+    Screen.transcript-normal .reasoning,
+    Screen.transcript-normal .tool-card {{
+        display: none;
+    }}
+
+    Screen.transcript-thinking .tool-card {{
+        display: none;
+    }}
+
     Screen.-compact .user-message {{
         width: 100%;
     }}
@@ -2334,6 +2352,7 @@ class AgentLearnTUI(App[str | None]):
         self._reasoning: ReasoningPanel | None = None
         self._tool_cards: dict[str, ToolCard] = {}
         self._suppress_palette: str | None = None
+        self.transcript_mode = "normal"
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
@@ -2432,7 +2451,7 @@ class AgentLearnTUI(App[str | None]):
                 )
                 yield Button("RUN  ↵", id="send")
             yield Static(
-                "/resume SESSIONS · /find CURRENT · /trace SPANS · /diff WORKSPACE · /copy ANSWER · / ALL COMMANDS",
+                "/resume SESSIONS · /find CURRENT · /transcript VIEW · /trace SPANS · / ALL COMMANDS",
                 id="composer-help",
             )
 
@@ -2446,6 +2465,7 @@ class AgentLearnTUI(App[str | None]):
         composer.focus()
         self.set_interval(0.25, self._tick_elapsed)
         self._update_compact_layout(self.size.width)
+        self._set_transcript_mode("normal", show_receipt=False)
         if self.history:
             # Markdown 在首帧之后才确定最终高度，等排版稳定再滚到底。
             self.set_timer(0.05, self._scroll_timeline_end)
@@ -2455,6 +2475,23 @@ class AgentLearnTUI(App[str | None]):
 
     def _update_compact_layout(self, width: int) -> None:
         self.screen.set_class(width < 106, "-compact")
+
+    def _set_transcript_mode(self, mode: str, *, show_receipt: bool = True) -> None:
+        if mode not in TRANSCRIPT_MODES:
+            return
+        self.transcript_mode = mode
+        for candidate in TRANSCRIPT_MODES:
+            self.screen.remove_class(f"transcript-{candidate}")
+        self.screen.add_class(f"transcript-{mode}")
+        for reasoning in self.query(ReasoningPanel):
+            reasoning.collapsed = mode == "normal"
+        if show_receipt:
+            descriptions = {
+                "normal": "只看用户消息、回答和审批；隐藏思考块与工具明细。",
+                "thinking": "在 normal 基础上显示思考块；工具仍只保留审批。",
+                "verbose": "显示思考块、工具入参和工具出参。",
+            }
+            self.notify(f"Transcript：{mode.upper()} · {descriptions[mode]}")
 
     def _session_line(self) -> str:
         count = len(self.history)
@@ -3074,6 +3111,9 @@ class AgentLearnTUI(App[str | None]):
         if command.name == "diff":
             self._command_diff()
             return
+        if command.name == "transcript":
+            await self._command_transcript(argument)
+            return
         if command.name == "context":
             await self._command_context()
             return
@@ -3123,6 +3163,24 @@ class AgentLearnTUI(App[str | None]):
             "boundary": "先说明你准备怎么做，再执行，最后把结论和依据分开列出来。",
         }
         await self._submit(prompts[name])
+
+    async def _command_transcript(self, argument: str) -> None:
+        if not argument:
+            index = TRANSCRIPT_MODES.index(self.transcript_mode)
+            next_mode = TRANSCRIPT_MODES[(index + 1) % len(TRANSCRIPT_MODES)]
+        else:
+            next_mode = argument.casefold()
+        if next_mode not in TRANSCRIPT_MODES:
+            await self._show_command_result(
+                "TRANSCRIPT",
+                f"未知档位：{argument}。可用：normal / thinking / verbose。",
+                error=True,
+            )
+            return
+        self._set_transcript_mode(next_mode)
+        await self._show_command_result(
+            "TRANSCRIPT", f"当前档位：{next_mode}"
+        )
 
     async def _command_attach(self, argument: str) -> None:
         if not argument:

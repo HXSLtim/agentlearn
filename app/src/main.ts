@@ -14,6 +14,7 @@ marked.setOptions({ gfm: true, breaks: true });
 type ApprovalMode = "approve" | "auto" | "yolo";
 type SteeringMode = "queue" | "cooperative" | "preemptive";
 type ToolState = "waiting" | "running" | "done";
+type TranscriptMode = "normal" | "thinking" | "verbose";
 
 interface ImageAttachment {
   media_type: string;
@@ -397,6 +398,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
     takesArgument: true,
   },
   {
+    name: "transcript",
+    usage: "/transcript [mode]",
+    description: "切换 normal / thinking / verbose 三档正文视图",
+    group: "RUNTIME",
+    takesArgument: true,
+  },
+  {
     name: "copy",
     usage: "/copy",
     description: "复制最近一条完整回答",
@@ -637,6 +645,7 @@ let traceSessionId = "";
 let traceLoadSequence = 0;
 let workspaceDiff: WorkspaceDiffResponse | null = null;
 let workspaceDiffLoadSequence = 0;
+let transcriptMode: TranscriptMode = "normal";
 let commandReceipt: {
   threadId: string;
   title: string;
@@ -1250,8 +1259,9 @@ function emptyStateMarkup(): string {
   `;
 }
 
-function renderTool(tool: ToolEvent): string {
+function renderTool(tool: ToolEvent, detailed: boolean): string {
   const args = JSON.stringify(tool.input, null, 2);
+  const showInput = detailed || tool.state === "waiting";
   const toolImage = tool.image
     ? renderImages([tool.image], "工具结果图片")
     : tool.hasImage
@@ -1292,7 +1302,7 @@ function renderTool(tool: ToolEvent): string {
         <code>${escapeHtml(tool.name)}</code>
         ${duration}
       </header>
-      <pre class="tool-input">${escapeHtml(args === "{}" ? "(no arguments)" : args)}</pre>
+      ${showInput ? `<pre class="tool-input">${escapeHtml(args === "{}" ? "(no arguments)" : args)}</pre>` : ""}
       ${output}
     </section>
   `;
@@ -1321,9 +1331,16 @@ function renderAssistant(message: UiMessage): string {
   const parts = message.parts
     .map((part, index) => {
       if (part.type === "tool") {
-        return renderTool(part.tool);
+        const needsApproval = part.tool.state === "waiting";
+        if (transcriptMode !== "verbose" && !needsApproval) {
+          return "";
+        }
+        return renderTool(part.tool, transcriptMode === "verbose");
       }
       if (part.type === "thinking") {
+        if (transcriptMode === "normal") {
+          return "";
+        }
         if (!part.text) {
           return "";
         }
@@ -1343,7 +1360,7 @@ function renderAssistant(message: UiMessage): string {
           `;
         }
         return `
-          <details class="reasoning-block">
+          <details class="reasoning-block"${transcriptMode === "thinking" || transcriptMode === "verbose" ? " open" : ""}>
             <summary>
               <span>REASONING</span>
               <span>${part.text.length.toLocaleString()} chars</span>
@@ -4016,6 +4033,22 @@ const STEERING_MODES: SteeringMode[] = [
   "preemptive",
 ];
 
+const TRANSCRIPT_MODES: TranscriptMode[] = [
+  "normal",
+  "thinking",
+  "verbose",
+];
+
+function setTranscriptMode(mode: TranscriptMode): void {
+  transcriptMode = mode;
+  const descriptions: Record<TranscriptMode, string> = {
+    normal: "只看用户消息、回答和审批；隐藏思考块与工具明细。",
+    thinking: "在 normal 基础上显示思考块；工具仍只保留审批。",
+    verbose: "显示思考块、工具入参和工具出参。",
+  };
+  showCommandResult("TRANSCRIPT", `${mode.toUpperCase()}\n${descriptions[mode]}`);
+}
+
 function setSteeringMode(mode: SteeringMode): void {
   const thread = activeThread();
   thread.steeringMode = mode;
@@ -4280,6 +4313,26 @@ async function runSlashCommand(
       return;
     }
     setSteeringMode(mode);
+    return;
+  }
+  if (command.name === "transcript") {
+    if (!argument) {
+      const index = TRANSCRIPT_MODES.indexOf(transcriptMode);
+      setTranscriptMode(
+        TRANSCRIPT_MODES[(index + 1) % TRANSCRIPT_MODES.length],
+      );
+      return;
+    }
+    const mode = argument.toLowerCase() as TranscriptMode;
+    if (!TRANSCRIPT_MODES.includes(mode)) {
+      showCommandResult(
+        "TRANSCRIPT",
+        `未知档位：${argument}。可用：normal / thinking / verbose。`,
+        true,
+      );
+      return;
+    }
+    setTranscriptMode(mode);
     return;
   }
   if (command.name === "effort") {

@@ -61,6 +61,9 @@
   已渲染消息索引弹出查找框并滚动高亮命中的 message；TUI 用当前时间线
   的 UserMessage / AssistantMessage 原件过滤、定位与高亮。查找不请求
   模型、不切换或新开会话。
+- 两端新增 `/transcript [mode]`：normal 只看正文与审批，thinking 展开
+  思考块，verbose 再显示工具入参和出参；档位切换只影响渲染，不改写
+  JSONL，也不改变审批决策入口。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
