@@ -2,6 +2,19 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-03（十七）：desktop diff 工作台第一步
+
+- 新增只读 `GET /workspace/diff`：`git status --porcelain=v1 -z
+  --untracked-files=all` 采集工作区状态，`GIT_OPTIONAL_LOCKS=0` 禁止
+  status 顺手刷新索引；默认列出已跟踪文件的 modified / added / deleted /
+  renamed 等状态并显示 rename 旧路径，未跟踪数量先如实报出、内容留给下一条。
+- desktop 增加 DIFF 抽屉：一键读取并刷新当前 Git 工作区变更文件，明确标注
+  READ ONLY / NO INDEX WRITES；380px 窄屏下路径独占一行，列表无横向溢出。
+- 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
+  `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
+  380×900 CDP 截图人工检查 3 条记录，`document/body/summary/list`
+  `scrollWidth` 均为 380。
+
 ## 2026-11-03（十六）：重试去重契约 + 会话库/上下文/能力面板的后端
 
 - **重试去重（P0 收口）**：`turn()` 加 `append_user=False` 模式——失败轮

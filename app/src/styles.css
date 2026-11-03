@@ -1915,6 +1915,207 @@ kbd {
   cursor: not-allowed;
 }
 
+.workspace-diff-toggle {
+  width: 54px;
+}
+
+.workspace-diff-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.workspace-diff-modal[hidden] {
+  display: none;
+}
+
+.workspace-diff-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(1, 2, 1, 0.82);
+}
+
+.workspace-diff-panel {
+  position: relative;
+  display: flex;
+  width: min(720px, calc(100vw - 72px));
+  height: 100dvh;
+  flex-direction: column;
+  color: var(--text);
+  background: var(--void);
+  border-left: 1px solid var(--green);
+  box-shadow: -12px 0 0 rgba(23, 36, 17, 0.82);
+  animation: trace-enter 170ms steps(4, end) both;
+}
+
+.workspace-diff-header {
+  display: flex;
+  min-height: 76px;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 13px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.workspace-diff-header .eyebrow {
+  color: var(--green-dim);
+}
+
+.workspace-diff-header h2 {
+  margin: 5px 0 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.workspace-diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-diff-actions > button:first-child {
+  height: 30px;
+  padding: 0 10px;
+  color: var(--green);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
+
+.workspace-diff-actions > button:first-child:hover:not(:disabled) {
+  color: var(--void);
+  background: var(--green);
+}
+
+.workspace-diff-actions > button:first-child:disabled {
+  color: var(--dim);
+  cursor: wait;
+}
+
+.workspace-diff-summary {
+  display: flex;
+  min-height: 35px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 15px;
+  padding: 8px 24px;
+  color: var(--muted);
+  background: var(--black);
+  border-bottom: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.workspace-diff-summary span:first-child {
+  flex-basis: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--green);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-diff-list {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 6px 0 20px;
+  background: var(--black);
+  scrollbar-color: var(--green) var(--black);
+}
+
+.workspace-diff-item {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 43px;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.workspace-diff-status {
+  padding-top: 2px;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.workspace-diff-item.is-added .workspace-diff-status,
+.workspace-diff-item.is-copied .workspace-diff-status {
+  color: var(--green);
+}
+
+.workspace-diff-item.is-deleted .workspace-diff-status,
+.workspace-diff-item.is-conflicted .workspace-diff-status {
+  color: var(--red);
+}
+
+.workspace-diff-item strong {
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.workspace-diff-item small {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 7px;
+}
+
+.workspace-diff-empty {
+  padding: 24px 20px;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 8px;
+  line-height: 1.6;
+}
+
+.workspace-diff-empty.is-error {
+  color: var(--red);
+}
+
+.workspace-diff-empty strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--red);
+}
+
+.workspace-diff-footer {
+  display: flex;
+  min-height: 33px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 14px;
+  padding: 8px 20px;
+  color: var(--dim);
+  background: var(--panel);
+  border-top: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 6px;
+  letter-spacing: 0.06em;
+}
+
 .settings-modal {
   position: fixed;
   inset: 0;
@@ -3090,6 +3291,10 @@ kbd {
   .trace-panel {
     width: calc(100vw - 24px);
   }
+
+  .workspace-diff-panel {
+    width: calc(100vw - 24px);
+  }
 }
 
 @media (max-width: 620px) {
@@ -3097,6 +3302,22 @@ kbd {
   .resume-modal {
     padding: 0;
     place-items: stretch;
+  }
+
+  .workspace-diff-panel {
+    width: 100vw;
+    border-left: 0;
+    box-shadow: none;
+  }
+
+  .workspace-diff-header,
+  .workspace-diff-summary {
+    padding-inline: 16px;
+  }
+
+  .workspace-diff-item,
+  .workspace-diff-footer {
+    padding-inline: 16px;
   }
 
   .settings-panel {

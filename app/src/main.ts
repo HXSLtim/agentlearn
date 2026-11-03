@@ -189,6 +189,19 @@ interface TraceResponse {
   answers: Record<string, string>;
 }
 
+interface WorkspaceDiffFile {
+  path: string;
+  old_path: string | null;
+  status: string;
+}
+
+interface WorkspaceDiffResponse {
+  root: string;
+  files: WorkspaceDiffFile[];
+  untracked_count: number;
+  include_untracked: boolean;
+}
+
 interface StopResponse {
   ok: boolean;
   active: boolean;
@@ -409,6 +422,12 @@ const traceTree = requireElement<HTMLElement>("#trace-tree");
 const traceCount = requireElement<HTMLElement>("#trace-count");
 const traceDetail = requireElement<HTMLElement>("#trace-detail");
 const traceSelectedState = requireElement<HTMLElement>("#trace-selected-state");
+const workspaceDiffToggle = requireElement<HTMLButtonElement>("#workspace-diff-toggle");
+const workspaceDiffModal = requireElement<HTMLElement>("#workspace-diff-modal");
+const workspaceDiffCloseButton = requireElement<HTMLButtonElement>("#workspace-diff-close");
+const workspaceDiffRefreshButton = requireElement<HTMLButtonElement>("#workspace-diff-refresh");
+const workspaceDiffSummary = requireElement<HTMLElement>("#workspace-diff-summary");
+const workspaceDiffList = requireElement<HTMLElement>("#workspace-diff-list");
 
 let state = loadState();
 let currentEffort: SettingsSnapshot["effort"] = "";
@@ -427,6 +446,8 @@ let traceAnswers: Record<string, string> = {};
 let traceSelectedSpanId = "";
 let traceSessionId = "";
 let traceLoadSequence = 0;
+let workspaceDiff: WorkspaceDiffResponse | null = null;
+let workspaceDiffLoadSequence = 0;
 let commandReceipt: {
   threadId: string;
   title: string;
@@ -2259,6 +2280,76 @@ function openTrace(): void {
   void loadTrace();
 }
 
+function renderWorkspaceDiff(): void {
+  if (!workspaceDiff) {
+    return;
+  }
+  workspaceDiffSummary.innerHTML = `
+    <span>${escapeHtml(workspaceDiff.root)}</span>
+    <span>TRACKED ${workspaceDiff.files.length}</span>
+    <span>UNTRACKED EXCLUDED ${workspaceDiff.untracked_count}</span>
+  `;
+  workspaceDiffList.innerHTML = workspaceDiff.files.length
+    ? workspaceDiff.files
+        .map(
+          (file) => `
+            <article class="workspace-diff-item is-${escapeHtml(file.status)}">
+              <span class="workspace-diff-status">${escapeHtml(file.status.toUpperCase())}</span>
+              <strong>${escapeHtml(file.path)}</strong>
+              ${file.old_path ? `<small>${escapeHtml(file.old_path)} → ${escapeHtml(file.path)}</small>` : ""}
+            </article>
+          `,
+        )
+        .join("")
+    : `<div class="workspace-diff-empty">没有已跟踪文件的变更。</div>`;
+}
+
+async function loadWorkspaceDiff(): Promise<void> {
+  const sequence = ++workspaceDiffLoadSequence;
+  workspaceDiffRefreshButton.disabled = true;
+  workspaceDiffSummary.innerHTML = "<span>READING GIT STATUS…</span>";
+  workspaceDiffList.innerHTML = `<div class="workspace-diff-empty">READING WORKSPACE</div>`;
+  try {
+    const response = await fetch(`${API_BASE}/workspace/diff`);
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const result = (await response.json()) as WorkspaceDiffResponse;
+    if (sequence !== workspaceDiffLoadSequence || workspaceDiffModal.hidden) {
+      return;
+    }
+    workspaceDiff = result;
+    renderWorkspaceDiff();
+  } catch (error) {
+    if (sequence !== workspaceDiffLoadSequence) {
+      return;
+    }
+    workspaceDiff = null;
+    workspaceDiffSummary.innerHTML = "<span>WORKSPACE UNAVAILABLE</span>";
+    workspaceDiffList.innerHTML = `
+      <div class="workspace-diff-empty is-error">
+        <strong>WORKSPACE READ FAILED</strong>
+        <p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p>
+      </div>
+    `;
+  } finally {
+    if (sequence === workspaceDiffLoadSequence) {
+      workspaceDiffRefreshButton.disabled = false;
+    }
+  }
+}
+
+function openWorkspaceDiff(): void {
+  workspaceDiffModal.hidden = false;
+  void loadWorkspaceDiff();
+}
+
+function closeWorkspaceDiff(): void {
+  workspaceDiffLoadSequence += 1;
+  workspaceDiffModal.hidden = true;
+  promptInput.focus();
+}
+
 function closeTrace(): void {
   traceLoadSequence += 1;
   traceModal.hidden = true;
@@ -3081,6 +3172,7 @@ function schedulePersist(): void {
 }
 
 traceToggle.addEventListener("click", openTrace);
+workspaceDiffToggle.addEventListener("click", openWorkspaceDiff);
 newThreadButton.addEventListener("click", newThread);
 railCloseButton.addEventListener("click", closeThreadRail);
 railOpenButton.addEventListener("click", openThreadRail);
@@ -3122,6 +3214,16 @@ traceTree.addEventListener("click", (event) => {
   );
   if (button?.dataset.spanId) {
     selectTraceSpan(button.dataset.spanId);
+  }
+});
+workspaceDiffCloseButton.addEventListener("click", closeWorkspaceDiff);
+workspaceDiffRefreshButton.addEventListener("click", () => {
+  void loadWorkspaceDiff();
+});
+workspaceDiffModal.addEventListener("click", (event) => {
+  const target = event.target as Element;
+  if (target.closest("[data-workspace-diff-close]")) {
+    closeWorkspaceDiff();
   }
 });
 stopButton.addEventListener("click", () => {
@@ -3233,6 +3335,20 @@ promptInput.addEventListener("input", () => {
 });
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
+  const workspaceDiffVisible = !workspaceDiffModal.hidden;
+  if (workspaceDiffVisible) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeWorkspaceDiff();
+      return;
+    }
+    if (event.key.toLowerCase() === "r" && !modifier) {
+      event.preventDefault();
+      void loadWorkspaceDiff();
+      return;
+    }
+    return;
+  }
   const traceVisible = !traceModal.hidden;
   if (traceVisible) {
     if (event.key === "Escape") {

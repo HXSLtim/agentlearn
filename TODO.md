@@ -39,7 +39,7 @@ P2 仍是先不做，但逐条列出。desktop 前端重构的半成品还在未
 
 desktop / TUI 还没接上的界面：
 
-- [ ] desktop diff 工作台列出变更文件。验收：只读，不改工作区。
+- [x] desktop diff 工作台列出变更文件 ✅（2026-11-03）：新增只读 `GET /workspace/diff`，用 `git status --porcelain=v1 -z --untracked-files=all` 且 `GIT_OPTIONAL_LOCKS=0`；desktop 增加 DIFF 抽屉，显示已跟踪修改/新增/删除/重命名和旧路径。临时 Git 仓库验证默认排除未跟踪、显式可含未跟踪，调用前后 `.git/index` SHA256 不变；`npm run build`、`compileall`、TestClient API 通过；380×900 CDP 截图人工检查 3 条文件记录，document/body/summary/list `scrollWidth` 均为 380。
 - [ ] desktop diff 工作台显示逐行增删。验收：只读，不改工作区。
 - [ ] desktop diff 工作台显示未跟踪文件。验收：只读，不改工作区。
 - [ ] desktop diff 工作台可以按文件折叠。验收：只读，不改工作区。

@@ -84,6 +84,7 @@ from application.tools import (
 from application.proactivity import ProactivityRunner, UNATTENDED_MAX_TOOL_ROUNDS
 from application.session_manager import MODES, SessionManager
 from application.trace_view import answers_for_requests, answer_texts
+from application.workspace import WorkspaceError, changed_files
 from infrastructure.config import (
     LLMConfig,
     SettingsValues,
@@ -351,6 +352,15 @@ def post_memory(request: MemoryRequest):
         raise HTTPException(status_code=422, detail="要记的内容不能为空。")
     line = append_memory(request.text)
     return {"ok": True, "line": line}
+
+
+@app.get("/workspace/diff")
+def get_workspace_diff(include_untracked: bool = False):
+    """只读列出 Git 工作区变更文件，供 desktop diff 工作台使用。"""
+    try:
+        return changed_files(include_untracked=include_untracked)
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
