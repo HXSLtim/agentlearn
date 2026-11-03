@@ -2307,8 +2307,8 @@ function renderWorkspaceDiff(): void {
   }
   workspaceDiffSummary.innerHTML = `
     <span>${escapeHtml(workspaceDiff.root)}</span>
-    <span>TRACKED ${workspaceDiff.files.length}</span>
-    <span>UNTRACKED EXCLUDED ${workspaceDiff.untracked_count}</span>
+    <span>TRACKED ${workspaceDiff.files.filter((file) => file.status !== "untracked").length}</span>
+    <span>UNTRACKED ${workspaceDiff.include_untracked ? "INCLUDED" : "EXCLUDED"} ${workspaceDiff.untracked_count}</span>
   `;
   workspaceDiffList.innerHTML = workspaceDiff.files.length
     ? workspaceDiff.files
@@ -2350,7 +2350,9 @@ async function loadWorkspaceDiff(): Promise<void> {
   workspaceDiffSummary.innerHTML = "<span>READING GIT STATUS…</span>";
   workspaceDiffList.innerHTML = `<div class="workspace-diff-empty">READING WORKSPACE</div>`;
   try {
-    const response = await fetch(`${API_BASE}/workspace/diff`);
+    const response = await fetch(
+      `${API_BASE}/workspace/diff?include_untracked=true`,
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }

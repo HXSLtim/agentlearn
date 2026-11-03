@@ -41,7 +41,7 @@ desktop / TUI 还没接上的界面：
 
 - [x] desktop diff 工作台列出变更文件 ✅（2026-11-03）：新增只读 `GET /workspace/diff`，用 `git status --porcelain=v1 -z --untracked-files=all` 且 `GIT_OPTIONAL_LOCKS=0`；desktop 增加 DIFF 抽屉，显示已跟踪修改/新增/删除/重命名和旧路径。临时 Git 仓库验证默认排除未跟踪、显式可含未跟踪，调用前后 `.git/index` SHA256 不变；`npm run build`、`compileall`、TestClient API 通过；380×900 CDP 截图人工检查 3 条文件记录，document/body/summary/list `scrollWidth` 均为 380。
 - [x] desktop diff 工作台显示逐行增删 ✅（2026-11-03）：`GET /workspace/diff` 对每个已跟踪文件读取 `git diff --no-ext-diff --no-textconv --no-color --unified=3 HEAD`，解析 hunk、context/add/delete/meta、旧新行号、增删计数、binary 与截断标记；desktop 用行号 + 红删绿增渲染。临时 Git 仓库验证 context/add 行号内容正确；TestClient 验证当前 `app/src/main.ts` 有真实 hunk；`compileall`、`npm run build` 通过；380×900 CDP 截图人工检查，正文列 188px 单行显示，document/body/list `scrollWidth` 均 380。
-- [ ] desktop diff 工作台显示未跟踪文件。验收：只读，不改工作区。
+- [x] desktop diff 工作台显示未跟踪文件 ✅（2026-11-03）：`include_untracked=true` 时用 `git diff --no-index /dev/null <path>` 生成全新增 hunk，desktop 请求该档位并显示 `UNTRACKED`、路径与新增行。临时 Git 仓库验证未跟踪文件产生 `new_line=1` 的 add 行且 `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；380×900 CDP 截图人工检查未跟踪文件可见，document/body/list `scrollWidth` 均 380。
 - [ ] desktop diff 工作台可以按文件折叠。验收：只读，不改工作区。
 - [ ] TUI 增加 `/diff`，打开只读 pager。验收：不写文件。
 - [ ] desktop 内容搜索接 `GET /sessions/search`，展示每个会话的第一处命中。验收：现有恢复框只过滤 id / 标题 / 模型，不能当作内容搜索。

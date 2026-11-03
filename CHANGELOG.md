@@ -6,12 +6,14 @@
 
 - 新增只读 `GET /workspace/diff`：`git status --porcelain=v1 -z
   --untracked-files=all` 采集工作区状态，`GIT_OPTIONAL_LOCKS=0` 禁止
-  status 顺手刷新索引；默认列出已跟踪文件的 modified / added / deleted /
-  renamed 等状态并显示 rename 旧路径，未跟踪数量先如实报出、内容留给下一条。
+  status 顺手刷新索引；列出 modified / added / deleted / renamed 与 rename
+  旧路径，`include_untracked=true` 时未跟踪文件也进入列表。
 - desktop 增加 DIFF 抽屉：一键读取并刷新当前 Git 工作区变更文件，明确标注
   READ ONLY / NO INDEX WRITES；380px 窄屏下路径独占一行，列表无横向溢出。
 - 已跟踪文件显示 unified diff 逐行内容：hunk 头、旧/新行号、context、
   红色删除、绿色新增、增删计数、binary / patch 截断标记。
+- 未跟踪文件用 `git diff --no-index /dev/null <path>` 生成全新增 hunk，
+  只读读取工作区内容。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

@@ -39,7 +39,9 @@ def _run_git(root: Path, args: list[str]) -> bytes:
         raise WorkspaceError("没有找到 git 命令。") from exc
     except subprocess.TimeoutExpired as exc:
         raise WorkspaceError("读取 Git 工作区超时。") from exc
-    if completed.returncode != 0:
+    # `git diff --no-index` 用 1 表示“有差异”，不是查询失败。
+    allowed = (0, 1) if "--no-index" in args else (0,)
+    if completed.returncode not in allowed:
         detail = completed.stderr.decode("utf-8", "replace").strip()
         raise WorkspaceError(detail or f"git 退出码 {completed.returncode}")
     return completed.stdout
@@ -69,7 +71,22 @@ def _status_label(xy: str) -> str:
     return "modified"
 
 
-def _patch(root: Path, path: str) -> bytes:
+def _patch(root: Path, path: str, untracked: bool) -> bytes:
+    if untracked:
+        return _run_git(
+            root,
+            [
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--unified=3",
+                "--no-index",
+                "--",
+                "/dev/null",
+                path,
+            ],
+        )
     return _run_git(
         root,
         [
@@ -194,7 +211,7 @@ def changed_files(include_untracked: bool = False) -> dict:
             status = "untracked"
         else:
             status = _status_label(xy)
-        patch = _patch(root, path)
+        patch = _patch(root, path, status == "untracked")
         parsed = _parse_patch(patch)
         files.append(
             {
