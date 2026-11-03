@@ -2038,12 +2038,27 @@ kbd {
 }
 
 .workspace-diff-item {
+  min-height: 43px;
+  border-bottom: 1px solid var(--line);
+}
+
+.workspace-diff-item > summary {
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
+  grid-template-columns: 78px minmax(0, 1fr) 10px;
   gap: 10px;
   align-items: start;
   min-height: 43px;
   padding: 9px 20px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.workspace-diff-item > summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-diff-item[open] > summary {
   border-bottom: 1px solid var(--line);
 }
 
@@ -2065,6 +2080,25 @@ kbd {
   color: var(--red);
 }
 
+.workspace-diff-file-heading {
+  display: block;
+  min-width: 0;
+}
+
+.workspace-diff-fold {
+  width: 8px;
+  height: 8px;
+  margin-top: 3px;
+  border-right: 1px solid var(--dim);
+  border-bottom: 1px solid var(--dim);
+  transform: rotate(-45deg);
+  transition: transform 120ms steps(2, end);
+}
+
+.workspace-diff-item[open] .workspace-diff-fold {
+  transform: rotate(45deg);
+}
+
 .workspace-diff-item strong {
   overflow-wrap: anywhere;
   color: var(--text-soft);
@@ -2084,6 +2118,11 @@ kbd {
 
 .workspace-diff-file-main {
   min-width: 0;
+  padding: 0 20px 12px 88px;
+}
+
+.workspace-diff-item:not([open]) .workspace-diff-file-main {
+  display: none;
 }
 
 .workspace-diff-counts {
@@ -3392,13 +3431,17 @@ kbd {
   }
 
   .workspace-diff-header,
-  .workspace-diff-summary {
+  .workspace-diff-summary,
+  .workspace-diff-item > summary {
     padding-inline: 16px;
   }
 
-  .workspace-diff-item,
+  .workspace-diff-file-main,
   .workspace-diff-footer {
     padding-inline: 16px;
+  }
+  .workspace-diff-file-main {
+    padding-left: 88px;
   }
 
   .settings-panel {

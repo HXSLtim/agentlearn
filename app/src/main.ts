@@ -2314,14 +2314,19 @@ function renderWorkspaceDiff(): void {
     ? workspaceDiff.files
         .map(
           (file) => `
-            <article class="workspace-diff-item is-${escapeHtml(file.status)}">
-              <span class="workspace-diff-status">${escapeHtml(file.status.toUpperCase())}</span>
-              <div class="workspace-diff-file-main">
+            <details class="workspace-diff-item is-${escapeHtml(file.status)}" open>
+              <summary>
+                <span class="workspace-diff-status">${escapeHtml(file.status.toUpperCase())}</span>
+                <span class="workspace-diff-file-heading">
                 <strong>${escapeHtml(file.path)}</strong>
                 ${file.old_path ? `<small>${escapeHtml(file.old_path)} → ${escapeHtml(file.path)}</small>` : ""}
                 <small class="workspace-diff-counts">+${file.additions} −${file.deletions}</small>
                 ${file.binary ? '<small class="workspace-diff-binary">BINARY</small>' : ""}
                 ${file.truncated ? '<small class="workspace-diff-truncated">PATCH TRUNCATED</small>' : ""}
+                </span>
+                <span class="workspace-diff-fold" aria-hidden="true"></span>
+              </summary>
+              <div class="workspace-diff-file-main">
                 ${file.hunks.map((hunk) => `
                   <section class="workspace-diff-hunk">
                     <header>${escapeHtml(hunk.header)}</header>
@@ -2337,7 +2342,7 @@ function renderWorkspaceDiff(): void {
                   </section>
                 `).join("")}
               </div>
-            </article>
+            </details>
           `,
         )
         .join("")
