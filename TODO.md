@@ -60,14 +60,14 @@ desktop / TUI 还没接上的界面：
 - [x] 两端会话内查找 ✅（2026-11-03）：desktop 新增 `/find [关键词]` 与当前会话查找框，只检索 active thread 已渲染消息（含 thinking 与工具入参/出参文本），↑↓/Enter/点击用 `data-message-id` 滚动定位并高亮对应 article；流式重绘后高亮会重应用，无匹配清空高亮。TUI `/find [关键词]` 直接定位，`/find` 打开当前时间线搜索 modal，选中 UserMessage / AssistantMessage 原 widget 后加高亮并 `scroll_to_widget`。两端均不请求模型、不切会话、不新开会话。380×900 mock 验证 desktop 命中最后一条消息、modal 1 MATCH、定位后目标在滚动窗口内、请求日志只有 `/settings` 且无 `/chat` / `/sessions`，无匹配正常，document/body/list `scrollWidth` 均 380，定位与 modal 截图人工检查；Textual headless 验证直接查找与 modal 查找均命中同一个原 widget、无匹配清空高亮不崩，TUI 两张截图人工检查；`npm run build`、`compileall`/`py_compile`、`git diff --check` 通过。
 - [x] 两端 transcript 视图分成 normal / thinking / verbose ✅（2026-11-03）：两端新增 `/transcript [mode]`，空参数按 normal→thinking→verbose 循环。normal 只保留用户消息、回答和审批（desktop 审批卡仍显示工具入参以便决策）；thinking 档显示并展开思考块，非审批工具仍隐藏；verbose 档显示思考块、工具入参和出参。desktop 在流式重绘时沿用当前档位，TUI 用 Screen 类切换已挂载的 ReasoningPanel / ToolCard，不重开会话、不改 JSONL。Textual headless 验证 normal 隐藏 thinking/tool、thinking 显示 `secret reasoning block` 且 tool 隐藏、verbose 显示 `bash(command='echo tool-output-value')` 与 `tool-output-value`，两张截图人工检查；380×900 mock 验证 desktop 三档 DOM：normal/thinking 各 1 个审批卡与 1 份审批入参、thinking 1 个展开 reasoning，verbose 2 个工具卡/2 份入参并包含工具输出，审批按钮全程保留，切换只产生本地命令处理、无 `/chat` / `/sessions` 请求，document/body/list `scrollWidth` 均 380，两张截图人工检查；`npm run build`、`compileall`/`py_compile`、`git diff --check` 通过。
 - [x] 两端把当前会话导出为 Markdown ✅（2026-11-03）：共享导出器输出会话元信息、正文、thinking、工具入参/出参与图片 data URI；server 新增只读 `GET /sessions/{id}/markdown` 附件下载，TUI `/export [path]` 默认写 `data/exports/` 且用 `open("x")` 拒绝覆盖，desktop `/export` 用当前 session 触发 `.md` 下载。四段 fence、图片、HTTP 404/422、TUI 默认导出与重复路径拒绝、desktop 380×900 下载内容/文件名/宽度均验证；`/copy` 两端仍只复制最近一条完整回答，不触碰导出内容。
-- [ ] 审批增加 once：只放行当前这一个 `approval_id`。验收：下一次同名工具仍要问。
-- [ ] 审批增加 this session：本会话后续匹配的工具不再询问。验收：别的会话不受影响，现有 approve / auto / yolo 全局等级还在。
-- [ ] 拒绝可以附理由。验收：理由出现在 `tool_result` 文本和 tool_call span 里。
-- [ ] plan mode 的只读探索：此模式下不能跑 bash、start_job 或其他写操作。
-- [ ] plan mode 产出一份计划文本，而不是把预置 prompt 当作计划模式。
-- [ ] plan mode 在人确认之后才执行计划。验收：未确认前没有写工作区。
-- [ ] TUI `/status` 补上与 `GET /capabilities` 相同的事实：工具来源、MCP health、sandbox 不是安全边界、版本、触发器数量。依据：现在的 `_status_text` 只有会话运行态。
-- [ ] desktop 用 RUN LOG 或同等面板渲染 `GET /capabilities`。
+- [x] 审批增加 once ✅（2026-11-03）：TUI / desktop 审批提供 `ACCEPT ONCE`，Web 请求带 `scope:"once"`；离线验证同名工具下一次仍触发审批，`scope` 非法返回 422。
+- [x] 审批增加 this session ✅（2026-11-03）：审批提供 `ACCEPT SESSION`，授权只按 `(session_id, tool_name)` 保存在进程内；当前会话后续同名工具免问，别的会话 / 别的工具仍要问，拒绝不建立授权，进程重启失效，approve / auto / yolo 等级判断仍在授权外层生效。离线行为与 HTTP session/422 验证通过；380×900 desktop 截图与 TUI headless 截图均人工检查，POST body 为 `scope:"session"`，TUI 返回 `ApprovalChoice(True, "session")`。
+- [x] 拒绝可以附理由 ✅（2026-11-03）：TUI / desktop 审批弹层都提供可选拒绝理由输入，HTTP `POST /approval` 接收 `reason` 并拒绝批准带理由、超 500 字符的请求；理由经 `ApprovalDecision` 回到执行线程，写入 `tool_result` 文本（`Reason: ...`）与 `tool_call` span 的 `denial_reason`。离线假会话验证文本、span 输出与 `denied` 状态；HTTP 验证拒绝带理由 200、批准带理由 / 超长 422；TUI headless 验证理由输入、三个按钮宽度均为 20 并返回 `ApprovalChoice(False, reason="不要改工作区")`；desktop 380×900 验证三枚审批按钮同一行且等宽（差值小于 0.1px）、body/document 宽度 380、点击 DENY 的 POST body 携带同一理由，两端截图人工检查。
+- [x] plan mode 的只读探索 ✅（2026-11-03）：新增请求级 `plan_mode`，模型只暴露 `now_time` / `screenshot` / `read_skill` / `wait_job` / `job_status` 白名单；`bash`、`start_job`、`stop_job`、`remember` 与 MCP 工具不暴露，幻觉调用在执行层变成 `plan_blocked` tool_result，tool_call span 记 `plan_mode=true`。离线假模型诱导 `touch` 未执行、marker 不存在、span 为 `plan_blocked`。
+- [x] plan mode 产出一份计划文本 ✅（2026-11-03）：最终回答产生独立 `plan` 事件与进程内 `PlanBroker` 记录，TUI 显示计划确认 modal，desktop 显示计划确认卡；不再复用 `boundary` 预置 prompt。TUI 截图与 desktop 380×900 截图均人工检查。
+- [x] plan mode 在人确认之后才执行计划 ✅（2026-11-03）：`POST /plans/{id}/confirm` 只记录确认，带 `plan_id` 的 `/chat` 才一次性消费并注入执行轮；未确认 / 重复执行返回 404，`plan_mode + plan_id` 返回 422。TUI Enter 确认后进入待执行；desktop 点击确认后请求顺序为 confirm → `/chat(plan_id)`。未确认前无工作区写入。
+- [x] TUI `/status` 补上与 `GET /capabilities` 相同的事实 ✅（2026-11-03）：能力快照抽到 application 层，TUI 与 HTTP 共用同一份工具来源、MCP health、sandbox 边界、Python/provider/model/effort、触发器数量数据；`/status` 保留原会话运行态并追加 `python/provider/triggers/tools/mcp/sandbox/boundary`。TestClient 验证 `/capabilities` 与 `capability_snapshot()` 完全一致；headless `/status` 断言全部事实并截图人工检查。
+- [x] desktop 用 RUN LOG 或同等面板渲染 `GET /capabilities` ✅（2026-11-03）：新增 `/capabilities` 命令，在同等命令结果面板展示 Python/provider/model/effort、触发器数量、builtin/skill/MCP 工具来源、MCP health、sandbox 路径与「不是安全边界」说明。380×900 mock 验证全部字段、`body/document scrollWidth` 均 380，截图人工检查。
 
 已知欠账拆开：
 

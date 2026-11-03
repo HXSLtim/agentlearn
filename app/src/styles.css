@@ -1221,10 +1221,10 @@ kbd {
 }
 
 .tool-approval-gate {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  gap: 8px 12px;
   padding: 12px;
   color: var(--green);
   background: var(--panel);
@@ -1234,14 +1234,35 @@ kbd {
   letter-spacing: 0.06em;
 }
 
+.tool-approval-gate > span {
+  min-width: 0;
+}
+
+.tool-approval-gate .approval-reason {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--void);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
 .tool-approval-gate > div {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
 }
 
 .tool-approval-gate button {
+  flex: 1 1 0;
+  min-width: 0;
   height: 30px;
-  padding: 0 12px;
+  padding: 0 7px;
   color: var(--text);
   background: transparent;
   border: 1px solid var(--line-strong);
@@ -1271,6 +1292,77 @@ kbd {
 .tool-approval-gate button:disabled {
   cursor: wait;
   opacity: 0.45;
+}
+
+.plan-card {
+  margin: 8px 0;
+  padding: 12px;
+  color: var(--green);
+  background: var(--panel);
+  border-left: 3px solid var(--green);
+}
+
+.plan-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+
+.plan-card pre {
+  max-height: 260px;
+  margin: 0 0 9px;
+  overflow: auto;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.plan-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.plan-actions button,
+.plan-state {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+}
+
+.plan-actions button {
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.plan-actions button.confirm {
+  color: var(--void);
+  background: var(--green);
+  border-color: var(--green);
+  font-weight: 500;
+}
+
+.plan-actions button.confirm:hover {
+  color: var(--green);
+  background: var(--void);
+}
+
+.plan-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  border: 1px dashed var(--line-strong);
 }
 
 .message-error {

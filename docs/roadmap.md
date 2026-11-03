@@ -106,13 +106,15 @@ A/B 真机同问「写运行报告」：无技能 0/4 格式标记，有技能�
 | 会话持久化 | JSONL + SQLite（见 docs/decisions.md D2） | ✅ |
 | 配置体系 | config.ini + ${ENV}（D4） | ✅ |
 | conversation.py | TUI/desktop 共用 application 层一份会话循环（D9/D14） | ✅ |
-| TUI | 黑绿控制台：流式正文、`/transcript` 三档视图、按事件顺序挂载工具卡、每轮 token usage、显式价目成本、接近预算告警、`/attach` 图片附件、`/find` 当前会话定位与 `/export` Markdown；停止、重试、历史搜索、外编辑器、复制与 `/diff` 只读 pager 闭环（D14/D16） | ✅ |
+| TUI | 黑绿控制台：流式正文、`/transcript` 三档视图、按事件顺序挂载工具卡、每轮 token usage、显式价目成本、接近预算告警、`/attach` 图片附件、`/find` 当前会话定位与 `/export` Markdown；停止、重试、历史搜索、外编辑器、复制、`/diff` 只读 pager 与 `/status` 能力事实闭环（D14/D16） | ✅ |
 | trace | spans 表（D10/D11）+ TUI `/trace` 与 desktop 只读抽屉：span 树、耗时、token、工具入参/出参、回答配对 | ✅ |
 | 设置界面 | TUI / desktop 共用 `GET/PUT /settings`；只改 `[llm]`，密钥不回显，下一请求生效（D15）；desktop 用 `GET /models` 提供模型下拉，TUI 接同一个 `list_models()` 能力 | ✅ |
+| 能力面板 | application 层统一能力快照；TUI `/status` 与 desktop `/capabilities` 展示工具来源、MCP health、运行版本、触发器数量和 sandbox 边界 | ✅ |
 | 快捷命令 | TUI / desktop 输入 `/` 打开面板；模型切换与预置 prompt 均走界面层白名单（D18） | ✅ |
 | 跨会话记忆 | `data/sandbox/memory.md` 每轮注入为 system 提示词；不进 JSONL，协议差异在 adapter；span 记 system_chars | ✅ |
 | steering | 同会话连发消息三档（D19）：queue 等整轮 / cooperative 圈界并入 / preemptive 检查点打断；spans 加 cancelled；抢占让位于 tool_use/tool_result 配对不变式 | ✅ |
-| 执行等级 | approve / auto / yolo（D20）：Shift+Tab 运行中实时切换；approve 每次 Accept 才执行，auto 只放行无副作用工具，yolo 直接跑。不是安全边界 | ✅ |
+| 执行等级 | approve / auto / yolo（D20）：Shift+Tab 运行中实时切换；approve 支持 once / this session 两种显式授权，拒绝可附理由并进入模型上下文与 span，auto 只放行无副作用工具，yolo 直接跑。不是安全边界 | ✅ |
+| 规划执行 | plan mode（D31）：只读工具白名单探索、独立计划文本、一次性人工确认后才执行；确认状态进程内绑定会话 | ✅ |
 | 眼睛 | screenshot 工具 + ImageBlock（D25）：图进 tool_result，两方向翻译在 adapter，存储形状与线上形状分家 | ✅ |
 | 耐心 | 后台任务四工具 start_job/wait_job/job_status/stop_job（D26）：轮询式、conversation 零改动，进程组连子进程一起杀 | ✅ |
 | 会话索引 API | 前端接线契约落地：`GET /sessions`（活动倒序，turns/updated_at/stop_reason 从 spans 推导）、`/sessions/{id}/messages`、`POST /stop`、`/sessions/{id}/trace`；P1 rename/archive/fork/永久删除。desktop 摘掉 localStorage 唯一索引的帽子 | ✅ |

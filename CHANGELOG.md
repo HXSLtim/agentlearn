@@ -69,6 +69,18 @@
   thinking、工具入参/出参与图片 data URI）；desktop 请求只读
   `GET /sessions/{id}/markdown` 触发下载，TUI 可指定路径或默认写
   `data/exports/`，已存在文件拒绝覆盖；`/copy` 仍只复制最近一条回答。
+- 审批增加作用域：TUI / desktop 都提供 `DENY`、`ACCEPT ONCE` 与
+  `ACCEPT SESSION`。once 只放行当前 `approval_id`；session 按当前会话与
+  工具名建立进程内授权，后续同名工具免问，跨会话不共享、不落盘、重启后
+  失效；拒绝可附可选理由并回到模型上下文，同时写入 `tool_call` span；
+  HTTP 契约新增 `scope:"once|session"` 与 `reason`（仅拒绝可用）。
+- 新增 plan mode：TUI `/plan <任务>` 与 desktop 同名命令进入只读探索，
+  只暴露内置只读工具白名单，写工具与 MCP 被应用层拒绝为 `plan_blocked`；
+  模型输出独立 `plan` 事件和确认卡，`POST /plans/{id}/confirm` 后带
+  `plan_id` 的 `/chat` 才一次性执行，未确认或重复执行返回 404。
+- 能力面板两端对齐：能力快照抽到 application 层，`GET /capabilities`
+  与 TUI `/status` 共用同一份事实；desktop 新增 `/capabilities` 命令，
+  展示工具来源、MCP health、运行版本、触发器数量与 sandbox 边界警告。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`

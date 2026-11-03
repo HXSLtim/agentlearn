@@ -51,6 +51,7 @@ from textual.widgets.option_list import Option
 
 from application.approval import APPROVAL_MODES, ApprovalBroker
 from application.conversation import Conversation, TurnCancelled
+from application.plan import PlanBroker
 from application.tools import append_memory, read_memory
 from application.session_manager import MODES as STEERING_MODES
 from application.session_manager import RunningTurn
@@ -120,6 +121,13 @@ COMMANDS = (
         "/resume [id]",
         "选择并续接历史会话",
         "SESSION",
+        takes_argument=True,
+    ),
+    SlashCommand(
+        "plan",
+        "/plan <任务>",
+        "只读探索后产出计划，确认后才执行",
+        "RUNTIME",
         takes_argument=True,
     ),
     SlashCommand("stop", "/stop", "在下一个检查点停止当前轮", "RUNTIME"),
@@ -1118,7 +1126,14 @@ class ResumeScreen(ModalScreen[str | None]):
         self.dismiss(event.option_id)
 
 
-class ApprovalScreen(ModalScreen[bool]):
+@dataclass(frozen=True)
+class ApprovalChoice:
+    approved: bool
+    scope: str = "once"
+    reason: str = ""
+
+
+class ApprovalScreen(ModalScreen[ApprovalChoice]):
     """执行前审批。Conversation 在工作线程里等这个决定。"""
 
     CSS = f"""
@@ -1131,7 +1146,7 @@ class ApprovalScreen(ModalScreen[bool]):
         width: 78;
         max-width: 94%;
         height: auto;
-        max-height: 86%;
+        max-height: 94%;
         background: {PANEL};
         border: thick {WARN};
         padding: 1 2;
@@ -1161,7 +1176,7 @@ class ApprovalScreen(ModalScreen[bool]):
 
     #approval-arguments {{
         height: auto;
-        max-height: 18;
+        max-height: 6;
         margin-bottom: 1;
         padding: 1 1;
         color: {PAPER};
@@ -1169,14 +1184,18 @@ class ApprovalScreen(ModalScreen[bool]):
         border: solid {LINE};
     }}
 
+    #approval-reason {{
+        margin-bottom: 1;
+    }}
+
     #approval-actions {{
-        height: 4;
+        height: 3;
         align: right middle;
     }}
 
-    #approval-deny, #approval-accept {{
-        width: 12;
-        min-width: 12;
+    #approval-deny, #approval-accept, #approval-accept-session {{
+        width: 20;
+        min-width: 20;
         height: 3;
         margin-left: 1;
     }}
@@ -1191,6 +1210,13 @@ class ApprovalScreen(ModalScreen[bool]):
         border: solid {SIGNAL};
         background: {SIGNAL};
         color: {INK};
+        text-style: bold;
+    }}
+
+    #approval-accept-session {{
+        border: solid {SIGNAL};
+        background: {PANEL_RAISED};
+        color: {SIGNAL};
         text-style: bold;
     }}
     """
@@ -1209,29 +1235,132 @@ class ApprovalScreen(ModalScreen[bool]):
                 yield Static("TOOL APPROVAL  /  EXECUTION GATE", id="approval-title")
                 yield Static(f"MODE {self.mode.upper()}", id="approval-mode")
             yield Static(
-                f"{self.tool_name} 请求在宿主机执行。ACCEPT 才真正调用工具。",
+                f"{self.tool_name} 请求在宿主机执行。ACCEPT ONCE 只放行这一次；"
+                "ACCEPT SESSION 本会话后续同名工具免问。",
                 id="approval-copy",
             )
             yield Static(
                 json.dumps(self.arguments, ensure_ascii=False, indent=2),
                 id="approval-arguments",
             )
+            yield Input(
+                placeholder="DENIAL REASON (OPTIONAL)",
+                id="approval-reason",
+            )
             with Horizontal(id="approval-actions"):
                 yield Button("DENY", id="approval-deny")
-                yield Button("ACCEPT", id="approval-accept")
+                yield Button("ACCEPT ONCE", id="approval-accept")
+                yield Button("ACCEPT SESSION", id="approval-accept-session")
 
     def on_mount(self) -> None:
         self.query_one("#approval-accept", Button).focus()
 
     def action_deny(self) -> None:
-        self.dismiss(False)
+        self.dismiss(self._deny_choice())
 
     @on(Button.Pressed, "#approval-deny")
     def _deny(self) -> None:
-        self.dismiss(False)
+        self.dismiss(self._deny_choice())
 
     @on(Button.Pressed, "#approval-accept")
     def _accept(self) -> None:
+        self.dismiss(ApprovalChoice(True))
+
+    @on(Button.Pressed, "#approval-accept-session")
+    def _accept_session(self) -> None:
+        self.dismiss(ApprovalChoice(True, "session"))
+
+    def _deny_choice(self) -> ApprovalChoice:
+        reason = self.query_one("#approval-reason", Input).value.strip()
+        return ApprovalChoice(False, reason=reason)
+
+
+class PlanScreen(ModalScreen[bool]):
+    """展示 plan mode 的产物；确认是一次显式人机动作。"""
+
+    CSS = f"""
+    PlanScreen {{
+        align: center middle;
+    }}
+
+    #plan-dialog {{
+        width: 82;
+        max-width: 96%;
+        height: auto;
+        max-height: 94%;
+        background: {PANEL};
+        border: thick {SIGNAL};
+        padding: 1 2;
+    }}
+
+    #plan-title {{
+        margin-bottom: 1;
+        color: {SIGNAL};
+        text-style: bold;
+    }}
+
+    #plan-text {{
+        height: auto;
+        max-height: 16;
+        margin-bottom: 1;
+        padding: 1 1;
+        color: {PAPER};
+        background: {INK};
+        border: solid {LINE};
+    }}
+
+    #plan-actions {{
+        height: 3;
+        align: right middle;
+    }}
+
+    #plan-discard, #plan-confirm {{
+        width: 24;
+        min-width: 24;
+        height: 3;
+        margin-left: 1;
+    }}
+
+    #plan-discard {{
+        border: solid {LINE};
+        background: transparent;
+        color: {PAPER};
+    }}
+
+    #plan-confirm {{
+        border: solid {SIGNAL};
+        background: {PANEL_RAISED};
+        color: {SIGNAL};
+        text-style: bold;
+    }}
+    """
+
+    BINDINGS = [Binding("escape", "discard", "discard", show=False)]
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="plan-dialog"):
+            yield Static("PLAN MODE  /  HUMAN CONFIRMATION", id="plan-title")
+            yield Static(self.text, id="plan-text")
+            with Horizontal(id="plan-actions"):
+                yield Button("DISCARD PLAN", id="plan-discard")
+                yield Button("CONFIRM & EXECUTE", id="plan-confirm")
+
+    def on_mount(self) -> None:
+        self.query_one("#plan-confirm", Button).focus()
+
+    def action_discard(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#plan-discard")
+    def _discard(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#plan-confirm")
+    def _confirm(self) -> None:
         self.dismiss(True)
 
 
@@ -2358,6 +2487,8 @@ class AgentLearnTUI(App[str | None]):
         settings_saver: Callable[[SettingsValues], SettingsSnapshot] | None = None,
         session_loader: Callable[[], list[SessionSummary]] | None = None,
         approval: ApprovalBroker | None = None,
+        plan_broker: PlanBroker | None = None,
+        capability_loader: Callable[[], dict] | None = None,
         model_loader: Callable[[], list[str]] | None = None,
     ) -> None:
         super().__init__()
@@ -2369,6 +2500,8 @@ class AgentLearnTUI(App[str | None]):
         self.settings_saver = settings_saver
         self.session_loader = session_loader
         self.approval = approval
+        self.plan_broker = plan_broker
+        self.capability_loader = capability_loader
         self.model_loader = model_loader
         self.approval_mode = getattr(conversation, "approval_mode", "approve")
         self.steering_mode = "queue"
@@ -2384,6 +2517,7 @@ class AgentLearnTUI(App[str | None]):
         self._history_index: int | None = None
         self._history_draft = ""
         self._pending_approval_id: str | None = None
+        self._confirmed_plan_id: str | None = None
         self._last_failed_question: str | None = None
         self.streaming = False
         self.turn_started = 0.0
@@ -2601,7 +2735,7 @@ class AgentLearnTUI(App[str | None]):
         """把续接会话定位到最后一轮，而不是停在历史开头。"""
         self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
 
-    async def _submit(self, question: str) -> None:
+    async def _submit(self, question: str, *, plan_mode: bool = False) -> None:
         question = question.strip()
         images = list(self.pending_images)
         if not question and not images:
@@ -2617,7 +2751,7 @@ class AgentLearnTUI(App[str | None]):
         if self.streaming:
             await self._steer(question, images)
             return
-        await self._start_turn(question, images=images)
+        await self._start_turn(question, images=images, plan_mode=plan_mode)
 
     async def _start_turn(
         self,
@@ -2626,6 +2760,7 @@ class AgentLearnTUI(App[str | None]):
         show_user: bool = True,
         append_user: bool = True,
         images: list[ImageBlock] | None = None,
+        plan_mode: bool = False,
     ) -> None:
         self._last_failed_question = None
         empty = self.query("#empty")
@@ -2663,6 +2798,7 @@ class AgentLearnTUI(App[str | None]):
             running,
             append_user=append_user,
             images=list(images or []) if append_user else None,
+            plan_mode=plan_mode,
         )
 
     async def _steer(
@@ -2708,6 +2844,7 @@ class AgentLearnTUI(App[str | None]):
         running: RunningTurn,
         append_user: bool = True,
         images: list[ImageBlock] | None = None,
+        plan_mode: bool = False,
     ) -> None:
         """网络和工具执行在 worker 线程；所有 widget 修改都回主线程。
 
@@ -2718,9 +2855,16 @@ class AgentLearnTUI(App[str | None]):
         try:
             for event in self.conversation.turn(
                 question,
-                origin="retry" if not append_user else "",
+                origin=(
+                    "retry"
+                    if not append_user
+                    else "plan"
+                    if plan_mode
+                    else ""
+                ),
                 append_user=append_user,
                 images=images,
+                plan_mode=plan_mode,
             ):
                 try:
                     self.call_from_thread(self._apply_event, event)
@@ -2831,8 +2975,8 @@ class AgentLearnTUI(App[str | None]):
                 return
             self._set_running_state("APPROVAL")
 
-            def resolved(approved: bool | None) -> None:
-                self._approval_closed(approval_id, approved)
+            def resolved(choice: ApprovalChoice | None) -> None:
+                self._approval_closed(approval_id, choice)
 
             self.push_screen(
                 ApprovalScreen(
@@ -2842,6 +2986,16 @@ class AgentLearnTUI(App[str | None]):
                 ),
                 resolved,
             )
+            return
+        if kind == "plan":
+            self._finish_live_blocks()
+            plan_id = event.get("plan_id", "")
+            plan_text = event.get("text", "")
+
+            def plan_resolved(confirmed: bool | None) -> None:
+                self._plan_closed(plan_id, confirmed)
+
+            self.push_screen(PlanScreen(plan_text), plan_resolved)
             return
         if kind == "tool_result":
             card = self._tool_cards.get(event["id"])
@@ -2865,17 +3019,46 @@ class AgentLearnTUI(App[str | None]):
             self._assistant.finish()
             self._assistant = None
 
+    def _plan_closed(self, plan_id: str, confirmed: bool | None) -> None:
+        if confirmed is True and plan_id:
+            self._confirmed_plan_id = plan_id
+            self.notify("计划已确认；当前计划轮结束后执行")
+        else:
+            self.notify("已丢弃计划；不会执行任何写操作")
+
     async def _finish_turn(self, stop_reason: str) -> None:
         self._finish_live_blocks()
         self.streaming = False
         self.steering_turn = None
         self.stop_reason = stop_reason
+        if self._confirmed_plan_id is not None:
+            plan_id = self._confirmed_plan_id
+            self._confirmed_plan_id = None
+            await self._execute_plan(plan_id)
+            return
         if await self._start_queued_turn():
             return
         self._set_running_state("COMPLETE")
         self._update_ledger()
         self._send_button(disabled=False, label="RUN  ↵")
         self.query_one("#composer", PromptComposer).focus()
+
+    async def _execute_plan(self, plan_id: str) -> None:
+        if self.plan_broker is None:
+            await self._show_command_result(
+                "PLAN", "计划状态没有装配，不能执行。", error=True
+            )
+            return
+        plan = self.plan_broker.consume_confirmed(plan_id, self.session_id)
+        if plan is None:
+            await self._show_command_result(
+                "PLAN", "计划不存在、未确认或已执行。", error=True
+            )
+            return
+        await self._start_turn(
+            "用户已确认以下计划，请按计划执行，不要重新生成计划：\n\n"
+            + plan.text
+        )
 
     async def _finish_cancelled(self) -> None:
         self._finish_live_blocks()
@@ -3155,9 +3338,13 @@ class AgentLearnTUI(App[str | None]):
                     error=True,
                 )
             return
+        if command.name == "plan":
+            await self._command_plan(argument)
+            return
         if command.name == "attach":
             await self._command_attach(argument)
             return
+
         if command.name == "steering":
             await self._command_steering(argument)
             return
@@ -3231,6 +3418,17 @@ class AgentLearnTUI(App[str | None]):
             "boundary": "先说明你准备怎么做，再执行，最后把结论和依据分开列出来。",
         }
         await self._submit(prompts[name])
+
+    async def _command_plan(self, argument: str) -> None:
+        if not argument:
+            await self._show_command_result(
+                "PLAN", "用法：/plan <任务>。先只读探索，再输出计划。", error=True
+            )
+            return
+        if self.streaming:
+            self.notify("当前轮结束后再进入 plan mode", severity="warning")
+            return
+        await self._submit(argument, plan_mode=True)
 
     async def _command_transcript(self, argument: str) -> None:
         if not argument:
@@ -3399,7 +3597,7 @@ class AgentLearnTUI(App[str | None]):
             if self.streaming
             else ("ERROR" if self.stop_reason == "error" else "READY")
         )
-        return (
+        status = (
             f"session   {self.session_id}\n"
             f"model     {self.conversation.chat.model}\n"
             f"thinking  {self.effort}\n"
@@ -3411,6 +3609,52 @@ class AgentLearnTUI(App[str | None]):
             f"tools     {self.tool_count}\n"
             f"stop      {self.stop_reason}\n"
             "storage   JSONL transcript + SQLite trace"
+        )
+        capabilities = None
+        capability_error = ""
+        if self.capability_loader is not None:
+            try:
+                capabilities = self.capability_loader()
+            except Exception as exc:
+                capability_error = str(exc)
+        if capabilities is None:
+            return (
+                status
+                + "\ncaps      unavailable"
+                + (f"\ncaps err  {capability_error}" if capability_error else "")
+            )
+        sources: dict[str, list[str]] = {}
+        for tool in capabilities.get("tools", []):
+            sources.setdefault(tool.get("source", "unknown"), []).append(
+                tool.get("name", "?")
+            )
+        source_text = " · ".join(
+            f"{source} {len(names)}({', '.join(names)})"
+            for source, names in sorted(sources.items())
+        )
+        runtime = capabilities.get("runtime", {})
+        environment = capabilities.get("environment", {})
+        mcp = capabilities.get("mcp", [])
+        mcp_text = (
+            " · ".join(
+                f"{entry.get('alias', '?')}={entry.get('state', '?')}"
+                for entry in mcp
+            )
+            if mcp
+            else "none configured/not started"
+        )
+        return (
+            status
+            + f"\npython    {runtime.get('python', '?')}"
+            + f"\nprovider  {runtime.get('provider', '?')}"
+            + f"\nmodel     {runtime.get('model', '?')}"
+            + f"\neffort    {runtime.get('effort') or 'omit'}"
+            + f"\ntriggers  {runtime.get('triggers', '?')}"
+            + f"\ntools     {source_text or 'none'}"
+            + f"\nmcp       {mcp_text}"
+            + f"\nsandbox   {environment.get('sandbox', '?')}"
+            + f"\nboundary  {environment.get('sandbox_boundary', '?')}"
+            + (f"\ncaps err  {capability_error}" if capability_error else "")
         )
 
     async def _command_model(self, model_id: str) -> None:
@@ -3973,11 +4217,23 @@ class AgentLearnTUI(App[str | None]):
             self.copy_to_clipboard(answer)
         self.notify(f"已复制最近回答 · {len(answer)} chars")
 
-    def _approval_closed(self, approval_id: str, approved: bool | None) -> None:
+    def _approval_closed(
+        self, approval_id: str, choice: ApprovalChoice | None
+    ) -> None:
         if self._pending_approval_id == approval_id:
             self._pending_approval_id = None
         if self.approval is not None:
-            self.approval.decide(approval_id, bool(approved))
+            approved = bool(choice and choice.approved)
+            self.approval.decide(
+                approval_id,
+                approved,
+                scope=choice.scope if choice and choice.approved else "once",
+                reason=(
+                    choice.reason.strip()
+                    if choice is not None and not choice.approved
+                    else ""
+                ),
+            )
         if self.streaming:
             self._set_running_state("STREAMING")
         self.query_one("#composer", PromptComposer).focus()
@@ -4000,6 +4256,8 @@ def run_chat(
     settings_saver: Callable[[SettingsValues], SettingsSnapshot] | None = None,
     session_loader: Callable[[], list[SessionSummary]] | None = None,
     approval: ApprovalBroker | None = None,
+    plan_broker: PlanBroker | None = None,
+    capability_loader: Callable[[], dict] | None = None,
     model_loader: Callable[[], list[str]] | None = None,
 ) -> str | None:
     """启动对话 TUI；返回要切换到的下一个 session_id，None 表示退出。"""
@@ -4012,5 +4270,7 @@ def run_chat(
         settings_saver,
         session_loader,
         approval,
+        plan_broker,
+        capability_loader,
         model_loader,
     ).run()

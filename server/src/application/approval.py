@@ -18,6 +18,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 APPROVAL_MODES = ("approve", "auto", "yolo")
+APPROVAL_SCOPES = ("once", "session")
+APPROVAL_REASON_MAX_LENGTH = 500
 # auto 档自动放行的依据是「工具自己声明无副作用」——列表里的都是只读或
 # 等待类：查任务状态、等任务结束都不改任何东西。start_job / stop_job
 # 和 bash 一样有副作用，留在需要确认的那边。
@@ -31,7 +33,15 @@ AUTO_APPROVED_TOOLS = frozenset({"now_time", "job_status", "wait_job", "remember
 class _PendingApproval:
     event: threading.Event
     tool_name: str
+    session_id: str
     approved: bool | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class ApprovalDecision:
+    approved: bool
+    reason: str = ""
 
 
 class ApprovalBroker:
@@ -40,6 +50,7 @@ class ApprovalBroker:
     def __init__(self, timeout_seconds: float = 300.0) -> None:
         self.timeout_seconds = timeout_seconds
         self._pending: dict[str, _PendingApproval] = {}
+        self._session_grants: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
 
     def requires_approval(self, mode: str, tool_name: str) -> bool:
@@ -51,30 +62,66 @@ class ApprovalBroker:
             return tool_name not in AUTO_APPROVED_TOOLS
         return True
 
-    def open(self, tool_name: str = "") -> str:
+    def open(self, tool_name: str = "", session_id: str = "") -> str:
         approval_id = uuid.uuid4().hex
         with self._lock:
-            self._pending[approval_id] = _PendingApproval(threading.Event(), tool_name)
+            self._pending[approval_id] = _PendingApproval(
+                threading.Event(), tool_name, session_id
+            )
         return approval_id
+
+    def is_session_approved(self, session_id: str, tool_name: str) -> bool:
+        """这个会话是否已经对同名工具建立过显式授权。"""
+        with self._lock:
+            return (session_id, tool_name) in self._session_grants
 
     def wait(self, approval_id: str) -> bool | None:
         """True 批准，False 拒绝，None 超时。调用后清掉 pending。"""
+        decision = self.wait_with_reason(approval_id)
+        return decision.approved if decision is not None else None
+
+    def wait_with_reason(self, approval_id: str) -> ApprovalDecision | None:
+        """等待完整决定；拒绝时把界面给的说明一并交回执行线程。"""
         with self._lock:
             pending = self._pending.get(approval_id)
         if pending is None:
-            return False
+            return None
         pending.event.wait(self.timeout_seconds)
         with self._lock:
             self._pending.pop(approval_id, None)
-        return pending.approved
+        return ApprovalDecision(pending.approved is True, pending.reason)
 
-    def decide(self, approval_id: str, approved: bool) -> bool:
-        """从界面线程回填决定；找不到说明已超时、取消或重复点击。"""
+    def decide(
+        self,
+        approval_id: str,
+        approved: bool,
+        *,
+        scope: str = "once",
+        reason: str = "",
+    ) -> bool:
+        """按作用域从界面线程回填决定。
+
+        once 只影响当前 approval_id；session 在批准当前调用的同时，给
+        `(session_id, tool_name)` 建立进程内授权，本会话后续同名工具不再询问。
+        拒绝不建立授权，但可携带一段说明；授权不落盘，进程重启后失效。
+        """
+        if scope not in APPROVAL_SCOPES:
+            raise ValueError(f"approval scope 只能是 {APPROVAL_SCOPES} 之一")
+        clean_reason = reason.strip()
+        if approved and clean_reason:
+            raise ValueError("批准结果不能附带拒绝理由。")
+        if len(clean_reason) > APPROVAL_REASON_MAX_LENGTH:
+            raise ValueError(
+                f"拒绝理由不能超过 {APPROVAL_REASON_MAX_LENGTH} 字符。"
+            )
         with self._lock:
             pending = self._pending.get(approval_id)
             if pending is None:
                 return False
+            if scope == "session" and approved and pending.session_id:
+                self._session_grants.add((pending.session_id, pending.tool_name))
             pending.approved = approved
+            pending.reason = clean_reason
             pending.event.set()
         return True
 

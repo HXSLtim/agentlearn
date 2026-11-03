@@ -51,6 +51,7 @@ from infrastructure.store import Store
 from infrastructure.transcript import Transcript
 
 from application.approval import APPROVAL_MODES, ApprovalBroker
+from application.plan import PLAN_ALLOWED_TOOLS, PlanBroker
 from application.tools import SANDBOX, all_tools, read_memory, run_tool
 from application import compaction
 
@@ -88,6 +89,7 @@ class Conversation:
         constitution_path: Path | None = None,
         steering=None,
         approval: ApprovalBroker | None = None,
+        plan_broker: PlanBroker | None = None,
         approval_mode: str = "approve",
         context_budget_tokens: int | None = None,
         max_tool_rounds: int = MAX_TOOL_ROUNDS,
@@ -120,6 +122,8 @@ class Conversation:
         # TUI 单连接用不上，None = 没有并发，所有检查点都变空操作。
         self.steering = steering
         self.approval = approval
+        self.plan_broker = plan_broker
+        self._turn_plan_mode = False
         if approval_mode not in APPROVAL_MODES:
             raise ValueError(f"approval_mode 只能是 {APPROVAL_MODES} 之一")
         self.approval_mode = approval_mode
@@ -265,6 +269,13 @@ class Conversation:
             f"{effort_line}\n"
             "档位由用户在界面里切换，你改不了。按这个深度分配思考。"
         )
+        if self._turn_plan_mode:
+            parts.append(
+                "当前是 PLAN MODE：只做只读探索，不能改文件、跑 shell、"
+                "启动/停止任务或调用外部 MCP 工具。最终回答必须是一份"
+                "可执行计划，包含目标、步骤、涉及文件、验证方式和风险；"
+                "不要执行计划，等待用户确认。"
+            )
         memory = read_memory(self.memory_path).strip()
         if memory:
             parts.append(
@@ -487,6 +498,7 @@ class Conversation:
         origin: str = "",
         append_user: bool = True,
         images: list[ImageBlock] | None = None,
+        plan_mode: bool = False,
     ):
         """跑一轮对话，逐个产出事件（dict），直到给出最终回答。
 
@@ -509,6 +521,7 @@ class Conversation:
         # 一轮开始后固定同一个客户端：TUI 里可以随时改模型或思考档位，
         # 但当前轮的工具循环不能中途换客户端，否则同一条 trace 会混两套配置。
         chat = self.chat
+        self._turn_plan_mode = plan_mode
         self.turn_usage_tokens = 0
         self.turn_usage = self._empty_usage()
         if not append_user and images:
@@ -563,6 +576,8 @@ class Conversation:
         # 工具定义在这里取一次。它随下面的每次请求重申（API 无状态，
         # 「注册」不是一次性的，是每回都带）。
         tools = all_tools()
+        if plan_mode:
+            tools = [tool for tool in tools if tool.name in PLAN_ALLOWED_TOOLS]
 
         # agent loop：最多 max_tool_rounds 次「请求 -> (要工具就执行再请求)」。
         for _ in range(self.max_tool_rounds):
@@ -670,7 +685,27 @@ class Conversation:
             if stop != "tool_use":
                 # 模型不再要工具，这一轮到此为止。
                 self.stop_reason = stop
-                self.store.end_span(turn_span, status="ok")
+                plan_id = ""
+                if plan_mode:
+                    plan_text = "\n".join(
+                        block.text
+                        for block in blocks
+                        if block.type == "text" and block.text.strip()
+                    )
+                    if self.plan_broker is not None and plan_text.strip():
+                        plan_id = self.plan_broker.create(
+                            self.session_id, plan_text
+                        )
+                end_data = {"plan_id": plan_id} if plan_id else None
+                self.store.end_span(turn_span, status="ok", data=end_data)
+                if plan_id:
+                    yield {
+                        "kind": "plan",
+                        "plan_id": plan_id,
+                        "text": self.plan_broker.get(plan_id).text
+                        if self.plan_broker is not None
+                        else "",
+                    }
                 return
 
             # stop_reason == "tool_use"：模型发起了工具调用（一条回复里可能有多个）。
@@ -701,12 +736,29 @@ class Conversation:
                         "approval_mode": approval_mode,
                     },
                 )
+                decision = None
                 approved: bool | None = True
                 approval_id: str | None = None
-                if self.approval is not None and self.approval.requires_approval(
-                    approval_mode, block.name
+                plan_blocked = plan_mode and block.name not in PLAN_ALLOWED_TOOLS
+                if plan_blocked:
+                    approved = False
+                    content = (
+                        "Plan mode blocked this tool call. Only read-only tools "
+                        "are available before the user confirms the plan."
+                    )
+                    status = "plan_blocked"
+                    is_error = True
+                    image = None
+                elif (
+                    self.approval is not None
+                    and self.approval.requires_approval(approval_mode, block.name)
+                    and not self.approval.is_session_approved(
+                        self.session_id, block.name
+                    )
                 ):
-                    approval_id = self.approval.open(block.name)
+                    approval_id = self.approval.open(
+                        block.name, session_id=self.session_id
+                    )
                     register = (
                         getattr(self.steering, "register_approval", None)
                         if self.steering is not None
@@ -728,7 +780,8 @@ class Conversation:
                             }
                         else:
                             self.approval.decide(approval_id, True)
-                        approved = self.approval.wait(approval_id)
+                        decision = self.approval.wait_with_reason(approval_id)
+                        approved = decision.approved if decision is not None else None
                     except GeneratorExit:
                         self.approval.cancel(approval_id)
                         self._append_disconnect_tool_results(blocks, results)
@@ -741,13 +794,16 @@ class Conversation:
                         )
                         if callable(forget):
                             forget(approval_id)
-                image = None
-                if approved is not True:
+                if plan_blocked:
+                    pass
+                elif approved is not True:
                     if approved is None:
                         content = "Timed out waiting for user approval."
                         status = "timeout"
                     else:
                         content = "Tool execution was denied by the user."
+                        if decision is not None and decision.reason:
+                            content += f" Reason: {decision.reason}"
                         status = "denied"
                     is_error = True
                 else:
@@ -760,6 +816,10 @@ class Conversation:
                     "approval_id": approval_id,
                     "approval_mode": approval_mode,
                 }
+                if plan_mode:
+                    span_data["plan_mode"] = True
+                if status == "denied" and decision is not None and decision.reason:
+                    span_data["denial_reason"] = decision.reason
                 if image is not None:
                     # 图绝不进 span（D11：spans 只记控制流，base64 一张几十 K），
                     # 记个大小留痕：这张图进过模型上下文。

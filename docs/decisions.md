@@ -755,3 +755,28 @@ Conversation 新增本轮累计值，主请求和圈界压缩请求都计入，�
 **验收**（离线，两次构造 Runner 模拟 daemon 重启）：三次成功运行后重建，
 第 4 次触发仍因 3/300s 进入 900 秒冷却；60k+50k 用量后重建，下一次触发仍
 因 token budget 被消费丢弃，文件保留 `86410` 截止和两条用量记录。
+
+## D31 plan mode：白名单只读探索 + 一次性人工确认（2026-11-03）
+
+plan mode 是请求级模式，不是第四个执行等级。`approve/auto/yolo` 描述工具
+能不能跑；`plan_mode` 描述这一轮只允许探索并产出计划。两者分离，避免把
+“autonomous 执行等级”和“是否处于规划阶段”混在同一个状态机里。
+
+模型请求只暴露内置只读工具白名单（now_time、screenshot、read_skill、
+wait_job、job_status）。bash、start_job、stop_job、remember 与全部 MCP 工具
+都不暴露；模型幻觉出这些名字时，执行层直接返回 `plan_blocked` 的
+`tool_result`，span 留 `plan_mode=true`。MCP 没有机器可读副作用声明，一律
+按未知风险处理，不做描述文本猜测。
+
+最终正文生成独立的 `plan` 事件；进程内 `PlanBroker` 绑定 session_id 并把
+“确认”和“执行”拆开。确认接口只改状态；带 `plan_id` 的 `/chat` 才一次性
+消费确认并注入“用户已确认以下计划”的执行轮。TUI 和 desktop 都必须点击
+确认按钮（或按 Enter）才触发执行，重复使用同一个 plan_id 返回 404。计划
+正文本身仍在 JSONL 里，broker 只保存进程内确认状态；重启后旧按钮不能再
+执行，这是保守缺口。
+
+**验收**（离线 + 假 HTTP + 双端 UI）：假模型在 plan mode 请求 bash 写
+marker，实际未执行且 tool span 为 `plan_blocked`；未确认消费返回空，
+确认后只能消费一次；HTTP 422/404/200/404 契约通过；TUI 两枚按钮外宽均
+24，desktop 380×900 两枚按钮均 157px 且同一行，确认后请求依次为
+`/plans/{id}/confirm` 与带 `plan_id` 的 `/chat`。

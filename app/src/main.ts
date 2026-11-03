@@ -16,6 +16,16 @@ type SteeringMode = "queue" | "cooperative" | "preemptive";
 type ToolState = "waiting" | "running" | "done";
 type TranscriptMode = "normal" | "thinking" | "verbose";
 
+interface PlanEvent {
+  id: string;
+  threadId: string;
+  sessionId: string;
+  text: string;
+  confirmed: boolean;
+  discarded: boolean;
+  executed: boolean;
+}
+
 interface ImageAttachment {
   media_type: string;
   data: string;
@@ -49,7 +59,12 @@ interface ToolPart {
   tool: ToolEvent;
 }
 
-type AssistantPart = TextPart | ThinkingPart | ToolPart;
+interface PlanPart {
+  type: "plan";
+  plan: PlanEvent;
+}
+
+type AssistantPart = TextPart | ThinkingPart | ToolPart | PlanPart;
 
 interface UiMessage {
   id: string;
@@ -139,6 +154,35 @@ interface ModelListResponse {
   models: string[];
 }
 
+interface CapabilitiesResponse {
+  tools: Array<{
+    name: string;
+    source: string;
+    description: string;
+  }>;
+  mcp: Array<{
+    alias: string;
+    state: string;
+    command?: string;
+  }>;
+  skills: Array<{ name: string; description: string }>;
+  environment: {
+    cwd: string;
+    sandbox: string;
+    sandbox_boundary: string;
+    memory_file: string;
+  };
+  runtime: {
+    python: string;
+    provider: string;
+    model: string;
+    effort: string;
+    triggers: number;
+  };
+}
+
+type ApprovalScope = "once" | "session";
+
 interface ChatEvent {
   kind:
     | "thinking"
@@ -146,6 +190,7 @@ interface ChatEvent {
     | "tool_use"
     | "tool_approval"
     | "tool_result"
+    | "plan"
     | "usage"
     | "context_warning"
     | "steering_ack"
@@ -171,6 +216,7 @@ interface ChatEvent {
   estimate_tokens?: number;
   budget_tokens?: number;
   ratio?: number;
+  plan_id?: string;
 }
 
 interface ApprovalModeResponse {
@@ -178,6 +224,12 @@ interface ApprovalModeResponse {
   active: boolean;
   mode: ApprovalMode;
   auto_approved: string[];
+}
+
+interface PlanConfirmResponse {
+  ok: boolean;
+  plan_id: string;
+  confirmed: boolean;
 }
 
 interface ServerSession {
@@ -396,6 +448,19 @@ const SLASH_COMMANDS: SlashCommand[] = [
     description: "切换 approve / auto / yolo",
     group: "RUNTIME",
     takesArgument: true,
+  },
+  {
+    name: "plan",
+    usage: "/plan <task>",
+    description: "Read-only exploration, then a human-confirmed plan",
+    group: "RUNTIME",
+    takesArgument: true,
+  },
+  {
+    name: "capabilities",
+    usage: "/capabilities",
+    description: "Show tools, MCP health, runtime and sandbox facts",
+    group: "SYSTEM",
   },
   {
     name: "transcript",
@@ -1278,9 +1343,17 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
       ? `
         <div class="tool-approval-gate">
           <span>HOST EXECUTION REQUIRES APPROVAL</span>
+          <input
+            type="text"
+            class="approval-reason"
+            data-approval-id="${escapeHtml(tool.approvalId ?? "")}"
+            placeholder="DENIAL REASON (OPTIONAL)"
+            aria-label="拒绝理由（可选）"
+          />
           <div>
-            <button type="button" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="false">DENY</button>
-            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true">ACCEPT</button>
+            <button type="button" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="false" data-approval-scope="once">DENY</button>
+            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true" data-approval-scope="once">ACCEPT ONCE</button>
+            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true" data-approval-scope="session">ACCEPT SESSION</button>
           </div>
         </div>
       `
@@ -1314,6 +1387,31 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
   `;
 }
 
+function renderPlan(plan: PlanEvent): string {
+  const actions = plan.discarded
+    ? `<span class="plan-state">PLAN DISCARDED</span>`
+    : plan.executed
+      ? `<span class="plan-state">PLAN EXECUTION STARTED</span>`
+      : plan.confirmed
+        ? `<span class="plan-state">PLAN CONFIRMED</span>`
+      : `
+        <div class="plan-actions">
+          <button type="button" data-plan-id="${escapeHtml(plan.id)}" data-plan-action="discard">DISCARD PLAN</button>
+          <button type="button" class="confirm" data-plan-id="${escapeHtml(plan.id)}" data-plan-action="confirm">CONFIRM &amp; EXECUTE</button>
+        </div>
+      `;
+  return `
+    <section class="plan-card" aria-label="待确认计划">
+      <header>
+        <span>PLAN MODE / HUMAN CONFIRMATION</span>
+        <code>${plan.id.slice(0, 8)}</code>
+      </header>
+      <pre>${escapeHtml(plan.text)}</pre>
+      ${actions}
+    </section>
+  `;
+}
+
 function renderImages(images: ImageAttachment[], label: string): string {
   const safeImages = images
     .map(parseImage)
@@ -1342,6 +1440,9 @@ function renderAssistant(message: UiMessage): string {
           return "";
         }
         return renderTool(part.tool, transcriptMode === "verbose");
+      }
+      if (part.type === "plan") {
+        return renderPlan(part.plan);
       }
       if (part.type === "thinking") {
         if (transcriptMode === "normal") {
@@ -1475,6 +1576,9 @@ function messageSearchText(message: UiMessage): string {
   const chunks = message.parts.map((part) => {
     if (part.type === "text" || part.type === "thinking") {
       return part.text;
+    }
+    if (part.type === "plan") {
+      return part.plan.text;
     }
     return `${part.tool.name}\n${JSON.stringify(part.tool.input)}\n${
       part.tool.output ?? ""
@@ -1981,6 +2085,23 @@ function handleChatEvent(event: ChatEvent, context: StreamContext): boolean {
     updateAssistant(thread, assistant);
     return false;
   }
+  if (event.kind === "plan" && event.plan_id) {
+    markStreamActivity(context);
+    assistant.parts.push({
+      type: "plan",
+      plan: {
+        id: event.plan_id,
+        threadId: thread.id,
+        sessionId: thread.sessionId,
+        text: event.text ?? "",
+        confirmed: false,
+        discarded: false,
+        executed: false,
+      },
+    });
+    updateAssistant(thread, assistant);
+    return false;
+  }
   if (event.kind === "error") {
     thread.stopping = false;
     assistant.error = event.message ?? "未知错误";
@@ -2311,6 +2432,135 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
   );
 }
 
+async function submitPlanningPrompt(task: string): Promise<void> {
+  const thread = activeThread();
+  if (!task.trim()) {
+    showToast("用法：/plan <任务>");
+    return;
+  }
+  if (pendingImages.length) {
+    showToast("plan mode 不能携带图片附件");
+    return;
+  }
+  if (isThreadRunning(thread)) {
+    showToast("当前轮结束后再进入 plan mode");
+    return;
+  }
+  if (thread.steeringMode !== "queue") {
+    showToast("plan mode 只支持 queue 档；按 Alt+S 切回 queue");
+    return;
+  }
+  promptInput.value = "";
+  resizePrompt();
+  closeCommandPalette();
+  commandReceipt = null;
+  thread.sessionId ||= createId();
+  const label = `PLAN / ${task.trim()}`;
+  const userMessage = createUserMessage(label);
+  const assistant = createAssistantMessage();
+  thread.messages.push(userMessage);
+  thread.messages.push(assistant);
+  if (thread.title === "未命名运行") {
+    thread.title = threadTitleFor(task);
+  }
+  thread.model = settingsModel.value.trim() || thread.model;
+  thread.updatedAt = Date.now();
+  thread.usage = undefined;
+  thread.runStartedAt = Date.now();
+  renderEverything(true);
+  schedulePersist();
+  await runChatRequest(
+    { thread, assistant, userMessage },
+    task,
+    "queue",
+    [],
+    false,
+    true,
+  );
+}
+
+function findPlan(
+  planId: string,
+): { thread: Thread; plan: PlanEvent } | null {
+  for (const thread of state.threads) {
+    for (const message of thread.messages) {
+      for (const part of message.parts) {
+        if (part.type === "plan" && part.plan.id === planId) {
+          return { thread, plan: part.plan };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function handlePlanAction(planId: string, action: string): Promise<void> {
+  const found = findPlan(planId);
+  if (!found) {
+    return;
+  }
+  const { thread, plan } = found;
+  if (action === "discard") {
+    plan.discarded = true;
+    thread.updatedAt = Date.now();
+    persistState();
+    renderEverything();
+    showToast("已丢弃计划；不会执行任何写操作");
+    return;
+  }
+  if (action !== "confirm" || plan.confirmed || plan.executed) {
+    return;
+  }
+  if (isThreadRunning(thread)) {
+    showToast("当前轮结束后才能执行计划");
+    return;
+  }
+  try {
+    const response = await fetch(
+      `${API_BASE}/plans/${encodeURIComponent(plan.id)}/confirm`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: plan.sessionId }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const result = (await response.json()) as PlanConfirmResponse;
+    if (!result.confirmed) {
+      throw new Error("服务端没有记录计划确认");
+    }
+    plan.confirmed = true;
+    plan.executed = true;
+    const userMessage = createUserMessage(`CONFIRM PLAN / ${plan.id.slice(0, 8)}`);
+    const assistant = createAssistantMessage();
+    thread.messages.push(userMessage);
+    thread.messages.push(assistant);
+    thread.updatedAt = Date.now();
+    thread.usage = undefined;
+    thread.runStartedAt = Date.now();
+    renderEverything(true);
+    schedulePersist();
+    await runChatRequest(
+      { thread, assistant, userMessage },
+      "用户已确认上述计划，请执行。",
+      "queue",
+      [],
+      false,
+      false,
+      plan.id,
+    );
+  } catch (error) {
+    plan.confirmed = false;
+    plan.executed = false;
+    thread.updatedAt = Date.now();
+    persistState();
+    renderEverything();
+    showToast(error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function submitSteering(
   thread: Thread,
   question: string,
@@ -2353,6 +2603,8 @@ async function runChatRequest(
   steering: SteeringMode,
   images: ImageAttachment[] = [],
   retry = false,
+  planMode = false,
+  planId = "",
 ): Promise<void> {
   const { thread } = context;
   let gotDone = false;
@@ -2377,6 +2629,8 @@ async function runChatRequest(
         steering,
         ...(images.length ? { images } : {}),
         ...(retry ? { retry: true } : {}),
+        ...(planMode ? { plan_mode: true } : {}),
+        ...(planId ? { plan_id: planId } : {}),
       }),
     });
     if (!response.ok) {
@@ -3922,6 +4176,8 @@ async function cycleEffort(): Promise<void> {
 async function respondToApproval(
   approvalId: string,
   approved: boolean,
+  scope: ApprovalScope = "once",
+  reason = "",
 ): Promise<void> {
   const buttons = Array.from(
     conversation.querySelectorAll<HTMLButtonElement>(
@@ -3931,19 +4187,41 @@ async function respondToApproval(
   for (const button of buttons) {
     button.disabled = true;
   }
+  const reasonInputs = Array.from(
+    conversation.querySelectorAll<HTMLInputElement>(
+      `input.approval-reason[data-approval-id="${CSS.escape(approvalId)}"]`,
+    ),
+  );
+  for (const input of reasonInputs) {
+    input.disabled = true;
+  }
   try {
     const response = await fetch(`${API_BASE}/approval`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approval_id: approvalId, approved }),
+      body: JSON.stringify({
+        approval_id: approvalId,
+        approved,
+        scope,
+        reason,
+      }),
     });
     if (!response.ok) {
       throw new Error(await readError(response));
     }
-    showToast(approved ? "已允许工具执行" : "已拒绝工具执行");
+    showToast(
+      approved
+        ? scope === "session"
+          ? "本会话后续同名工具已免问"
+          : "已允许工具执行"
+        : "已拒绝工具执行",
+    );
   } catch (error) {
     for (const button of buttons) {
       button.disabled = false;
+    }
+    for (const input of reasonInputs) {
+      input.disabled = false;
     }
     showToast(error instanceof Error ? error.message : String(error));
   }
@@ -4031,6 +4309,62 @@ function setApprovalMode(mode: ApprovalMode): void {
   if (isThreadRunning(thread)) {
     syncRuntimeApprovalMode(thread, thread.approvalMode);
   }
+}
+
+async function showCapabilities(): Promise<void> {
+  const thread = activeThread();
+  try {
+    const response = await fetch(`${API_BASE}/capabilities`);
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const capabilities = (await response.json()) as CapabilitiesResponse;
+    const sources = new Map<string, string[]>();
+    for (const tool of capabilities.tools) {
+      sources.set(tool.source, [...(sources.get(tool.source) ?? []), tool.name]);
+    }
+    const sourceLines = [...sources.entries()].sort().map(
+      ([source, names]) =>
+        `${source.toUpperCase()} ${names.length}: ${names.join(", ")}`,
+    );
+    const body = [
+      `PYTHON     ${capabilities.runtime.python}`,
+      `PROVIDER   ${capabilities.runtime.provider}`,
+      `MODEL      ${capabilities.runtime.model}`,
+      `EFFORT     ${capabilities.runtime.effort || "omit"}`,
+      `TRIGGERS   ${capabilities.runtime.triggers}`,
+      "",
+      "TOOLS",
+      ...(sourceLines.length ? sourceLines : ["none"]),
+      "",
+      "MCP",
+      ...(capabilities.mcp.length
+        ? capabilities.mcp.map(
+            (entry) =>
+              `${entry.alias}=${entry.state}${entry.command ? ` (${entry.command})` : ""}`,
+          )
+        : ["none configured/not started"]),
+      "",
+      `SANDBOX    ${capabilities.environment.sandbox}`,
+      `BOUNDARY   ${capabilities.environment.sandbox_boundary}`,
+    ].join("\n");
+    commandReceipt = {
+      threadId: thread.id,
+      title: "CAPABILITIES",
+      body,
+      error: false,
+    };
+  } catch (error) {
+    commandReceipt = {
+      threadId: thread.id,
+      title: "CAPABILITIES",
+      body: error instanceof Error ? error.message : String(error),
+      error: true,
+    };
+  }
+  thread.updatedAt = Date.now();
+  persistState();
+  renderEverything(true);
 }
 
 const STEERING_MODES: SteeringMode[] = [
@@ -4422,6 +4756,14 @@ async function runSlashCommand(
     setApprovalMode(mode);
     return;
   }
+  if (command.name === "plan") {
+    await submitPlanningPrompt(argument);
+    return;
+  }
+  if (command.name === "capabilities") {
+    await showCapabilities();
+    return;
+  }
   if (command.name === "resume") {
     if (argument) {
       const thread = findResumeThread(argument);
@@ -4624,13 +4966,26 @@ conversation.addEventListener("click", (event) => {
     void retryFailedTurn(activeThread(), retryButton.dataset.retryMessageId);
     return;
   }
+  const planButton = (event.target as Element).closest<HTMLButtonElement>(
+    "[data-plan-id]",
+  );
+  if (planButton?.dataset.planId) {
+    void handlePlanAction(planButton.dataset.planId, planButton.dataset.planAction ?? "");
+    return;
+  }
   const approvalButton = (event.target as Element).closest<HTMLButtonElement>(
     "[data-approval-id]",
   );
   if (approvalButton?.dataset.approvalId) {
+    const gate = approvalButton.closest(".tool-approval-gate");
+    const reasonInput = gate?.querySelector<HTMLInputElement>(
+      "input.approval-reason",
+    );
     void respondToApproval(
       approvalButton.dataset.approvalId,
       approvalButton.dataset.approved === "true",
+      approvalButton.dataset.approvalScope === "session" ? "session" : "once",
+      reasonInput?.value.trim() ?? "",
     );
     return;
   }

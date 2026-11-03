@@ -22,6 +22,9 @@ POST /chat
         {"kind": "usage", "usage": {...}}
             每次成功模型请求后推送本轮累计 token 实数；字段与 llm_request
             span 的 usage 一致，包含 input/output/cache_read/cache_write/hit
+        {"kind": "plan", "plan_id": "...", "text": "..."}
+            plan mode 的最终计划。前端确认后先 POST /plans/{id}/confirm，
+            再带 plan_id 调 /chat 才会执行；同一次确认只能执行一次。
     全部推完再补一条：
         {"kind": "done", "stop_reason": "...", "session_id": "..."}
     中途出错则补一条（200 已发出，改不了状态码，只能用事件报错）：
@@ -52,20 +55,27 @@ PUT /settings
     保存后清掉配置缓存，下一轮模型请求使用新配置。
 
 POST /approval
-    请求体：{"approval_id": "...", "approved": true}
-    tool_approval 事件的人工决定；审批过期或重复提交返回 404。
+    请求体：{"approval_id": "...", "approved": true, "scope": "once|session",
+            "reason": "拒绝原因；仅 denied 时可用"}
+    tool_approval 事件的人工决定；审批过期或重复提交返回 404。scope=session
+    只授权当前会话的后续同名工具，不影响其他会话。
 
 POST /approval-mode
     请求体：{"session_id": "...", "mode": "approve|auto|yolo"}
     运行中实时切换执行等级，立即影响这一轮后续工具调用；如果正在等待的
     审批在新等级下已不需要人工确认，服务端会直接放行并返回 auto_approved。
     没有运行轮时暂存到 session 槽位，下一次 begin 时采用。
+
+POST /plans/{plan_id}/confirm
+    请求体：{"session_id": "..."}
+    只标记当前会话的这一份计划已被人确认；真正执行仍必须由带 plan_id
+    的 POST /chat 发起。
 """
 import json
-import sys
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
@@ -76,18 +86,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from domain.message import ImageBlock
-from application.approval import APPROVAL_MODES, ApprovalBroker
+from application.approval import APPROVAL_MODES, APPROVAL_SCOPES, ApprovalBroker
+from application.approval import APPROVAL_REASON_MAX_LENGTH
+from application.capabilities import capability_snapshot
 from application.conversation import Conversation, TurnCancelled
 from application.jobs import restore_jobs
-from application.tools import (
-    REGISTRY,
-    SANDBOX,
-    _load_skills,
-    _mcp_manager,
-    all_tools,
-    append_memory,
-    read_memory,
-)
+from application.plan import PlanBroker
+from application.tools import append_memory, read_memory
 from application.proactivity import ProactivityRunner, UNATTENDED_MAX_TOOL_ROUNDS
 from application.session_manager import MODES, SessionManager
 from application.trace_view import answers_for_requests, answer_texts
@@ -172,6 +177,7 @@ _store = Store(DATA / "agent.db")
 _transcript = Transcript(DATA / "sessions")
 _manager = SessionManager()
 _approval = ApprovalBroker()
+_plans = PlanBroker()
 
 
 def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
@@ -269,6 +275,9 @@ class ChatRequest(BaseModel):
     # 历史尾部必须是 user 消息（纯文本或 tool_result——后者意味着从工具
     # 循环的中断点续跑），否则 409；只支持 queue 档（重试不该再插话/抢占）。
     retry: bool = False
+    # true = 只读探索并产出计划；执行确认轮带 plan_id，不能同时使用。
+    plan_mode: bool = False
+    plan_id: str = ""
 
 
 class SettingsRequest(BaseModel):
@@ -287,6 +296,8 @@ class ApprovalRequest(BaseModel):
 
     approval_id: str
     approved: bool
+    scope: Literal["once", "session"] = "once"
+    reason: str = ""
 
 
 class ApprovalModeRequest(BaseModel):
@@ -294,6 +305,12 @@ class ApprovalModeRequest(BaseModel):
 
     session_id: str
     mode: str
+
+
+class PlanConfirmRequest(BaseModel):
+    """人工确认一份 plan mode 产出的计划。"""
+
+    session_id: str
 
 
 class MemoryRequest(BaseModel):
@@ -613,42 +630,9 @@ def get_capabilities():
     是「已知且接受」，面板不该粉饰成「有沙箱」）。
     """
     config = get_config()
-    builtin = {tool.name for tool, _ in REGISTRY.values()}
-    mcp_tools = _mcp_manager().health()
-    skills = [
-        {"name": name, "description": description}
-        for name, description, _ in _load_skills()
-    ]
-    return {
-        "tools": [
-            {
-                "name": tool.name,
-                "source": "builtin" if tool.name in builtin
-                          else "mcp" if "__" in tool.name
-                          else "skill",
-                "description": tool.description.split("\n")[0][:120],
-            }
-            for tool in all_tools()
-        ],
-        "mcp": mcp_tools,
-        "skills": skills,
-        "environment": {
-            "cwd": str(Path.cwd()),
-            "sandbox": str(SANDBOX),
-            "sandbox_boundary": (
-                "工作目录起跑点，不是安全边界：绝对路径和 ../ 都能绕过"
-                "（D17 已接受的取舍，容器化前不放宽）"
-            ),
-            "memory_file": str(SANDBOX / "memory.md"),
-        },
-        "runtime": {
-            "python": sys.version.split()[0],
-            "provider": config.provider,
-            "model": config.model_id,
-            "effort": config.effort or "",
-            "triggers": len(load_triggers()),
-        },
-    }
+    return capability_snapshot(
+        config.provider, config.model_id, config.effort or ""
+    )
 
 
 @app.get("/sessions/search")
@@ -721,7 +705,25 @@ def post_session_compact(session_id: str):
 @app.post("/approval")
 def approve_tool(request: ApprovalRequest):
     """回填 TUI/desktop 的执行审批；幂等性由 broker 的 pending 表负责。"""
-    if not _approval.decide(request.approval_id, request.approved):
+    if request.scope not in APPROVAL_SCOPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"scope 只能是 {APPROVAL_SCOPES} 之一。",
+        )
+    reason = request.reason.strip()
+    if request.approved and reason:
+        raise HTTPException(status_code=422, detail="批准结果不能附带拒绝理由。")
+    if len(reason) > APPROVAL_REASON_MAX_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"拒绝理由不能超过 {APPROVAL_REASON_MAX_LENGTH} 字符。",
+        )
+    if not _approval.decide(
+        request.approval_id,
+        request.approved,
+        scope=request.scope,
+        reason=reason,
+    ):
         raise HTTPException(status_code=404, detail="审批已过期、取消或已处理。")
     return {"ok": True}
 
@@ -765,6 +767,8 @@ def chat_events(
     approval_mode: str,
     retry: bool = False,
     images: list[dict] | None = None,
+    plan_mode: bool = False,
+    plan_id: str = "",
 ):
     """产生 SSE 的每一条。这是一个生成器。
 
@@ -803,6 +807,26 @@ def chat_events(
     with slot.turn_lock:
         handle = slot.begin(approval_mode)
         try:
+            question_to_run = question
+            origin = "retry" if retry else "plan" if plan_mode else ""
+            if plan_id:
+                plan = _plans.consume_confirmed(plan_id, session_id)
+                if plan is None:
+                    yield _event({
+                        "kind": "error",
+                        "message": "计划不存在、未确认或已执行。",
+                    })
+                    yield _event({
+                        "kind": "done",
+                        "stop_reason": "error",
+                        "session_id": session_id,
+                    })
+                    return
+                question_to_run = (
+                    "用户已确认以下计划，请按计划执行，不要重新生成计划：\n\n"
+                    f"{plan.text}"
+                )
+                origin = f"plan:{plan_id}"
             # 构造放在 try 里：建客户端可能失败（典型是本机 SOCKS 代理缺
             # socksio），让它变成一条 error 事件推给前端，而不是连接中途断掉。
             conv = Conversation(
@@ -812,6 +836,7 @@ def chat_events(
                 session_id,
                 steering=handle,
                 approval=_approval,
+                plan_broker=_plans,
                 approval_mode=approval_mode,
             )
             try:
@@ -820,10 +845,11 @@ def chat_events(
                     for i in (images or [])
                 ]
                 for event in conv.turn(
-                    question,
-                    origin="retry" if retry else "",
+                    question_to_run,
+                    origin=origin,
                     append_user=not retry,
                     images=blocks,
+                    plan_mode=plan_mode,
                 ):
                     # 每个事件立刻作为一条 SSE 推出去。
                     yield _event(event)
@@ -872,6 +898,27 @@ def chat(request: ChatRequest) -> StreamingResponse:
             status_code=422,
             detail=f"approval_mode 只能是 {APPROVAL_MODES} 之一。",
         )
+    if request.plan_mode and request.plan_id:
+        raise HTTPException(
+            status_code=422,
+            detail="plan_mode 是计划轮，plan_id 是确认后的执行轮，不能同时使用。",
+        )
+    if request.plan_mode and request.steering != "queue":
+        raise HTTPException(status_code=422, detail="计划轮只支持 queue 档。")
+    if request.plan_id:
+        if not request.session_id:
+            raise HTTPException(status_code=422, detail="执行计划必须带 session_id。")
+        if request.retry:
+            raise HTTPException(status_code=422, detail="计划执行不是 retry 轮。")
+        if request.steering != "queue":
+            raise HTTPException(status_code=422, detail="执行计划只支持 queue 档。")
+        if request.images:
+            raise HTTPException(status_code=422, detail="执行计划不能带新图。")
+        plan = _plans.get(request.plan_id)
+        if plan is None or plan.session_id != request.session_id:
+            raise HTTPException(status_code=404, detail="计划不存在或不属于当前会话。")
+        if not plan.confirmed or plan.claimed:
+            raise HTTPException(status_code=404, detail="计划未确认或已执行。")
     # 重试的前置校验也推流前做：可重试是会话当前的状态，不是请求格式，
     # 状态不满足用 409（见 _validated_session 的 404/422 之分）。
     if request.images and request.retry:
@@ -910,10 +957,27 @@ def chat(request: ChatRequest) -> StreamingResponse:
             request.approval_mode,
             request.retry,
             request.images,
+            request.plan_mode,
+            request.plan_id,
         ),
         # media_type 告诉客户端这是一段事件流，而不是一次性的 JSON。
         media_type="text/event-stream",
     )
+
+
+@app.post("/plans/{plan_id}/confirm")
+def confirm_plan(plan_id: str, request: PlanConfirmRequest):
+    """记录人工确认；这一步本身不执行任何工具。"""
+    try:
+        _transcript.path_for(request.session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    plan = _plans.confirm(plan_id, request.session_id)
+    if plan is None:
+        raise HTTPException(
+            status_code=404, detail="计划不存在、已执行或不属于当前会话。"
+        )
+    return {"ok": True, "plan_id": plan_id, "confirmed": True}
 
 
 def main(port: int = 8000) -> None:
