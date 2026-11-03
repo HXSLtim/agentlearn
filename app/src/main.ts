@@ -691,7 +691,9 @@ async function imageFileToAttachment(file: File): Promise<ImageAttachment | unde
   });
 }
 
-async function addDroppedImages(files: FileList | undefined): Promise<void> {
+async function addImageFiles(
+  files: FileList | File[] | undefined,
+): Promise<void> {
   const images = await Promise.all(
     Array.from(files ?? []).map((file) => imageFileToAttachment(file)),
   );
@@ -4299,7 +4301,18 @@ composer.addEventListener("dragleave", (event) => {
 composer.addEventListener("drop", (event) => {
   event.preventDefault();
   composerShell.classList.remove("is-dragover");
-  void addDroppedImages(event.dataTransfer?.files);
+  void addImageFiles(event.dataTransfer?.files);
+});
+promptInput.addEventListener("paste", (event) => {
+  const files = Array.from(event.clipboardData?.items ?? [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+  if (!files.length) {
+    return;
+  }
+  event.preventDefault();
+  void addImageFiles(files);
 });
 resumeList.addEventListener("click", (event) => {
   const button = (event.target as Element).closest<HTMLButtonElement>(

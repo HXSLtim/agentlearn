@@ -50,6 +50,8 @@
   提交时作为 `POST /chat` 的 `images` 传给后端；带图只允许 queue，
   cooperative / preemptive 在前端拦截。RETRY 修正为发送
   `{"retry":true}` 与空 question，且不携带新的 `images`。
+- desktop 支持粘贴图片：clipboard 图片进入与拖拽同一份附件管线，
+  纯文本粘贴保持浏览器默认行为。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
