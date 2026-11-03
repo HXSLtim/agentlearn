@@ -118,7 +118,7 @@ A/B 真机同问「写运行报告」：无技能 0/4 格式标记，有技能�
 | 会话索引 API | 前端接线契约落地：`GET /sessions`（活动倒序，turns/updated_at/stop_reason 从 spans 推导）、`/sessions/{id}/messages`、`POST /stop`、`/sessions/{id}/trace`；P1 rename/archive/fork/永久删除。desktop 摘掉 localStorage 唯一索引的帽子 | ✅ |
 | 主动性（一阶） | 常驻调度 + 三种触发器（interval/file/jobdone）只做消息注入，无人值守钉死 auto 地板、remember 唯一预授权写、uuid5 固定会话、notices 值班日志（D27）；二阶（容器化后放开手脚）未做 | ✅ |
 | 评测 | 从 trace 回放打分：工具调用对不对、答案准不准、花了多少 token | 未开始 |
-| 桌面端 | app 已接 POST /chat + SSE、server 会话索引、正文恢复、会话内容搜索、重命名、pin、归档视图与二次确认永久删除、三档 steering、停止、失败重试、运行账本、设置、trace 抽屉、只读可折叠变更文件列表、逐行增删和未跟踪文件；Tauri 自动拉起 server 未做 | 🟡 |
+| 桌面端 | app 已接 POST /chat + SSE、server 会话索引、正文恢复、会话内容搜索、重命名、pin、归档视图、二次确认永久删除与 fork、三档 steering、停止、失败重试、运行账本、设置、trace 抽屉、只读可折叠变更文件列表、逐行增删和未跟踪文件；Tauri 自动拉起 server 未做 | 🟡 |
 
 ## 文档维护节奏
 

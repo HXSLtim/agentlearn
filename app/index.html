@@ -524,6 +524,7 @@
           <div class="resume-session-actions">
             <button id="resume-archive" type="button">ARCHIVE</button>
             <button id="resume-delete" type="button">DELETE</button>
+            <button id="resume-fork" type="button">FORK</button>
           </div>
         </div>
         <div class="resume-delete-confirm" id="resume-delete-confirm" hidden>
@@ -538,6 +539,26 @@
             </button>
           </div>
         </div>
+        <form class="resume-fork-form" id="resume-fork-form" hidden>
+          <label for="resume-fork-through">COPY FIRST N MESSAGES</label>
+          <div class="resume-fork-meta">
+            <span id="resume-fork-source"></span>
+            <output id="resume-fork-max"></output>
+          </div>
+          <input
+            id="resume-fork-through"
+            type="number"
+            min="1"
+            step="1"
+            value="1"
+            autocomplete="off"
+          />
+          <p id="resume-fork-preview"></p>
+          <div>
+            <button id="resume-fork-cancel" type="button">CANCEL</button>
+            <button id="resume-fork-submit" type="submit">FORK</button>
+          </div>
+        </form>
         <label class="resume-search-field">
           <span>FILTER INDEX</span>
           <input

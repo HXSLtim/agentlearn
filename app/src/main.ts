@@ -157,6 +157,12 @@ interface ServerSession {
   archived: boolean;
 }
 
+interface SessionForkResponse {
+  ok: boolean;
+  session_id: string;
+  copied: number;
+}
+
 interface SessionSearchHit {
   session_id: string;
   title: string;
@@ -472,6 +478,22 @@ const resumeDeleteCancelButton = requireElement<HTMLButtonElement>(
 const resumeDeleteConfirmButton = requireElement<HTMLButtonElement>(
   "#resume-delete-confirm-button",
 );
+const resumeForkButton = requireElement<HTMLButtonElement>("#resume-fork");
+const resumeForkForm = requireElement<HTMLFormElement>("#resume-fork-form");
+const resumeForkSource = requireElement<HTMLElement>("#resume-fork-source");
+const resumeForkMax = requireElement<HTMLElement>("#resume-fork-max");
+const resumeForkInput = requireElement<HTMLInputElement>(
+  "#resume-fork-through",
+);
+const resumeForkPreview = requireElement<HTMLElement>(
+  "#resume-fork-preview",
+);
+const resumeForkCancelButton = requireElement<HTMLButtonElement>(
+  "#resume-fork-cancel",
+);
+const resumeForkSubmitButton = requireElement<HTMLButtonElement>(
+  "#resume-fork-submit",
+);
 const resumeRenameForm = requireElement<HTMLFormElement>("#resume-rename-form");
 const resumeRenameInput = requireElement<HTMLInputElement>("#resume-rename-input");
 const resumeRenameCancel = requireElement<HTMLButtonElement>("#resume-rename-cancel");
@@ -507,6 +529,8 @@ let contentHits = new Map<string, SessionSearchHit>();
 let contentSearchSequence = 0;
 let renameThreadId = "";
 let deleteThreadId = "";
+let forkThreadId = "";
+let forkMessages: ServerMessage[] = [];
 let traceSpans: TraceSpan[] = [];
 let traceAnswers: Record<string, string> = {};
 let traceSelectedSpanId = "";
@@ -2577,6 +2601,9 @@ function renderResumeList(): void {
   if (deleteThreadId && selectedThread?.id !== deleteThreadId) {
     cancelResumeDelete();
   }
+  if (forkThreadId && selectedThread?.id !== forkThreadId) {
+    cancelResumeFork();
+  }
   resumeRenameButton.disabled = !selectedThread?.sessionId;
   resumePinButton.disabled = !selectedThread?.sessionId;
   resumePinButton.textContent = selectedThread?.pinned ? "UNPIN" : "PIN";
@@ -2585,6 +2612,7 @@ function renderResumeList(): void {
     ? "UNARCHIVE"
     : "ARCHIVE";
   resumeDeleteButton.disabled = !selectedThread?.sessionId;
+  resumeForkButton.disabled = !selectedThread?.sessionId;
   resumeList.innerHTML = resumeMatches
     .map((thread, index) => {
       const turns =
@@ -2922,10 +2950,138 @@ async function confirmResumeDelete(): Promise<void> {
   }
 }
 
+function cancelResumeFork(): void {
+  forkThreadId = "";
+  forkMessages = [];
+  resumeForkForm.hidden = true;
+  resumeForkSource.textContent = "";
+  resumeForkMax.textContent = "";
+  resumeForkInput.value = "1";
+  resumeForkPreview.textContent = "";
+  resumeForkButton.disabled = false;
+}
+
+function messagePreview(message: ServerMessage): string {
+  const text = message.content
+    .filter((block) => block.type === "text")
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join(" ")
+    .trim();
+  return `${message.role.toUpperCase()}: ${text || "[non-text block]"}`;
+}
+
+function updateResumeForkPreview(): void {
+  const through = Number(resumeForkInput.value);
+  const message = forkMessages[through - 1];
+  resumeForkPreview.textContent = message
+    ? `#${through} ${messagePreview(message)}`
+    : "选择的 N 超出消息范围";
+}
+
+async function startResumeFork(): Promise<void> {
+  const thread = resumeMatches[resumeSelection];
+  if (!thread?.sessionId) {
+    showToast("当前会话还没有 server id，不能 fork");
+    return;
+  }
+  resumeForkButton.disabled = true;
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}/messages`,
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const messages = (await response.json()) as ServerMessage[];
+    if (!messages.length) {
+      showToast("这个会话没有可复制的消息");
+      return;
+    }
+    forkThreadId = thread.id;
+    forkMessages = messages;
+    resumeForkSource.textContent = thread.title;
+    resumeForkInput.min = "1";
+    resumeForkInput.max = String(messages.length);
+    resumeForkInput.value = "1";
+    resumeForkMax.textContent = `OF ${messages.length} MESSAGES`;
+    resumeForkForm.hidden = false;
+    updateResumeForkPreview();
+    resumeForkInput.focus();
+    resumeForkInput.select();
+  } catch (error) {
+    showToast(
+      `读取 fork 源消息失败：${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    resumeForkButton.disabled = false;
+  }
+}
+
+async function saveResumeFork(): Promise<void> {
+  const source = state.threads.find((item) => item.id === forkThreadId);
+  if (!source?.sessionId || !forkMessages.length) {
+    cancelResumeFork();
+    return;
+  }
+  const through = Number(resumeForkInput.value);
+  if (
+    !Number.isInteger(through) ||
+    through < 1 ||
+    through > forkMessages.length
+  ) {
+    showToast(`through 要在 1..${forkMessages.length} 之间`);
+    resumeForkInput.focus();
+    return;
+  }
+  resumeForkSubmitButton.disabled = true;
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(source.sessionId)}/fork`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ through }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const result = (await response.json()) as SessionForkResponse;
+    await fetchServerSessions(false);
+    let created = state.threads.find(
+      (thread) => thread.sessionId === result.session_id,
+    );
+    if (!created) {
+      created = createThread();
+      created.sessionId = result.session_id;
+      created.title = `${source.title}（分支）`;
+      created.model = source.model;
+      created.serverTurns = forkMessages
+        .slice(0, through)
+        .filter((message) => message.role === "user").length;
+      state.threads.push(created);
+    }
+    created.messagesLoaded = false;
+    cancelResumeFork();
+    persistState();
+    switchThread(created.id);
+    showToast(`已 fork 前 ${result.copied} 条消息`);
+  } catch (error) {
+    showToast(
+      `fork 失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    resumeForkSubmitButton.disabled = false;
+  }
+}
+
 function closeResume(): void {
   resumeModal.hidden = true;
   cancelResumeRename();
   cancelResumeDelete();
+  cancelResumeFork();
 }
 
 function moveResumeSelection(delta: number): void {
@@ -3633,6 +3789,15 @@ resumeDeleteCancelButton.addEventListener("click", cancelResumeDelete);
 resumeDeleteConfirmButton.addEventListener("click", () => {
   void confirmResumeDelete();
 });
+resumeForkButton.addEventListener("click", () => {
+  void startResumeFork();
+});
+resumeForkCancelButton.addEventListener("click", cancelResumeFork);
+resumeForkInput.addEventListener("input", updateResumeForkPreview);
+resumeForkForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveResumeFork();
+});
 resumeRenameCancel.addEventListener("click", cancelResumeRename);
 resumeRenameForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -3818,6 +3983,14 @@ document.addEventListener("keydown", (event) => {
   }
   const resumeVisible = !resumeModal.hidden;
   if (resumeVisible) {
+    if (!resumeForkForm.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelResumeFork();
+        resumeSearch.focus();
+      }
+      return;
+    }
     if (!resumeRenameForm.hidden) {
       if (event.key === "Escape") {
         event.preventDefault();

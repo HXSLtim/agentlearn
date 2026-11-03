@@ -2784,6 +2784,88 @@ kbd {
   letter-spacing: 0.08em;
 }
 
+.resume-fork-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px 22px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.resume-fork-form[hidden] {
+  display: none;
+}
+
+.resume-fork-form > label {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.09em;
+}
+
+.resume-fork-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.resume-fork-form > input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--void);
+  border: 1px solid var(--line-strong);
+  outline: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.resume-fork-form > input:focus {
+  border-color: var(--green);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.resume-fork-form > p {
+  min-height: 18px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-fork-form > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.resume-fork-form button {
+  height: 28px;
+  padding: 0 10px;
+  color: var(--green);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 7px;
+}
+
+.resume-fork-form button:hover:not(:disabled),
+.resume-fork-form button:focus-visible {
+  color: var(--void);
+  background: var(--green);
+}
+
+.resume-fork-form button[type="submit"] {
+  color: var(--void);
+  background: var(--green);
+}
+
 .resume-search-field input {
   width: 100%;
   height: 34px;
@@ -3746,6 +3828,7 @@ kbd {
   .resume-actions,
   .resume-delete-confirm,
   .resume-search-field,
+  .resume-fork-form,
   .resume-rename-form,
   .resume-item {
     padding-right: 16px;
@@ -3770,7 +3853,7 @@ kbd {
 
   .resume-session-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, 1fr);
   }
 
   .resume-index-line span:last-child {

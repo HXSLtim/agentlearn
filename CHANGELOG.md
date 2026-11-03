@@ -29,6 +29,8 @@
   `archived`，默认列表移除会话；归档视图可直接续接正文，也可恢复。
 - 恢复框提供独立归档与永久删除动作：删除先展示不可恢复警告，
   二次确认后才调用 `DELETE /sessions/{id}` 并清理本地索引。
+- 恢复框支持 fork：按源会话 JSONL 消息总数选择前 N 条，
+  调用 `POST /sessions/{id}/fork` 后自动切到新分支并恢复正文。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
