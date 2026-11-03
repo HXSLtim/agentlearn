@@ -189,7 +189,10 @@ def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
                 _store,
                 session_id,
                 steering=handle,
-                approval=_approval,
+                # 无人值守没有界面消费者：全局 broker 等 300 秒只会把触发器
+                # 线程挂住。零秒 broker 让 auto 档的副作用工具立刻按超时
+                # 拒绝，tool_result 照常落盘交回模型。
+                approval=ApprovalBroker(timeout_seconds=0),
                 approval_mode="auto",
                 max_tool_rounds=UNATTENDED_MAX_TOOL_ROUNDS,
             )
