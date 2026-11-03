@@ -234,7 +234,7 @@ class MCPManager:
             with call_lock:
                 return client.call(name, arguments)
         except Exception as e:
-            return f"MCP 工具 {alias}__{name} 执行失败: {e}", True
+            return f"MCP 工具 {alias}__{name} 执行失败: {e}", True, None
 
     def health(self) -> list[dict]:
         """每个服务器的健康快照（能力面板用）。
