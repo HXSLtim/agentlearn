@@ -106,7 +106,7 @@ A/B 真机同问「写运行报告」：无技能 0/4 格式标记，有技能�
 | 会话持久化 | JSONL + SQLite（见 docs/decisions.md D2） | ✅ |
 | 配置体系 | config.ini + ${ENV}（D4） | ✅ |
 | conversation.py | TUI/desktop 共用 application 层一份会话循环（D9/D14） | ✅ |
-| TUI | 黑绿控制台：流式正文、thinking 滚动预览、按事件顺序挂载工具卡、运行账本、窄终端布局；停止、重试、历史搜索、外编辑器与复制闭环（D14/D16） | ✅ |
+| TUI | 黑绿控制台：流式正文、thinking 滚动预览、按事件顺序挂载工具卡、运行账本、窄终端布局；停止、重试、历史搜索、外编辑器、复制与 `/diff` 只读 pager 闭环（D14/D16） | ✅ |
 | trace | spans 表（D10/D11）+ TUI `/trace` 与 desktop 只读抽屉：span 树、耗时、token、工具入参/出参、回答配对 | ✅ |
 | 设置界面 | TUI / desktop 共用 `GET/PUT /settings`；只改 `[llm]`，密钥不回显，下一请求生效（D15） | ✅ |
 | 快捷命令 | TUI / desktop 输入 `/` 打开面板；模型切换与预置 prompt 均走界面层白名单（D18） | ✅ |

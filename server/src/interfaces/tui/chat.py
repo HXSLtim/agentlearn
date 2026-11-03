@@ -51,6 +51,7 @@ from application.conversation import Conversation, TurnCancelled
 from application.tools import append_memory, read_memory
 from application.session_manager import MODES as STEERING_MODES
 from application.session_manager import RunningTurn
+from application.workspace import changed_files
 from domain.message import Message as DomainMessage
 from infrastructure.config import SettingsSnapshot, SettingsValues
 from .trace import SpanDetail, answer_texts, answers_for_requests
@@ -152,6 +153,7 @@ COMMANDS = (
         "RUNTIME",
     ),
     SlashCommand("trace", "/trace", "查看当前会话的 span 轨迹", "RUNTIME"),
+    SlashCommand("diff", "/diff", "查看当前 Git 工作区差异", "RUNTIME"),
     SlashCommand("copy", "/copy", "复制最近一条完整回答", "SYSTEM"),
     SlashCommand(
         "model",
@@ -698,6 +700,178 @@ class TraceScreen(ModalScreen[None]):
             f"SPANS {len(self.spans)} · TURNS {turns} · "
             f"ERRORS {errors} · CANCELLED {cancelled} · RUNNING {running}"
         )
+
+
+class WorkspaceDiffScreen(ModalScreen[None]):
+    """当前 Git 工作区的只读 diff pager。"""
+
+    CSS = f"""
+    WorkspaceDiffScreen {{
+        align: center middle;
+        background: rgba(0,0,0,0.88);
+    }}
+
+    #diff-dialog {{
+        width: 96%;
+        height: 90%;
+        background: {INK};
+        border: thick {SIGNAL};
+        padding: 1 2;
+    }}
+
+    #diff-title {{
+        height: 2;
+        color: {SIGNAL};
+        text-style: bold;
+    }}
+
+    #diff-summary {{
+        height: 2;
+        color: {MUTED};
+    }}
+
+    #diff-scroll {{
+        height: 1fr;
+        background: {INK};
+        border: solid {LINE};
+        padding: 0 1;
+        scrollbar-size-vertical: 1;
+        scrollbar-color: {SIGNAL};
+        scrollbar-background: {INK};
+        scrollbar-corner-color: {INK};
+    }}
+
+    #diff-body {{
+        width: 1fr;
+        padding-top: 1;
+    }}
+
+    #diff-footer {{
+        height: 2;
+        padding-top: 1;
+        color: {DIM};
+    }}
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "close", show=False),
+        Binding("r", "reload", "reload", show=False),
+        Binding("up", "scroll_up", "up", show=False),
+        Binding("down", "scroll_down", "down", show=False),
+        Binding("pageup", "page_up", "page up", show=False),
+        Binding("pagedown", "page_down", "page down", show=False),
+        Binding("home", "scroll_home", "home", show=False),
+        Binding("end", "scroll_end", "end", show=False),
+    ]
+
+    def __init__(self, loader: Callable[[], dict]) -> None:
+        super().__init__()
+        self.loader = loader
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="diff-dialog"):
+            yield Static("DIFF  /  GIT WORKSPACE", id="diff-title")
+            yield Static("READING GIT STATUS…", id="diff-summary")
+            with VerticalScroll(id="diff-scroll"):
+                yield Static("READING WORKSPACE…", id="diff-body")
+            yield Static(
+                "↑↓/PAGE↑↓ SCROLL · HOME/END JUMP · R RELOAD · ESC CLOSE",
+                id="diff-footer",
+            )
+
+    def on_mount(self) -> None:
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            snapshot = self.loader()
+        except Exception as exc:
+            self.query_one("#diff-summary", Static).update(
+                f"WORKSPACE UNAVAILABLE · {exc}"
+            )
+            self.query_one("#diff-body", Static).update(
+                Text(f"WORKSPACE READ FAILED\n{exc}", style=ERROR)
+            )
+            self.query_one("#diff-scroll", VerticalScroll).focus()
+            return
+        self.query_one("#diff-summary", Static).update(self._summary(snapshot))
+        self.query_one("#diff-body", Static).update(self._diff_text(snapshot))
+        pager = self.query_one("#diff-scroll", VerticalScroll)
+        pager.scroll_home(animate=False)
+        pager.focus()
+
+    def _summary(self, snapshot: dict) -> str:
+        tracked = sum(
+            1 for file in snapshot["files"] if file["status"] != "untracked"
+        )
+        return (
+            f"ROOT {snapshot['root']} · TRACKED {tracked} · "
+            f"UNTRACKED {snapshot['untracked_count']}"
+        )
+
+    def _diff_text(self, snapshot: dict) -> Text:
+        text = Text()
+        if not snapshot["files"]:
+            text.append("没有工作区变更。\n", style=DIM)
+            return text
+        for file in snapshot["files"]:
+            status_style = ERROR if file["status"] in ("deleted", "conflicted") else TOOL
+            text.append(f"● {file['status'].upper()}  ", style=f"bold {status_style}")
+            if file["old_path"]:
+                text.append(f"{file['old_path']} → ", style=DIM)
+            text.append(f"{file['path']}\n", style=PAPER)
+            text.append(
+                f"  +{file['additions']} −{file['deletions']}"
+                + ("  BINARY" if file["binary"] else "")
+                + ("  PATCH TRUNCATED" if file["truncated"] else "")
+                + "\n",
+                style=MUTED,
+            )
+            for hunk in file["hunks"]:
+                text.append(f"{hunk['header']}\n", style=f"bold {DIM}")
+                for line in hunk["lines"]:
+                    old_line = "" if line["old_line"] is None else str(line["old_line"])
+                    new_line = "" if line["new_line"] is None else str(line["new_line"])
+                    marker = {
+                        "context": " ",
+                        "delete": "-",
+                        "add": "+",
+                        "meta": "\\",
+                    }[line["kind"]]
+                    style = MUTED
+                    if line["kind"] == "add":
+                        style = TOOL
+                    elif line["kind"] == "delete":
+                        style = ERROR
+                    text.append(f"{old_line:>5} {new_line:>5} ", style=DIM)
+                    text.append(f"{marker} {line['text']}\n", style=style)
+            text.append("\n", style=DIM)
+        return text
+
+    def action_reload(self) -> None:
+        self._load()
+        self.notify("workspace diff reloaded")
+
+    def action_scroll_up(self) -> None:
+        self.query_one("#diff-scroll", VerticalScroll).scroll_up(animate=False)
+
+    def action_scroll_down(self) -> None:
+        self.query_one("#diff-scroll", VerticalScroll).scroll_down(animate=False)
+
+    def action_page_up(self) -> None:
+        self.query_one("#diff-scroll", VerticalScroll).scroll_page_up(animate=False)
+
+    def action_page_down(self) -> None:
+        self.query_one("#diff-scroll", VerticalScroll).scroll_page_down(animate=False)
+
+    def action_scroll_home(self) -> None:
+        self.query_one("#diff-scroll", VerticalScroll).scroll_home(animate=False)
+
+    def action_scroll_end(self) -> None:
+        self.query_one("#diff-scroll", VerticalScroll).scroll_end(animate=False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ResumeScreen(ModalScreen[str | None]):
@@ -2012,7 +2186,7 @@ class AgentLearnTUI(App[str | None]):
                 )
                 yield Button("RUN  ↵", id="send")
             yield Static(
-                "/resume  SESSIONS  ·  /trace  SPANS  ·  /copy  ANSWER  ·  /  ALL COMMANDS",
+                "/resume SESSIONS · /trace SPANS · /diff WORKSPACE · /copy ANSWER · / ALL COMMANDS",
                 id="composer-help",
             )
 
@@ -2554,6 +2728,9 @@ class AgentLearnTUI(App[str | None]):
         if command.name == "trace":
             await self._command_trace()
             return
+        if command.name == "diff":
+            self._command_diff()
+            return
         if command.name == "context":
             await self._command_context()
             return
@@ -2913,6 +3090,14 @@ class AgentLearnTUI(App[str | None]):
                 store,
                 spans,
                 load,
+            ),
+            lambda _result: self.query_one("#composer", PromptComposer).focus(),
+        )
+
+    def _command_diff(self) -> None:
+        self.push_screen(
+            WorkspaceDiffScreen(
+                lambda: changed_files(include_untracked=True)
             ),
             lambda _result: self.query_one("#composer", PromptComposer).focus(),
         )

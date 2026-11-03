@@ -16,6 +16,8 @@
   只读读取工作区内容。
 - 每个文件是原生 `<details open>`：摘要行保留状态、路径与增删计数，
   点击文件头即可单独折叠 / 展开 hunk。
+- TUI 新增 `/diff` 只读 pager：命令面板可发现，支持 ↑↓/Page↑↓/Home/End
+  滚动、R 重载、ESC 关闭，与 desktop 共用同一份 workspace 事实。
 - 验收：临时 Git 仓库确认默认排除未跟踪、显式可含未跟踪，调用前后
   `.git/index` SHA256 不变；TestClient、`compileall`、`npm run build` 通过；
   380×900 CDP 截图人工检查变更记录和逐行增删，`document/body/summary/list`
