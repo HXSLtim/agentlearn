@@ -567,9 +567,12 @@ async function hydrateTurnDurations(thread: Thread): Promise<void> {
       return;
     }
     const { spans } = (await response.json()) as TraceResponse;
+    // 后端 JSON 不做类型保证：先 Number() 收敛再过滤非有限值，
+    // durationMs 一律是有限数字，后面模板插值（title/width）才可信。
     const turnDurations = spans
       .filter((span) => span.name === "turn" && span.duration_ms !== null)
-      .map((span) => span.duration_ms as number);
+      .map((span) => Number(span.duration_ms))
+      .filter((ms) => Number.isFinite(ms) && ms >= 0);
     if (!turnDurations.length) {
       return;
     }
@@ -952,7 +955,11 @@ function renderImages(images: ImageAttachment[], label: string): string {
 function assistantMaxDurationMs(): number {
   let max = 0;
   for (const message of activeThread().messages) {
-    if (message.role === "assistant" && message.durationMs) {
+    if (
+      message.role === "assistant" &&
+      typeof message.durationMs === "number" &&
+      Number.isFinite(message.durationMs)
+    ) {
       max = Math.max(max, message.durationMs);
     }
   }
