@@ -1,8 +1,8 @@
-import "@fontsource/ibm-plex-sans/latin-400.css";
-import "@fontsource/ibm-plex-sans/latin-500.css";
-import "@fontsource/ibm-plex-sans/latin-600.css";
-import "@fontsource/ibm-plex-mono/latin-400.css";
-import "@fontsource/ibm-plex-mono/latin-500.css";
+// Tauri 的 WebKit 里 -apple-system 就是 SF；浏览器里落到系统 sans。
+// 标题栏 overlay 需要给头部留出红绿灯位置。
+if ("__TAURI_INTERNALS__" in window) {
+  document.documentElement.classList.add("is-tauri");
+}
 
 import type {
   ApprovalMode,
@@ -154,6 +154,9 @@ import {
   effortLabel,
   threadTitleFor,
   renderMarkdown,
+  approvalLabel,
+  steeringLabel,
+  steeringStateLabel,
 } from "./format";
 import {
   openTrace,
@@ -296,7 +299,7 @@ function renderPendingImages(): void {
       (image, index) => `
         <figure class="composer-attachment">
           <img src="data:${image.media_type};base64,${image.data}" alt="待发送图片 ${index + 1}" />
-          <button type="button" data-remove-image="${index}">REMOVE</button>
+          <button type="button" data-remove-image="${index}">移除</button>
         </figure>
       `,
     )
@@ -650,27 +653,27 @@ function threadStatus(thread: Thread): string {
   const active = runningAssistant(thread);
   if (active) {
     if (thread.stopping) {
-      return "STOPPING";
+      return "停止中";
     }
     return assistantTools(active).some((tool) => tool.state === "waiting")
-      ? "APPROVAL"
-      : "RUNNING";
+      ? "待审批"
+      : "运行中";
   }
   const assistant = lastAssistant(thread);
   if (assistant?.stopReason === "cancelled" || thread.stopReason === "cancelled") {
-    return "CANCELLED";
+    return "已取消";
   }
   if (assistant?.error || thread.stopReason === "error") {
-    return "ERROR";
+    return "错误";
   }
-  return thread.messages.length ? "DONE" : "READY";
+  return thread.messages.length ? "完成" : "就绪";
 }
 
 function threadStatusClass(status: string): "is-ready" | "is-running" | "is-error" {
-  if (status === "RUNNING" || status === "APPROVAL" || status === "STOPPING") {
+  if (status === "运行中" || status === "待审批" || status === "停止中") {
     return "is-running";
   }
-  if (status === "ERROR") {
+  if (status === "错误") {
     return "is-error";
   }
   return "is-ready";
@@ -733,7 +736,7 @@ function renderThreadList(): void {
       const messageCount =
         thread.serverTurns ??
         thread.messages.filter((message) => message.role === "user").length;
-      const badge = thread.sessionId ? shortSession(thread.sessionId).slice(0, 4) : "NEW";
+      const badge = thread.sessionId ? shortSession(thread.sessionId).slice(0, 4) : "新";
       const status = threadStatus(thread);
       const statusClass = threadStatusClass(status);
       return `
@@ -746,7 +749,7 @@ function renderThreadList(): void {
           <span class="thread-marker ${statusClass}" aria-hidden="true"></span>
           <span class="thread-copy">
             <strong>${escapeHtml(thread.title)}</strong>
-            <small><b class="thread-state ${statusClass}">${status}</b> · ${thread.pinned ? "PIN · " : ""}${relativeTime(thread.updatedAt)} · ${messageCount} turns</small>
+            <small><b class="thread-state ${statusClass}">${status}</b> · ${thread.pinned ? "置顶 · " : ""}${relativeTime(thread.updatedAt)} · ${messageCount} turns</small>
           </span>
           <span class="thread-badge">${badge}</span>
         </button>
@@ -759,7 +762,7 @@ function emptyStateMarkup(): string {
   return `
     <section class="empty-state">
       <header class="empty-boot">
-        <span class="eyebrow">SESSION 00 / LOCAL RUNTIME</span>
+        <span class="eyebrow">新会话 · 本地运行时</span>
         <span class="empty-signal"><i></i> READY</span>
       </header>
       <div class="empty-console" aria-label="Agent 已就绪">
@@ -791,9 +794,9 @@ function emptyStateMarkup(): string {
         </button>
       </div>
       <div class="empty-footnote">
-        <span>ENTER / RUN</span>
-        <span>SHIFT+ENTER / NEWLINE</span>
-        <span>JSONL + SQLITE / LOCAL</span>
+        <span>Enter 发送</span>
+        <span>Shift+Enter 换行</span>
+        <span>本地 JSONL + SQLite</span>
       </div>
     </section>
   `;
@@ -805,13 +808,13 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
   const toolImage = tool.image
     ? renderImages([tool.image], "工具结果图片")
     : tool.hasImage
-      ? `<div class="tool-image-pending">IMAGE ATTACHED · RELOADING FROM TRANSCRIPT</div>`
+      ? `<div class="tool-image-pending">图片已附 · 从 transcript 重载中</div>`
       : "";
   const output =
     tool.state === "waiting"
       ? `
         <div class="tool-approval-gate">
-          <span>HOST EXECUTION REQUIRES APPROVAL</span>
+          <span>宿主机执行需要审批</span>
           <input
             type="text"
             class="approval-reason"
@@ -820,9 +823,9 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
             aria-label="拒绝理由（可选）"
           />
           <div>
-            <button type="button" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="false" data-approval-scope="once">DENY</button>
-            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true" data-approval-scope="once">ACCEPT ONCE</button>
-            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true" data-approval-scope="session">ACCEPT SESSION</button>
+            <button type="button" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="false" data-approval-scope="once">拒绝</button>
+            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true" data-approval-scope="once">本次允许</button>
+            <button type="button" class="approve" data-approval-id="${escapeHtml(tool.approvalId ?? "")}" data-approved="true" data-approval-scope="session">本会话允许</button>
           </div>
         </div>
       `
@@ -833,10 +836,10 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
     tool.elapsedMs === undefined ? "" : `<span>${tool.elapsedMs}ms</span>`;
   const label =
     tool.state === "waiting"
-      ? "TOOL APPROVAL"
+      ? "工具审批"
       : tool.isError
-        ? "TOOL ERROR"
-        : "TOOL CALL";
+        ? "工具错误"
+        : "工具调用";
   const stateClass =
     tool.state === "waiting"
       ? "is-waiting"
@@ -858,21 +861,21 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
 
 function renderPlan(plan: PlanEvent): string {
   const actions = plan.discarded
-    ? `<span class="plan-state">PLAN DISCARDED</span>`
+    ? `<span class="plan-state">计划已放弃</span>`
     : plan.executed
-      ? `<span class="plan-state">PLAN EXECUTION STARTED</span>`
+      ? `<span class="plan-state">计划已开始执行</span>`
       : plan.confirmed
-        ? `<span class="plan-state">PLAN CONFIRMED</span>`
+        ? `<span class="plan-state">计划已确认</span>`
       : `
         <div class="plan-actions">
-          <button type="button" data-plan-id="${escapeHtml(plan.id)}" data-plan-action="discard">DISCARD PLAN</button>
-          <button type="button" class="confirm" data-plan-id="${escapeHtml(plan.id)}" data-plan-action="confirm">CONFIRM &amp; EXECUTE</button>
+          <button type="button" data-plan-id="${escapeHtml(plan.id)}" data-plan-action="discard">放弃计划</button>
+          <button type="button" class="confirm" data-plan-id="${escapeHtml(plan.id)}" data-plan-action="confirm">确认并执行</button>
         </div>
       `;
   return `
     <section class="plan-card" aria-label="待确认计划">
       <header>
-        <span>PLAN MODE / HUMAN CONFIRMATION</span>
+        <span>计划模式 · 人工确认</span>
         <code>${plan.id.slice(0, 8)}</code>
       </header>
       <pre>${escapeHtml(plan.text)}</pre>
@@ -938,7 +941,7 @@ function renderAssistant(message: UiMessage): string {
         return `
           <details class="reasoning-block"${transcriptMode === "thinking" || transcriptMode === "verbose" ? " open" : ""}>
             <summary>
-              <span>REASONING</span>
+              <span>思考</span>
               <span>${part.text.length.toLocaleString()} chars</span>
             </summary>
             <pre>${escapeHtml(part.text)}</pre>
@@ -958,10 +961,10 @@ function renderAssistant(message: UiMessage): string {
           <span></span><span></span><span></span>
           <em>${
             message.queued
-              ? "QUEUED · WAITING FOR TURN SLOT"
+              ? "排队 · 等待轮次槽位"
               : message.thinking
-                ? "FORMING RESPONSE"
-                : "WAITING FOR FIRST TOKEN"
+                ? "正在组织回复"
+                : "等待首个 token"
           }</em>
         </div>
       `
@@ -970,22 +973,22 @@ function renderAssistant(message: UiMessage): string {
     ? `
       <div class="message-error">
         <div>
-          <strong>RUN ERROR</strong>
+          <strong>运行错误</strong>
           <p>${escapeHtml(message.error)}</p>
         </div>
-        <button class="retry-run" type="button" data-retry-message-id="${escapeHtml(message.id)}">RETRY</button>
+        <button class="retry-run" type="button" data-retry-message-id="${escapeHtml(message.id)}">重试</button>
       </div>
     `
     : "";
   const stop =
     message.stopReason && !message.streaming
-      ? `<span>STOP ${escapeHtml(message.stopReason)}</span>`
+      ? `<span>结束 · ${escapeHtml(message.stopReason)}</span>`
       : "";
   return `
     <article class="message assistant-message" data-message-id="${escapeHtml(message.id)}">
       <header class="message-heading">
         <span class="message-avatar">A</span>
-        <span>AGENT</span>
+        <span>智能体</span>
         <span class="message-rule"></span>
         <time>${new Date(message.createdAt).toLocaleTimeString("zh-CN", {
           hour: "2-digit",
@@ -1005,12 +1008,12 @@ function renderAssistant(message: UiMessage): string {
 function renderUser(message: UiMessage): string {
   const steering =
     message.steeringState
-      ? `<span class="steering-state is-${message.steeringState}">${message.steeringState.toUpperCase()}</span>`
+      ? `<span class="steering-state is-${message.steeringState}">${steeringStateLabel(message.steeringState)}</span>`
       : "";
   return `
     <article class="message user-message message-appear" data-message-id="${escapeHtml(message.id)}">
       <header class="user-heading">
-        <span>YOU ${steering}</span>
+        <span>你 · ${steering}</span>
         <time>${new Date(message.createdAt).toLocaleTimeString("zh-CN", {
           hour: "2-digit",
           minute: "2-digit",
@@ -1031,7 +1034,7 @@ function renderCommandReceipt(): string {
     <section class="command-receipt ${commandReceipt.error ? "is-error" : ""}">
       <header>
         <span>COMMAND / ${escapeHtml(commandReceipt.title)}</span>
-        <span>LOCAL ONLY</span>
+        <span>仅本地</span>
       </header>
       <pre>${escapeHtml(commandReceipt.body)}</pre>
     </section>
@@ -1159,8 +1162,8 @@ function renderHeader(): void {
   const thread = activeThread();
   threadTitle.textContent = thread.title;
   threadKicker.textContent = thread.sessionId
-    ? `SESSION ${shortSession(thread.sessionId)}`
-    : "NEW SESSION";
+    ? `会话 ${shortSession(thread.sessionId)}`
+    : "新会话";
   traceToggle.disabled = !thread.sessionId;
   traceToggle.title = thread.sessionId
     ? "打开当前会话执行轨迹（/trace）"
@@ -1175,35 +1178,35 @@ function renderRunLedger(): void {
   const waitingApproval = tools.some((tool) => tool.state === "waiting");
   const status = active
     ? thread.stopping
-      ? "STOPPING"
+      ? "停止中"
       : waitingApproval
-      ? "APPROVAL"
-      : "STREAMING"
-    : threadStatus(thread) === "CANCELLED"
-      ? "CANCELLED"
+      ? "待审批"
+      : "回复中"
+    : threadStatus(thread) === "已取消"
+      ? "已取消"
       : assistant?.error
-        ? "ERROR"
+        ? "错误"
         : thread.messages.length
-          ? "COMPLETE"
-          : "READY";
+          ? "完成"
+          : "就绪";
   const statusClass =
-    status === "STREAMING" || status === "APPROVAL" || status === "STOPPING"
+    status === "回复中" || status === "待审批" || status === "停止中"
       ? "is-running"
-      : status === "ERROR"
+      : status === "错误"
         ? "is-error"
         : "is-ready";
   const statusCopy =
-    status === "STOPPING"
+    status === "停止中"
       ? "停止请求已发送，等待下一个检查点收线"
-      : status === "APPROVAL"
+      : status === "待审批"
       ? "工具等待人工接受或拒绝"
-      : status === "STREAMING"
-        ? `${thread.steeringMode.toUpperCase()} steering · 模型请求或工具仍在执行`
-      : status === "ERROR"
+      : status === "回复中"
+        ? `${steeringLabel(thread.steeringMode)} steering · 模型请求或工具仍在执行`
+      : status === "错误"
         ? "上一轮没有正常结束"
-        : status === "CANCELLED"
+        : status === "已取消"
           ? "上一轮在检查点被取消"
-        : status === "COMPLETE"
+        : status === "完成"
           ? "最近一轮已经结束"
           : "等待第一条消息";
   runState.textContent = status;
@@ -1222,8 +1225,8 @@ function renderRunLedger(): void {
   runCacheHit.textContent = `${usage?.cache_hit_ratio ?? 0}‰`;
   runCost.textContent = formatCost(usage);
   runEffort.textContent = effortLabel(currentEffort);
-  runApproval.textContent = thread.approvalMode.toUpperCase();
-  runSteering.textContent = thread.steeringMode.toUpperCase();
+  runApproval.textContent = approvalLabel(thread.approvalMode);
+  runSteering.textContent = steeringLabel(thread.steeringMode);
   runStop.textContent = thread.stopReason || "—";
   if (active && thread.runStartedAt) {
     runElapsed.textContent = `${Date.now() - thread.runStartedAt}ms`;
@@ -1240,8 +1243,8 @@ function renderRunLedger(): void {
   if (thread.contextWarning) {
     activity.push({
       key: "context-warning",
-      tag: "WARN",
-      title: "CONTEXT NEAR BUDGET",
+      tag: "警告",
+      title: "上下文接近预算",
       detail: `${thread.contextWarning.estimate_tokens.toLocaleString()} / ${thread.contextWarning.budget_tokens.toLocaleString()} tokens`,
       status: "error",
     });
@@ -1249,7 +1252,7 @@ function renderRunLedger(): void {
   if (assistant?.thinking) {
     activity.push({
       key: "reasoning",
-      tag: "THINK",
+      tag: "思考",
       title: "Reasoning captured",
       detail: `${assistant.thinking.length.toLocaleString()} chars`,
       status: "done",
@@ -1261,10 +1264,10 @@ function renderRunLedger(): void {
       tag: tool.isError
         ? "ERR"
         : tool.state === "waiting"
-          ? "WAIT"
+          ? "等待"
           : tool.state === "running"
-            ? "RUN"
-            : "TOOL",
+            ? "发送"
+            : "工具",
       title: tool.name,
       detail:
         tool.state === "waiting"
@@ -1296,7 +1299,7 @@ function renderRunLedger(): void {
 
 function formatCost(usage: TurnUsage | undefined): string {
   if (!currentPricing) {
-    return "NOT CALCULATED";
+    return "暂无价目";
   }
   const amount =
     ((usage?.input_tokens ?? 0) * Number(currentPricing.input_per_million) +
@@ -1321,17 +1324,17 @@ function renderEverything(forceBottom = false): void {
   renderConversation(forceBottom);
   renderRunLedger();
   sendButton.disabled = stopping;
-  sendLabel.textContent = running ? "STEER" : "RUN";
+  sendLabel.textContent = running ? "插话" : "发送";
   stopButton.hidden = !running;
   stopButton.disabled = stopping;
-  stopButton.textContent = stopping ? "STOPPING" : "STOP";
+  stopButton.textContent = stopping ? "停止中" : "停止";
   composerStatus.textContent = stopping
-    ? "STOPPING · WAITING FOR CHECKPOINT"
+    ? "停止中 · 等待检查点"
     : running
-      ? `${thread.steeringMode.toUpperCase()} · ENTER TO STEER · ALT+S SWITCH`
-      : "ENTER TO SEND · SHIFT+ENTER FOR NEWLINE";
+      ? `${steeringLabel(thread.steeringMode)} · Enter 插话 · Alt+S 切换`
+      : "Enter 发送 · Shift+Enter 换行";
   promptInput.placeholder = running
-    ? `当前轮运行中 · ${thread.steeringMode.toUpperCase()} steering`
+    ? `当前轮运行中 · ${steeringLabel(thread.steeringMode)} steering`
     : "输入任务或命令…";
 }
 
@@ -1637,8 +1640,8 @@ function renderModelOptions(models: string[], selectedModel: string): void {
   settingsModel.value = selectedModel;
   currentModelOptions = options;
   settingsModelCount.textContent = models.length
-    ? `${models.length} MODELS`
-    : "NO MODELS RETURNED";
+    ? `${models.length} 个模型`
+    : "没有返回模型";
 }
 
 function applySettings(snapshot: SettingsSnapshot): void {
@@ -1662,7 +1665,7 @@ async function loadModelOptions(
   loadedLabel = "配置已读取",
 ): Promise<void> {
   settingsModel.disabled = true;
-  settingsModelCount.textContent = "READING MODELS…";
+  settingsModelCount.textContent = "正在读取模型列表…";
   renderModelOptions([selectedModel], selectedModel);
   try {
     const response = await fetch(`${API_BASE}/models`);
@@ -1679,7 +1682,7 @@ async function loadModelOptions(
     const message =
       error instanceof Error ? error.message : String(error);
     renderModelOptions([selectedModel], selectedModel);
-    settingsModelCount.textContent = "MODEL LIST UNAVAILABLE";
+    settingsModelCount.textContent = "模型列表不可用";
     setSettingsStatus(`${loadedLabel}；模型列表不可用：${message}`, "error");
   } finally {
     settingsModel.disabled = false;
@@ -2004,7 +2007,7 @@ async function submitSteering(
   }
   schedulePersist();
   showToast(
-    `${thread.steeringMode.toUpperCase()} steering 已发送 · ${
+    `${steeringLabel(thread.steeringMode)} steering 已发送 · ${
       thread.steeringMode === "cooperative"
         ? "下一次请求前并入"
         : thread.steeringMode === "preemptive"
@@ -2276,11 +2279,11 @@ function renderResumeList(): void {
   }
   resumeRenameButton.disabled = !selectedThread?.sessionId;
   resumePinButton.disabled = !selectedThread?.sessionId;
-  resumePinButton.textContent = selectedThread?.pinned ? "UNPIN" : "PIN";
+  resumePinButton.textContent = selectedThread?.pinned ? "取消置顶" : "置顶";
   resumeArchiveButton.disabled = !selectedThread?.sessionId;
   resumeArchiveButton.textContent = selectedThread?.archived
-    ? "UNARCHIVE"
-    : "ARCHIVE";
+    ? "取消归档"
+    : "归档";
   resumeDeleteButton.disabled = !selectedThread?.sessionId;
   resumeForkButton.disabled = !selectedThread?.sessionId;
   resumeList.innerHTML = resumeMatches
@@ -2299,12 +2302,12 @@ function renderResumeList(): void {
         >
           <span class="resume-item-time">${relativeTime(thread.updatedAt)}</span>
           <span class="resume-item-id">${escapeHtml(
-            thread.sessionId ? shortSession(thread.sessionId) : "PENDING",
+            thread.sessionId ? shortSession(thread.sessionId) : "待定",
           )}</span>
           <span class="resume-item-turns">${turns} TURNS</span>
-          ${current ? '<span class="resume-current">CURRENT</span>' : ""}
+          ${current ? '<span class="resume-current">当前</span>' : ""}
           <strong>${escapeHtml(thread.title)}</strong>
-          <small>${thread.pinned ? "PIN · " : ""}${escapeHtml(thread.model || "model unknown")} · ${escapeHtml(
+          <small>${thread.pinned ? "置顶 · " : ""}${escapeHtml(thread.model || "model unknown")} · ${escapeHtml(
             thread.stopReason || "no completed run",
           )}</small>
           ${
@@ -2637,7 +2640,7 @@ function messagePreview(message: ServerMessage): string {
     .map((block) => (block.type === "text" ? block.text : ""))
     .join(" ")
     .trim();
-  return `${message.role.toUpperCase()}: ${text || "[non-text block]"}`;
+  return `${message.role === "user" ? "你" : "智能体"}: ${text || "[无文本块]"}`;
 }
 
 function updateResumeForkPreview(): void {
@@ -2802,14 +2805,14 @@ function closeCommandPalette(): void {
   paletteMode = "command";
   fileMatches = [];
   fileSelection = 0;
-  commandPaletteTitle.textContent = "COMMAND INDEX";
-  commandPaletteEnterAction.textContent = "ENTER RUN";
+  commandPaletteTitle.textContent = "命令索引";
+  commandPaletteEnterAction.textContent = "Enter 执行";
   commandPalette.ariaLabel = "命令面板";
 }
 
 function renderCommandPalette(): void {
-  commandPaletteTitle.textContent = "COMMAND INDEX";
-  commandPaletteEnterAction.textContent = "ENTER RUN";
+  commandPaletteTitle.textContent = "命令索引";
+  commandPaletteEnterAction.textContent = "Enter 执行";
   commandPalette.ariaLabel = "命令面板";
   let group = "";
   commandList.innerHTML = commandMatches
@@ -2853,8 +2856,8 @@ function activeFileToken(
 }
 
 function renderFilePalette(): void {
-  commandPaletteTitle.textContent = "FILE PATHS";
-  commandPaletteEnterAction.textContent = "ENTER COMPLETE";
+  commandPaletteTitle.textContent = "文件路径";
+  commandPaletteEnterAction.textContent = "Enter 补全";
   commandPalette.ariaLabel = "文件路径补全";
   commandList.innerHTML = fileMatches.length
     ? fileMatches
@@ -2868,12 +2871,12 @@ function renderFilePalette(): void {
             data-file-index="${index}"
           >
             <code>${escapeHtml(path)}</code>
-            <span>FILE PATH</span>
+            <span>文件路径</span>
           </button>
         `,
         )
         .join("")
-    : `<div class="command-group">NO MATCHING PATH</div>`;
+    : `<div class="command-group">没有匹配路径</div>`;
 }
 
 function scheduleFilePalette(token: { query: string; tokenStart: number }): void {
@@ -2882,7 +2885,7 @@ function scheduleFilePalette(token: { query: string; tokenStart: number }): void
   fileMatches = [];
   fileSelection = 0;
   renderFilePalette();
-  commandList.innerHTML = `<div class="command-group">READING PATH NAMES…</div>`;
+  commandList.innerHTML = `<div class="command-group">正在读取路径…</div>`;
   commandPalette.hidden = false;
   if (fileCompletionTimer !== undefined) {
     window.clearTimeout(fileCompletionTimer);
@@ -2926,7 +2929,7 @@ async function loadFilePalette(
     }
     fileMatches = [];
     renderFilePalette();
-    commandList.innerHTML = `<div class="command-group">PATH COMPLETION UNAVAILABLE</div>`;
+    commandList.innerHTML = `<div class="command-group">路径补全不可用</div>`;
   }
 }
 
@@ -3283,7 +3286,7 @@ function syncRuntimeApprovalMode(thread: Thread, mode: ApprovalMode): void {
       showToast(
         `实时切换执行等级失败：${
           error instanceof Error ? error.message : String(error)
-        }；下一轮仍使用 ${mode.toUpperCase()}`,
+        }；下一轮仍使用 ${approvalLabel(mode)}`,
       );
     }
   });
@@ -3304,12 +3307,12 @@ function setApprovalMode(mode: ApprovalMode): void {
   renderThreadList();
   renderRunLedger();
   const descriptions: Record<ApprovalMode, string> = {
-    approve: "每次工具调用都要 Accept",
+    approve: "每次工具调用都要人工接受",
     auto: "只读工具自动放行，bash 需确认",
     yolo: "全部工具直接执行",
   };
   showToast(
-    `执行等级：${thread.approvalMode.toUpperCase()} · ${
+    `执行等级：${approvalLabel(thread.approvalMode)} · ${
       descriptions[thread.approvalMode]
     }${isThreadRunning(thread) ? " · 后续工具立即生效" : " · 下一轮生效"}`,
   );
@@ -3341,7 +3344,7 @@ async function showCapabilities(): Promise<void> {
       `EFFORT     ${capabilities.runtime.effort || "omit"}`,
       `TRIGGERS   ${capabilities.runtime.triggers}`,
       "",
-      "TOOLS",
+      "工具",
       ...(sourceLines.length ? sourceLines : ["none"]),
       "",
       "MCP",
@@ -3357,14 +3360,14 @@ async function showCapabilities(): Promise<void> {
     ].join("\n");
     commandReceipt = {
       threadId: thread.id,
-      title: "CAPABILITIES",
+      title: "能力",
       body,
       error: false,
     };
   } catch (error) {
     commandReceipt = {
       threadId: thread.id,
-      title: "CAPABILITIES",
+      title: "能力",
       body: error instanceof Error ? error.message : String(error),
       error: true,
     };
@@ -3393,7 +3396,7 @@ function setTranscriptMode(mode: TranscriptMode): void {
     thinking: "在 normal 基础上显示思考块；工具仍只保留审批。",
     verbose: "显示思考块、工具入参和工具出参。",
   };
-  showCommandResult("TRANSCRIPT", `${mode.toUpperCase()}\n${descriptions[mode]}`);
+  showCommandResult("转录", `${mode}\n${descriptions[mode]}`);
 }
 
 function setSteeringMode(mode: SteeringMode): void {
@@ -3441,7 +3444,7 @@ async function runMemoryCommand(argument: string): Promise<void> {
       }
       const memory = (await response.json()) as { text: string };
       showCommandResult(
-        "MEMORY",
+        "记忆",
         memory.text.trim() || "（记忆还是空的。/memory <内容> 记第一条。）",
       );
       return;
@@ -3456,7 +3459,7 @@ async function runMemoryCommand(argument: string): Promise<void> {
     }
     const result = (await response.json()) as { line: string };
     showToast("已记下，下一圈请求生效");
-    showCommandResult("MEMORY", `已记下（下一圈请求生效）：\n${result.line}`);
+    showCommandResult("记忆", `已记下（下一圈请求生效）：\n${result.line}`);
   } catch (error) {
     showToast(error instanceof Error ? error.message : String(error));
   }
@@ -3486,7 +3489,7 @@ async function showStatus(): Promise<void> {
   const tools = assistantTools(assistant);
   const stateLabel = threadStatus(thread);
   showCommandResult(
-    "STATUS",
+    "状态",
     [
       `session   ${thread.sessionId || "pending"}`,
       `model     ${model}`,
@@ -3536,7 +3539,7 @@ async function copyLatestAnswer(): Promise<void> {
 async function exportCurrentSession(): Promise<void> {
   const thread = activeThread();
   if (!thread.sessionId) {
-    showCommandResult("EXPORT", "当前会话还没有落盘，不能导出。", true);
+    showCommandResult("导出", "当前会话还没有落盘，不能导出。", true);
     return;
   }
   try {
@@ -3561,12 +3564,12 @@ async function exportCurrentSession(): Promise<void> {
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     showCommandResult(
-      "EXPORT",
-      `SESSION ${shortSession(thread.sessionId)}\nMarkdown 下载已开始：${filename}`,
+      "导出",
+      `会话 ${shortSession(thread.sessionId)}\nMarkdown 下载已开始：${filename}`,
     );
   } catch (error) {
     showCommandResult(
-      "EXPORT",
+      "导出",
       error instanceof Error ? error.message : String(error),
       true,
     );
@@ -3717,7 +3720,7 @@ async function runSlashCommand(
     const mode = argument.toLowerCase() as TranscriptMode;
     if (!TRANSCRIPT_MODES.includes(mode)) {
       showCommandResult(
-        "TRANSCRIPT",
+        "转录",
         `未知档位：${argument}。可用：normal / thinking / verbose。`,
         true,
       );

@@ -15,7 +15,37 @@ export function escapeHtml(value: string): string {
 }
 
 export function shortSession(sessionId: string): string {
-  return sessionId ? sessionId.slice(0, 8) : "PENDING";
+  return sessionId ? sessionId.slice(0, 8) : "待定";
+}
+
+// 枚举值落屏前的中文名；没命中的原样大写兜底（新枚举值不致渲染成小写英文）。
+const APPROVAL_LABELS: Record<string, string> = {
+  approve: "需审批",
+  auto: "自动",
+  yolo: "免审批",
+};
+const STEERING_LABELS: Record<string, string> = {
+  queue: "队列",
+  cooperative: "协作",
+  preemptive: "抢占",
+};
+const STEERING_STATE_LABELS: Record<string, string> = {
+  queued: "已排队",
+  acknowledged: "已确认",
+  delivered: "已送达",
+  failed: "未送达",
+};
+
+export function approvalLabel(mode: string): string {
+  return APPROVAL_LABELS[mode] ?? mode.toUpperCase();
+}
+
+export function steeringLabel(mode: string): string {
+  return STEERING_LABELS[mode] ?? mode.toUpperCase();
+}
+
+export function steeringStateLabel(state: string): string {
+  return STEERING_STATE_LABELS[state] ?? state.toUpperCase();
 }
 
 export function effortLabel(effort: SettingsSnapshot["effort"]): string {

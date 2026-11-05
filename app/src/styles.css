@@ -1,29 +1,58 @@
 :root {
-  color-scheme: dark;
-  color: #e2eadb;
-  background: #050705;
-  font-family: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--void);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --void: #050705;
-  --black: #080b08;
-  --panel: #0b0f0b;
-  --panel-raised: #101710;
-  --line: #1c281a;
-  --line-strong: #34472d;
-  --text: #e2eadb;
-  --text-soft: #c3cebc;
-  --muted: #87947f;
-  --dim: #68765f;
-  --green: #b8ff4a;
-  --green-hot: #d5ff8b;
-  --green-dim: #71994e;
-  --red: #ff604d;
-  --red-soft: #26100d;
-  --amber: #ffc857;
-  --mono: "IBM Plex Mono", "SFMono-Regular", monospace;
-  --sans: "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* Apple 浅色（默认跟随系统）：灰底窗口、白卡片、发丝分隔线、系统蓝 */
+  --void: #f5f5f7;
+  --black: #ffffff;
+  --panel: #ffffff;
+  --panel-raised: #f2f2f7;
+  --line: rgba(60, 60, 67, 0.18);
+  --line-strong: rgba(60, 60, 67, 0.32);
+  --text: #1d1d1f;
+  --text-soft: #515154;
+  --muted: #6e6e73;
+  --dim: #8e8e93;
+  --accent: #007aff;
+  --accent-strong: #0062d6;
+  --accent-dim: #5e97d8;
+  --accent-soft: rgba(0, 122, 255, 0.12);
+  --red: #ff3b30;
+  --red-soft: rgba(255, 59, 48, 0.12);
+  --amber: #ff9500;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Apple 深色：灰阶画布、悬浮层抬升、同套语义 */
+    --void: #1c1c1e;
+    --black: #161618;
+    --panel: #242426;
+    --panel-raised: #2c2c2e;
+    --line: #3a3a3c;
+    --line-strong: #48484a;
+    --text: #f5f5f7;
+    --text-soft: #c7c7cc;
+    --muted: #98989d;
+    --dim: #6e6e73;
+    --accent: #0a84ff;
+    --accent-strong: #409cff;
+    --accent-dim: #3d70ad;
+    --accent-soft: rgba(10, 132, 255, 0.18);
+    --red: #ff453a;
+    --red-soft: rgba(255, 69, 58, 0.16);
+    --amber: #ff9f0a;
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.45);
+  }
 }
 
 * {
@@ -85,7 +114,7 @@ input:focus-visible,
 select:focus-visible,
 a:focus-visible,
 summary:focus-visible {
-  outline: 1px solid var(--green);
+  outline: 1px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -100,7 +129,7 @@ svg {
 
 ::selection {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .sr-only {
@@ -176,7 +205,7 @@ svg {
   height: 28px;
   place-items: center;
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .wordmark-mark svg {
@@ -211,7 +240,7 @@ svg {
 
 .icon-button:hover,
 .icon-button:focus-visible {
-  color: var(--green);
+  color: var(--accent);
   background: var(--panel);
   border-color: var(--line-strong);
 }
@@ -258,12 +287,12 @@ svg {
 
 .new-thread-button:hover {
   color: var(--void);
-  background: var(--green);
-  border-color: var(--green);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .new-thread-plus {
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 18px;
   line-height: 1;
@@ -348,7 +377,7 @@ kbd {
 .thread-item.is-active {
   color: var(--text);
   background: var(--panel-raised);
-  border-left-color: var(--green);
+  border-left-color: var(--accent);
 }
 
 .thread-marker {
@@ -359,7 +388,7 @@ kbd {
 }
 
 .thread-item.is-active .thread-marker {
-  background: var(--green);
+  background: var(--accent);
   box-shadow: 0 0 10px rgba(184, 255, 74, 0.5);
 }
 
@@ -399,7 +428,7 @@ kbd {
 }
 
 .thread-state {
-  color: var(--green);
+  color: var(--accent);
   font-size: 7px;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -431,7 +460,7 @@ kbd {
 }
 
 .thread-item.is-active .thread-badge {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .rail-footer {
@@ -470,7 +499,7 @@ kbd {
 }
 
 .status-light.is-ready {
-  background: var(--green);
+  background: var(--accent);
 }
 
 .status-light.is-running {
@@ -515,7 +544,8 @@ kbd {
   align-items: center;
   gap: 18px;
   padding: 0 28px;
-  background: rgba(5, 7, 5, 0.97);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  backdrop-filter: saturate(160%) blur(24px);
   border-bottom: 1px solid var(--line-strong);
 }
 
@@ -535,7 +565,7 @@ kbd {
 }
 
 .stage-heading .eyebrow {
-  color: var(--green-dim);
+  color: var(--accent-dim);
 }
 
 .stage-heading h1 {
@@ -564,7 +594,7 @@ kbd {
   align-items: center;
   gap: 7px;
   padding: 0 9px;
-  color: var(--green);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--line-strong);
   border-radius: 0;
@@ -608,14 +638,14 @@ kbd {
 }
 
 .empty-boot .eyebrow {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .empty-signal {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 8px;
   letter-spacing: 0.1em;
@@ -624,7 +654,7 @@ kbd {
 .empty-signal i {
   width: 6px;
   height: 6px;
-  background: var(--green);
+  background: var(--accent);
   box-shadow: 0 0 12px rgba(184, 255, 74, 0.55);
 }
 
@@ -639,13 +669,13 @@ kbd {
   color: var(--dim);
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
   font-family: var(--mono);
   font-size: 10px;
 }
 
 .empty-prefix {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .empty-path {
@@ -653,7 +683,7 @@ kbd {
 }
 
 .empty-caret {
-  color: var(--green);
+  color: var(--accent);
   font-size: 15px;
   font-weight: 500;
 }
@@ -665,7 +695,7 @@ kbd {
 }
 
 .empty-cursor {
-  color: var(--green);
+  color: var(--accent);
   font-size: 18px;
   animation: cursor-blink 1s steps(1, end) infinite;
 }
@@ -706,11 +736,11 @@ kbd {
 .starter-card:hover,
 .starter-card:focus-visible {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .starter-index {
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 9px;
 }
@@ -766,7 +796,7 @@ kbd {
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
   box-shadow: none;
 }
 
@@ -813,7 +843,7 @@ kbd {
 }
 
 .steering-state.is-delivered {
-  background: var(--green);
+  background: var(--accent);
 }
 
 .steering-state.is-failed {
@@ -846,7 +876,7 @@ kbd {
   height: 21px;
   place-items: center;
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 500;
@@ -925,7 +955,7 @@ kbd {
 }
 
 .markdown a {
-  color: var(--green);
+  color: var(--accent);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
@@ -941,19 +971,19 @@ kbd {
 }
 
 .markdown li::marker {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .markdown blockquote {
   margin: 17px 0;
   padding: 7px 0 7px 15px;
   color: var(--muted);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
 }
 
 .markdown code {
   padding: 2px 5px;
-  color: var(--green-hot);
+  color: var(--accent-strong);
   background: var(--panel-raised);
   border: 1px solid var(--line);
   border-radius: 0;
@@ -970,7 +1000,7 @@ kbd {
   color: var(--text-soft);
   background: var(--black);
   border: 1px solid var(--line);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
   border-radius: 0;
   font-family: var(--mono);
   font-size: 11px;
@@ -1036,7 +1066,7 @@ kbd {
 
 .reasoning-block summary::before {
   content: "[+]";
-  color: var(--green);
+  color: var(--accent);
 }
 
 .reasoning-block[open] summary::before {
@@ -1126,7 +1156,7 @@ kbd {
   color: var(--text-soft);
   background: var(--black);
   border: 1px solid var(--line-strong);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
   box-shadow: none;
 }
 
@@ -1139,7 +1169,7 @@ kbd {
 }
 
 .tool-event.is-waiting {
-  border-left-color: var(--green);
+  border-left-color: var(--accent);
 }
 
 .tool-event header {
@@ -1161,7 +1191,7 @@ kbd {
 }
 
 .tool-label {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .tool-event.is-error .tool-label {
@@ -1173,7 +1203,7 @@ kbd {
 }
 
 .tool-event.is-waiting .tool-label {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .tool-event code {
@@ -1226,7 +1256,7 @@ kbd {
   align-items: center;
   gap: 8px 12px;
   padding: 12px;
-  color: var(--green);
+  color: var(--accent);
   background: var(--panel);
   border-top: 1px solid var(--line);
   font-family: var(--mono);
@@ -1279,13 +1309,13 @@ kbd {
 
 .tool-approval-gate button.approve {
   color: var(--void);
-  background: var(--green);
-  border-color: var(--green);
+  background: var(--accent);
+  border-color: var(--accent);
   font-weight: 500;
 }
 
 .tool-approval-gate button.approve:hover {
-  color: var(--green);
+  color: var(--accent);
   background: var(--void);
 }
 
@@ -1297,9 +1327,9 @@ kbd {
 .plan-card {
   margin: 8px 0;
   padding: 12px;
-  color: var(--green);
+  color: var(--accent);
   background: var(--panel);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
 }
 
 .plan-card header {
@@ -1347,13 +1377,13 @@ kbd {
 
 .plan-actions button.confirm {
   color: var(--void);
-  background: var(--green);
-  border-color: var(--green);
+  background: var(--accent);
+  border-color: var(--accent);
   font-weight: 500;
 }
 
 .plan-actions button.confirm:hover {
-  color: var(--green);
+  color: var(--accent);
   background: var(--void);
 }
 
@@ -1374,7 +1404,7 @@ kbd {
   padding: 11px 12px;
   color: var(--red);
   background: var(--red-soft);
-  border: 1px solid #54251f;
+  border: 1px solid rgba(255, 59, 48, 0.45);
   border-left: 3px solid var(--red);
 }
 
@@ -1386,7 +1416,7 @@ kbd {
 
 .message-error p {
   margin: 6px 0 0;
-  color: #ffb4aa;
+  color: var(--red);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -1417,12 +1447,12 @@ kbd {
   color: var(--muted);
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
   animation: message-enter 160ms steps(4, end) both;
 }
 
 .command-receipt.is-error {
-  border-color: #54251f;
+  border-color: rgba(255, 59, 48, 0.45);
   border-left-color: var(--red);
 }
 
@@ -1430,7 +1460,7 @@ kbd {
   display: flex;
   justify-content: space-between;
   gap: 18px;
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 8px;
   letter-spacing: 0.08em;
@@ -1469,7 +1499,7 @@ kbd {
 .thinking-line > span {
   width: 4px;
   height: 4px;
-  background: var(--green);
+  background: var(--accent);
   border-radius: 0;
   animation: thinking-dot 900ms steps(2, end) infinite;
 }
@@ -1508,7 +1538,7 @@ kbd {
   color: var(--muted);
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
 }
 
 .command-palette[hidden] {
@@ -1533,7 +1563,7 @@ kbd {
 }
 
 .command-palette-heading > span:first-child {
-  color: var(--green);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -1543,7 +1573,7 @@ kbd {
 
 .command-group {
   padding: 7px 10px 5px;
-  color: var(--green-dim);
+  color: var(--accent-dim);
   background: var(--void);
   border-bottom: 1px solid var(--line);
   font-family: var(--mono);
@@ -1556,7 +1586,7 @@ kbd {
   display: grid;
   max-height: 224px;
   overflow-y: auto;
-  scrollbar-color: var(--green) var(--panel);
+  scrollbar-color: var(--accent) var(--panel);
   scrollbar-width: thin;
 }
 
@@ -1585,12 +1615,12 @@ kbd {
 .command-option:hover,
 .command-option:focus-visible {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
   outline: 0;
 }
 
 .command-option code {
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 9px;
 }
@@ -1623,15 +1653,15 @@ kbd {
 }
 
 .composer-shell:focus-within {
-  border-color: var(--green);
-  box-shadow: inset 3px 0 0 var(--green);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .composer-shell.is-dragover {
-  border-color: var(--green);
+  border-color: var(--accent);
   box-shadow:
-    inset 3px 0 0 var(--green),
-    0 0 0 1px var(--green);
+    inset 3px 0 0 var(--accent),
+    0 0 0 1px var(--accent);
 }
 
 .composer-attachments {
@@ -1686,7 +1716,7 @@ kbd {
 }
 
 .composer-heading > span:first-child {
-  color: var(--green);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -1790,8 +1820,8 @@ kbd {
   gap: 9px;
   padding: 0 12px;
   color: var(--void);
-  background: var(--green);
-  border: 1px solid var(--green);
+  background: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: 0;
   font-family: var(--mono);
   font-size: 9px;
@@ -1809,7 +1839,7 @@ kbd {
 }
 
 .send-button:hover:not(:disabled) {
-  color: var(--green);
+  color: var(--accent);
   background: var(--void);
 }
 
@@ -1871,7 +1901,7 @@ kbd {
   color: var(--text);
   background: var(--void);
   border: 1px solid var(--line-strong);
-  border-left: 3px solid var(--green);
+  border-left: 3px solid var(--accent);
 }
 
 .run-status-card .mini-label {
@@ -1931,7 +1961,7 @@ kbd {
 .run-metrics dd {
   margin: 5px 0 0;
   overflow: hidden;
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 500;
@@ -1955,7 +1985,7 @@ kbd {
   height: 16px;
   place-items: center;
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
   border-radius: 0;
   font-family: var(--mono);
   font-size: 7px;
@@ -1979,7 +2009,7 @@ kbd {
 .activity-tag {
   align-self: start;
   padding-top: 1px;
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 7px;
   font-weight: 500;
@@ -2032,7 +2062,7 @@ kbd {
 .stop-section code {
   display: block;
   margin-top: 6px;
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 10px;
 }
@@ -2088,7 +2118,7 @@ kbd {
   flex-direction: column;
   color: var(--text);
   background: var(--void);
-  border-left: 1px solid var(--green);
+  border-left: 1px solid var(--accent);
   box-shadow: -12px 0 0 rgba(23, 36, 17, 0.82);
   animation: trace-enter 170ms steps(4, end) both;
 }
@@ -2106,7 +2136,7 @@ kbd {
 }
 
 .workspace-diff-header .eyebrow {
-  color: var(--green-dim);
+  color: var(--accent-dim);
 }
 
 .workspace-diff-header h2 {
@@ -2128,7 +2158,7 @@ kbd {
 .workspace-diff-actions > button:first-child {
   height: 30px;
   padding: 0 10px;
-  color: var(--green);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--line-strong);
   font-family: var(--mono);
@@ -2138,7 +2168,7 @@ kbd {
 
 .workspace-diff-actions > button:first-child:hover:not(:disabled) {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .workspace-diff-actions > button:first-child:disabled {
@@ -2166,7 +2196,7 @@ kbd {
   flex-basis: 100%;
   max-width: 100%;
   overflow: hidden;
-  color: var(--green);
+  color: var(--accent);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2177,7 +2207,7 @@ kbd {
   overflow: auto;
   padding: 6px 0 20px;
   background: var(--black);
-  scrollbar-color: var(--green) var(--black);
+  scrollbar-color: var(--accent) var(--black);
 }
 
 .workspace-diff-item {
@@ -2215,7 +2245,7 @@ kbd {
 
 .workspace-diff-item.is-added .workspace-diff-status,
 .workspace-diff-item.is-copied .workspace-diff-status {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .workspace-diff-item.is-deleted .workspace-diff-status,
@@ -2269,7 +2299,7 @@ kbd {
 }
 
 .workspace-diff-counts {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .workspace-diff-binary,
@@ -2286,7 +2316,7 @@ kbd {
 .workspace-diff-hunk > header {
   padding: 6px 7px;
   overflow-wrap: anywhere;
-  color: var(--green-dim);
+  color: var(--accent-dim);
   background: var(--void);
   border-bottom: 1px solid var(--line);
   font-family: var(--mono);
@@ -2324,12 +2354,12 @@ kbd {
 }
 
 .workspace-diff-line.is-add {
-  border-left-color: var(--green);
+  border-left-color: var(--accent);
   background: rgba(59, 130, 66, 0.12);
 }
 
 .workspace-diff-line.is-add > code {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .workspace-diff-line.is-delete {
@@ -2405,8 +2435,8 @@ kbd {
   overflow: auto;
   color: var(--text);
   background: var(--panel);
-  border: 1px solid var(--green);
-  box-shadow: 10px 10px 0 #172411;
+  border: 1px solid var(--accent);
+  box-shadow: var(--card-shadow);
   animation: settings-enter 180ms steps(4, end) both;
 }
 
@@ -2414,7 +2444,7 @@ kbd {
   display: block;
   height: 4px;
   content: "";
-  background: var(--green);
+  background: var(--accent);
 }
 
 .settings-header {
@@ -2426,7 +2456,7 @@ kbd {
 }
 
 .settings-header .eyebrow {
-  color: var(--green-dim);
+  color: var(--accent-dim);
 }
 
 .settings-header h2 {
@@ -2463,7 +2493,7 @@ kbd {
   height: 27px;
   place-items: center;
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
   font-family: var(--mono);
   font-size: 8px;
   font-weight: 500;
@@ -2477,7 +2507,7 @@ kbd {
 }
 
 .settings-intro code {
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 10px;
 }
@@ -2526,8 +2556,8 @@ kbd {
 .settings-field select {
   appearance: none;
   background-image:
-    linear-gradient(45deg, transparent 50%, var(--green) 50%),
-    linear-gradient(135deg, var(--green) 50%, transparent 50%);
+    linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+    linear-gradient(135deg, var(--accent) 50%, transparent 50%);
   background-position:
     calc(100% - 15px) 17px,
     calc(100% - 10px) 17px;
@@ -2542,14 +2572,14 @@ kbd {
 
 .settings-field input:hover,
 .settings-field select:hover {
-  border-color: var(--green-dim);
+  border-color: var(--accent-dim);
 }
 
 .settings-field input:focus,
 .settings-field select:focus {
   background-color: var(--panel-raised);
-  border-color: var(--green);
-  box-shadow: inset 2px 0 0 var(--green);
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .settings-field input:disabled,
@@ -2586,7 +2616,7 @@ kbd {
 }
 
 .settings-status.is-ok {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .settings-status.is-error {
@@ -2623,8 +2653,8 @@ kbd {
 }
 
 .settings-secondary:hover {
-  color: var(--green);
-  border-color: var(--green);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .settings-primary {
@@ -2632,13 +2662,13 @@ kbd {
   gap: 12px;
   padding: 0 14px;
   color: var(--void);
-  background: var(--green);
-  border: 1px solid var(--green);
+  background: var(--accent);
+  border: 1px solid var(--accent);
   font-weight: 500;
 }
 
 .settings-primary:hover:not(:disabled) {
-  color: var(--green);
+  color: var(--accent);
   background: var(--void);
 }
 
@@ -2692,8 +2722,8 @@ kbd {
   flex-direction: column;
   color: var(--text);
   background: var(--panel);
-  border: 1px solid var(--green);
-  box-shadow: 10px 10px 0 #172411;
+  border: 1px solid var(--accent);
+  box-shadow: var(--card-shadow);
   animation: settings-enter 160ms steps(4, end) both;
 }
 
@@ -2701,7 +2731,7 @@ kbd {
   display: block;
   height: 4px;
   content: "";
-  background: var(--green);
+  background: var(--accent);
 }
 
 .resume-header {
@@ -2713,7 +2743,7 @@ kbd {
 }
 
 .resume-header .eyebrow {
-  color: var(--green-dim);
+  color: var(--accent-dim);
 }
 
 .resume-header h2 {
@@ -2736,7 +2766,7 @@ kbd {
 #resume-pin {
   height: 30px;
   padding: 0 10px;
-  color: var(--green);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--line-strong);
   font-family: var(--mono);
@@ -2749,7 +2779,7 @@ kbd {
 #resume-pin:hover:not(:disabled),
 #resume-pin:focus-visible {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 #resume-rename:disabled,
@@ -2778,7 +2808,7 @@ kbd {
 
 .resume-index-line span:last-child {
   margin-left: auto;
-  color: var(--green-dim);
+  color: var(--accent-dim);
 }
 
 .resume-summary {
@@ -2813,7 +2843,7 @@ kbd {
 .resume-session-actions button {
   height: 28px;
   padding: 0 10px;
-  color: var(--green);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--line-strong);
   font-family: var(--mono);
@@ -2827,7 +2857,7 @@ kbd {
 
 .resume-view-toggle button[aria-pressed="true"] {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .resume-view-toggle button:hover,
@@ -2835,7 +2865,7 @@ kbd {
 .resume-session-actions button:hover:not(:disabled),
 .resume-session-actions button:focus-visible {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 #resume-delete {
@@ -2967,8 +2997,8 @@ kbd {
 }
 
 .resume-fork-form > input:focus {
-  border-color: var(--green);
-  box-shadow: inset 3px 0 0 var(--green);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .resume-fork-form > p {
@@ -2991,7 +3021,7 @@ kbd {
 .resume-fork-form button {
   height: 28px;
   padding: 0 10px;
-  color: var(--green);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--line-strong);
   font-family: var(--mono);
@@ -3001,12 +3031,12 @@ kbd {
 .resume-fork-form button:hover:not(:disabled),
 .resume-fork-form button:focus-visible {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .resume-fork-form button[type="submit"] {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .resume-search-field input {
@@ -3023,8 +3053,8 @@ kbd {
 }
 
 .resume-search-field input:focus {
-  border-color: var(--green);
-  box-shadow: inset 3px 0 0 var(--green);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .resume-search-field input::placeholder {
@@ -3062,8 +3092,8 @@ kbd {
 }
 
 .resume-rename-form > input:focus {
-  border-color: var(--green);
-  box-shadow: inset 3px 0 0 var(--green);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .resume-rename-form > div {
@@ -3075,7 +3105,7 @@ kbd {
 .resume-rename-form button {
   height: 28px;
   padding: 0 10px;
-  color: var(--green);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--line-strong);
   font-family: var(--mono);
@@ -3085,18 +3115,18 @@ kbd {
 .resume-rename-form button:hover:not(:disabled),
 .resume-rename-form button:focus-visible {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .resume-rename-form button[type="submit"] {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .resume-list {
   min-height: 150px;
   overflow-y: auto;
-  scrollbar-color: var(--green) var(--panel);
+  scrollbar-color: var(--accent) var(--panel);
 }
 
 .resume-item {
@@ -3119,7 +3149,7 @@ kbd {
 .resume-item:focus-visible,
 .resume-item.is-selected {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
   outline: 0;
 }
 
@@ -3131,7 +3161,7 @@ kbd {
 }
 
 .resume-item-id {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .resume-item-turns {
@@ -3169,8 +3199,8 @@ kbd {
   grid-column: 1 / -1;
   overflow: hidden;
   padding: 4px 0 4px 7px;
-  color: var(--green);
-  border-left: 2px solid var(--green);
+  color: var(--accent);
+  border-left: 2px solid var(--accent);
   font-family: var(--mono);
   font-size: 8px;
   font-style: normal;
@@ -3237,7 +3267,7 @@ kbd {
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--amber);
-  box-shadow: 8px 8px 0 #241b0b;
+  box-shadow: var(--card-shadow);
 }
 
 .conversation-find-header {
@@ -3400,7 +3430,7 @@ kbd {
   flex-direction: column;
   color: var(--text);
   background: var(--void);
-  border-left: 1px solid var(--green);
+  border-left: 1px solid var(--accent);
   box-shadow: -12px 0 0 rgba(23, 36, 17, 0.82);
   animation: trace-enter 170ms steps(4, end) both;
 }
@@ -3428,7 +3458,7 @@ kbd {
 }
 
 .trace-header .eyebrow {
-  color: var(--green-dim);
+  color: var(--accent-dim);
 }
 
 .trace-header h2 {
@@ -3450,7 +3480,7 @@ kbd {
 .trace-refresh {
   height: 30px;
   padding: 0 10px;
-  color: var(--green);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--line-strong);
   border-radius: 0;
@@ -3461,8 +3491,8 @@ kbd {
 
 .trace-refresh:hover:not(:disabled) {
   color: var(--void);
-  background: var(--green);
-  border-color: var(--green);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .trace-refresh:disabled {
@@ -3491,7 +3521,7 @@ kbd {
 }
 
 .trace-summary-line span:first-child {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .trace-workspace {
@@ -3522,7 +3552,7 @@ kbd {
   align-items: center;
   justify-content: space-between;
   padding: 0 13px;
-  color: var(--green-dim);
+  color: var(--accent-dim);
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   font-family: var(--mono);
@@ -3541,7 +3571,7 @@ kbd {
   flex: 1;
   overflow: auto;
   padding: 7px 0 22px;
-  scrollbar-color: var(--green) var(--black);
+  scrollbar-color: var(--accent) var(--black);
 }
 
 .trace-node {
@@ -3570,7 +3600,7 @@ kbd {
 .trace-node.is-selected {
   color: var(--text);
   background: var(--panel-raised);
-  box-shadow: inset 3px 0 0 var(--green);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .trace-node-guide {
@@ -3589,7 +3619,7 @@ kbd {
 .trace-node-dot.is-ok,
 .trace-status.is-ok {
   color: var(--void);
-  background: var(--green);
+  background: var(--accent);
 }
 
 .trace-node-dot.is-running,
@@ -3631,7 +3661,7 @@ kbd {
 }
 
 .trace-node.is-selected .trace-node-main strong {
-  color: var(--green);
+  color: var(--accent);
 }
 
 .trace-node-main small {
@@ -3650,7 +3680,7 @@ kbd {
   flex: 1;
   overflow: auto;
   padding: 20px 22px 34px;
-  scrollbar-color: var(--green) var(--void);
+  scrollbar-color: var(--accent) var(--void);
 }
 
 .trace-span-card > header {
@@ -3706,14 +3736,13 @@ kbd {
   font-family: var(--mono);
   font-size: 7px;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .trace-field code {
   display: block;
   margin-top: 5px;
   overflow: hidden;
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 9px;
   text-overflow: ellipsis;
@@ -3726,7 +3755,7 @@ kbd {
 
 .trace-detail-section h3 {
   margin: 0 0 8px;
-  color: var(--green);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 8px;
   font-weight: 500;
@@ -3761,7 +3790,7 @@ kbd {
   padding: 14px 16px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-left: 2px solid var(--green);
+  border-left: 2px solid var(--accent);
 }
 
 .trace-empty,
@@ -3775,7 +3804,7 @@ kbd {
 
 .trace-empty strong {
   display: block;
-  color: var(--green);
+  color: var(--accent);
   font-weight: 500;
   letter-spacing: 0.08em;
 }
@@ -3831,8 +3860,8 @@ kbd {
   max-width: min(390px, calc(100vw - 32px));
   padding: 11px 13px;
   color: var(--void);
-  background: var(--green);
-  border: 1px solid var(--green);
+  background: var(--accent);
+  border: 1px solid var(--accent);
   box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.55);
   font-family: var(--mono);
   font-size: 9px;
@@ -4442,4 +4471,142 @@ kbd {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ============================================================
+   Apple 材质层（token 换血之上的组件级覆盖）
+   规则：只追加不修改上文；同特异性时后写胜出。
+   ============================================================ */
+
+/* 文本选区用系统蓝 */
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* —— 焦点环：Apple 的 3.5pt 蓝色光晕 —— */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--accent-soft), 0 0 0 1.5px var(--accent);
+}
+
+/* —— 卡片：连续圆角 + 发丝边 + 柔和投影 —— */
+.message,
+.command-receipt,
+.plan-card,
+.reasoning-block,
+.command-palette,
+.composer-shell,
+.toast {
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  box-shadow: var(--card-shadow);
+}
+
+.toast {
+  border-radius: 999px;
+}
+
+/* —— 弹层：macOS 材质（暗化 + 饱和度 + 模糊）+ 大圆角卡片 —— */
+.settings-modal,
+.resume-modal,
+.trace-modal,
+.workspace-diff-modal,
+.conversation-find-modal {
+  backdrop-filter: saturate(160%) blur(24px);
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.settings-modal > *,
+.resume-modal > *,
+.trace-modal > *,
+.workspace-diff-modal > *,
+.conversation-find-modal > * {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+}
+
+/* —— 分段控件（TRACE / DIFF / LOG）—— */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(120, 120, 128, 0.12);
+  border-radius: 8px;
+}
+
+.segmented .text-icon-button {
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  padding: 4px 12px;
+}
+
+.segmented .text-icon-button[aria-pressed="true"],
+.segmented .text-icon-button.is-active {
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px var(--line);
+  color: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+  .segmented {
+    background: rgba(120, 120, 128, 0.24);
+  }
+  .segmented .text-icon-button[aria-pressed="true"],
+  .segmented .text-icon-button.is-active {
+    background: #5a5a5e;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  }
+}
+
+/* —— 按钮：主操作胶囊、次操作安静 —— */
+#send {
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  transition: background 150ms ease, transform 150ms ease;
+}
+
+#send:hover {
+  background: var(--accent-strong);
+}
+
+#send:active {
+  transform: scale(0.97);
+}
+
+.icon-button {
+  border-radius: 6px;
+  transition: background 150ms ease;
+}
+
+/* —— 输入台：白卡片感 —— */
+.composer-shell {
+  background: var(--panel);
+}
+
+#prompt {
+  border-radius: 8px;
+}
+
+/* —— eyebrow 标签：从黑客全大写改成 Apple 的 sentence case 观感 —— */
+.eyebrow {
+  letter-spacing: 0.02em;
+  font-weight: 600;
+}
+
+/* —— 原生窗口：红绿灯让位 + 顶部拖拽区 —— */
+.is-tauri .stage-header {
+  padding-left: 78px;
 }

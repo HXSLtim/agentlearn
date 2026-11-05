@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1c1c1e" />
     <meta name="description" content="AgentLearn local agent workbench" />
     <title>AgentLearn</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -21,7 +24,7 @@
                 <path d="m8.2 17.1 3.8-7.6 3.8 7.6" />
               </svg>
             </span>
-            <span>AGENTLEARN</span>
+            <span>AgentLearn</span>
           </a>
           <button
             class="icon-button rail-close"
@@ -42,7 +45,7 @@
         </button>
 
         <div class="rail-section-heading">
-          <span>THREADS</span>
+          <span>会话</span>
           <span id="thread-count">0</span>
         </div>
         <nav class="thread-list" id="thread-list" aria-label="历史会话"></nav>
@@ -50,7 +53,7 @@
         <footer class="rail-footer">
           <div class="runtime-row">
             <span class="status-light is-ready" id="runtime-light"></span>
-            <span>LOCAL RUNTIME</span>
+            <span>本地运行时</span>
           </div>
           <div class="runtime-meta">
             <span>127.0.0.1:8000</span>
@@ -60,7 +63,7 @@
       </aside>
 
       <main class="main-stage">
-        <header class="stage-header">
+        <header class="stage-header" data-tauri-drag-region>
           <button
             class="icon-button rail-open"
             id="rail-open"
@@ -72,39 +75,41 @@
             </svg>
           </button>
           <div class="stage-heading">
-            <span class="eyebrow" id="thread-kicker">NEW SESSION</span>
+            <span class="eyebrow" id="thread-kicker">新会话</span>
             <h1 id="thread-title">未命名运行</h1>
           </div>
           <div class="stage-actions">
             <span class="connection-pill" id="connection-pill">
               <span class="status-light is-ready"></span>
-              READY
+              就绪
             </span>
-            <button
-              class="icon-button text-icon-button trace-toggle"
-              id="trace-toggle"
-              type="button"
-              aria-label="打开当前会话执行轨迹"
-            >
-              <span class="icon-code">TRACE</span>
-            </button>
-            <button
-              class="icon-button text-icon-button workspace-diff-toggle"
-              id="workspace-diff-toggle"
-              type="button"
-              aria-label="打开工作区变更列表"
-            >
-              <span class="icon-code">DIFF</span>
-            </button>
-            <button
-              class="icon-button text-icon-button run-rail-toggle"
-              id="run-rail-toggle"
-              type="button"
-              aria-label="切换运行账本"
-              aria-pressed="true"
-            >
-              <span class="icon-code">LOG</span>
-            </button>
+            <div class="segmented" role="group" aria-label="视图切换">
+              <button
+                class="icon-button text-icon-button trace-toggle"
+                id="trace-toggle"
+                type="button"
+                aria-label="打开当前会话执行轨迹"
+              >
+                <span class="icon-code">轨迹</span>
+              </button>
+              <button
+                class="icon-button text-icon-button workspace-diff-toggle"
+                id="workspace-diff-toggle"
+                type="button"
+                aria-label="打开工作区变更列表"
+              >
+                <span class="icon-code">变更</span>
+              </button>
+              <button
+                class="icon-button text-icon-button run-rail-toggle"
+                id="run-rail-toggle"
+                type="button"
+                aria-label="切换运行账本"
+                aria-pressed="true"
+              >
+                <span class="icon-code">日志</span>
+              </button>
+            </div>
           </div>
         </header>
 
@@ -125,21 +130,21 @@
             hidden
           >
             <div class="command-palette-heading">
-              <span id="command-palette-title">COMMAND INDEX</span>
-              <span>TYPE TO FILTER</span>
+              <span id="command-palette-title">命令索引</span>
+              <span>输入以过滤</span>
             </div>
             <div class="command-list" id="command-list" role="listbox"></div>
             <div class="command-palette-footer">
               <span>↑↓ SELECT</span>
-              <span>TAB COMPLETE</span>
-              <span id="command-palette-enter-action">ENTER RUN</span>
-              <span>ESC CLOSE</span>
+              <span>Tab 补全</span>
+              <span id="command-palette-enter-action">Enter 执行</span>
+              <span>Esc 关闭</span>
             </div>
           </div>
           <div class="composer-shell" id="composer-shell">
             <div class="composer-heading">
-              <span>COMPOSE</span>
-              <span id="composer-status">ENTER TO SEND · SHIFT+ENTER FOR NEWLINE</span>
+              <span>输入</span>
+              <span id="composer-status">Enter 发送 · Shift+Enter 换行</span>
             </div>
             <div class="composer-attachments" id="composer-attachments" hidden></div>
             <label class="sr-only" for="prompt">向 agent 发消息</label>
@@ -190,76 +195,76 @@
       <aside class="run-rail" id="run-rail" aria-label="运行状态">
         <header class="run-rail-heading">
           <div>
-            <span class="eyebrow">RUN LOG</span>
+            <span class="eyebrow">运行账本</span>
             <h2>运行日志</h2>
           </div>
           <span class="status-light is-ready" id="ledger-light"></span>
         </header>
 
         <section class="run-status-card">
-          <span class="mini-label">STATE</span>
+          <span class="mini-label">状态</span>
           <strong id="run-state">READY</strong>
           <p id="run-state-copy">等待第一条消息</p>
         </section>
 
         <dl class="run-metrics">
           <div>
-            <dt>SESSION</dt>
+            <dt>会话</dt>
             <dd id="run-session">—</dd>
           </div>
           <div>
-            <dt>TURNS</dt>
+            <dt>轮次</dt>
             <dd id="run-turns">0</dd>
           </div>
           <div>
-            <dt>TOOL CALLS</dt>
+            <dt>工具调用</dt>
             <dd id="run-tools">0</dd>
           </div>
           <div>
-            <dt>ELAPSED</dt>
+            <dt>用时</dt>
             <dd id="run-elapsed">—</dd>
           </div>
           <div>
-            <dt>INPUT TOKENS</dt>
+            <dt>输入 token</dt>
             <dd id="run-input-tokens">0</dd>
           </div>
           <div>
-            <dt>OUTPUT TOKENS</dt>
+            <dt>输出 token</dt>
             <dd id="run-output-tokens">0</dd>
           </div>
           <div>
-            <dt>CACHE READ</dt>
+            <dt>缓存读</dt>
             <dd id="run-cache-read">0</dd>
           </div>
           <div>
-            <dt>CACHE WRITE</dt>
+            <dt>缓存写</dt>
             <dd id="run-cache-write">0</dd>
           </div>
           <div class="run-metric-wide">
-            <dt>CACHE HIT</dt>
+            <dt>缓存命中</dt>
             <dd id="run-cache-hit">0‰</dd>
           </div>
           <div class="run-metric-wide">
-            <dt>COST</dt>
-            <dd id="run-cost">NOT CALCULATED</dd>
+            <dt>成本</dt>
+            <dd id="run-cost">暂无价目</dd>
           </div>
           <div class="run-metric-wide">
-            <dt>THINKING EFFORT</dt>
+            <dt>思考强度</dt>
             <dd id="run-effort">—</dd>
           </div>
           <div class="run-metric-wide">
-            <dt>EXECUTION APPROVAL</dt>
-            <dd id="run-approval">APPROVE</dd>
+            <dt>执行审批</dt>
+            <dd id="run-approval">需审批</dd>
           </div>
           <div class="run-metric-wide">
-            <dt>MESSAGE STEERING</dt>
-            <dd id="run-steering">QUEUE</dd>
+            <dt>消息插话</dt>
+            <dd id="run-steering">队列</dd>
           </div>
         </dl>
 
         <section class="activity-section">
           <div class="section-heading">
-            <span>LIVE ACTIVITY</span>
+            <span>实时活动</span>
             <span class="section-count" id="activity-count">0</span>
           </div>
           <ol class="activity-list" id="activity-list">
@@ -268,14 +273,14 @@
         </section>
 
         <section class="stop-section">
-          <span class="mini-label">STOP REASON</span>
+          <span class="mini-label">停止原因</span>
           <code id="run-stop">—</code>
         </section>
 
         <footer class="run-rail-footer">
           <span>JSONL 正文</span>
           <span>SQLite trace</span>
-          <span>LOCAL ONLY</span>
+          <span>仅本地</span>
         </footer>
       </aside>
       <div class="scrim" id="scrim"></div>
@@ -294,11 +299,11 @@
       >
         <header class="workspace-diff-header">
           <div>
-            <span class="eyebrow">WORKSPACE / READ ONLY</span>
+            <span class="eyebrow">工作区 · 只读</span>
             <h2 id="workspace-diff-title">变更文件</h2>
           </div>
           <div class="workspace-diff-actions">
-            <button id="workspace-diff-refresh" type="button">RELOAD</button>
+            <button id="workspace-diff-refresh" type="button">重新加载</button>
             <button
               class="icon-button workspace-diff-close"
               id="workspace-diff-close"
@@ -318,12 +323,12 @@
           <span>READING GIT STATUS…</span>
         </div>
         <div class="workspace-diff-list" id="workspace-diff-list">
-          <div class="workspace-diff-empty">READING WORKSPACE</div>
+          <div class="workspace-diff-empty">正在读取工作区</div>
         </div>
         <footer class="workspace-diff-footer">
-          <span>GIT STATUS ONLY</span>
-          <span>NO INDEX WRITES</span>
-          <span>ESC CLOSE · R RELOAD</span>
+          <span>只读 git status</span>
+          <span>不写索引</span>
+          <span>Esc 关闭 · R 重载</span>
         </footer>
       </aside>
     </div>
@@ -338,12 +343,12 @@
       >
         <header class="trace-header">
           <div>
-            <span class="eyebrow">SESSION INSPECTOR / READ ONLY</span>
+            <span class="eyebrow">会话检查器 · 只读</span>
             <h2 id="trace-title">执行轨迹</h2>
           </div>
           <div class="trace-header-actions">
             <button class="trace-refresh" id="trace-refresh" type="button">
-              RELOAD
+              重新加载
             </button>
             <button
               class="icon-button trace-close"
@@ -358,28 +363,28 @@
           </div>
         </header>
         <div class="trace-summary-line" id="trace-summary">
-          <span>SESSION —</span><span>SPANS 0</span><span>NO DATA</span>
+          <span>SESSION —</span><span>span 0</span><span>暂无数据</span>
         </div>
         <div class="trace-workspace">
           <section class="trace-tree-panel">
             <header>
-              <span>SPAN TREE</span>
+              <span>Span 树</span>
               <span id="trace-count">0</span>
             </header>
             <div class="trace-tree" id="trace-tree" role="tree"></div>
           </section>
           <section class="trace-detail-panel">
             <header>
-              <span>SPAN DETAIL</span>
-              <span id="trace-selected-state">WAITING</span>
+              <span>Span 详情</span>
+              <span id="trace-selected-state">等待选择</span>
             </header>
             <div class="trace-detail" id="trace-detail"></div>
           </section>
         </div>
         <footer class="trace-footer">
-          <span>JSONL ANSWER PAIRING</span>
-          <span>SQLITE SPANS</span>
-          <span>ESC CLOSE · R RELOAD</span>
+          <span>JSONL 回答配对</span>
+          <span>SQLite spans</span>
+          <span>Esc 关闭 · R 重载</span>
         </footer>
       </aside>
     </div>
@@ -394,7 +399,7 @@
       >
         <header class="settings-header">
           <div>
-            <span class="eyebrow">RUNTIME CONFIG</span>
+            <span class="eyebrow">运行时配置</span>
             <h2 id="settings-title">模型设置</h2>
           </div>
           <button
@@ -420,7 +425,7 @@
 
           <div class="settings-grid">
             <label class="settings-field">
-              <span>PROVIDER</span>
+              <span>提供方</span>
               <select id="settings-provider" name="provider">
                 <option value="anthropic">Anthropic</option>
                 <option value="openai">OpenAI</option>
@@ -428,13 +433,13 @@
             </label>
 
             <label class="settings-field">
-              <span>MODEL ID</span>
+              <span>模型 ID</span>
               <select id="settings-model" name="model_id"></select>
               <small id="settings-model-count">READING MODELS…</small>
             </label>
 
             <label class="settings-field settings-field-wide">
-              <span>BASE URL</span>
+              <span>接入点</span>
               <input
                 id="settings-base-url"
                 name="base_url"
@@ -445,7 +450,7 @@
             </label>
 
             <label class="settings-field">
-              <span>MAX TOKENS</span>
+              <span>最大 token</span>
               <input
                 id="settings-max-tokens"
                 name="max_tokens"
@@ -456,7 +461,7 @@
             </label>
 
             <label class="settings-field">
-              <span>THINKING EFFORT</span>
+              <span>思考强度</span>
               <select id="settings-effort" name="effort">
                 <option value="">默认 · 不发送</option>
                 <option value="off">off</option>
@@ -468,7 +473,7 @@
             </label>
 
             <label class="settings-field settings-field-wide">
-              <span>API KEY</span>
+              <span>API 密钥</span>
               <input
                 id="settings-api-key"
                 name="api_key"
@@ -496,9 +501,9 @@
           </div>
 
           <footer class="settings-footer">
-            <span>LOCAL CONFIG</span>
-            <span>API KEY NEVER ECHOED</span>
-            <span>NEXT REQUEST APPLIES</span>
+            <span>本地配置</span>
+            <span>密钥不回显</span>
+            <span>下一轮请求生效</span>
           </footer>
         </form>
       </section>
@@ -514,11 +519,11 @@
       >
         <header class="resume-header">
           <div>
-            <span class="eyebrow">SESSION INDEX</span>
+            <span class="eyebrow">会话索引</span>
             <h2 id="resume-title">续接会话</h2>
           </div>
           <div class="resume-header-actions">
-            <button id="resume-rename" type="button">RENAME</button>
+            <button id="resume-rename" type="button">重命名</button>
             <button id="resume-pin" type="button">PIN</button>
             <button
               class="icon-button resume-close"
@@ -534,9 +539,9 @@
         </header>
         <div class="resume-index-line">
           <span>↑↓ SELECT</span>
-          <span>ENTER RESUME</span>
-          <span>ESC CLOSE</span>
-          <span>LOCAL UI INDEX</span>
+          <span>Enter 续接</span>
+          <span>Esc 关闭</span>
+          <span>本地界面索引</span>
         </div>
         <p class="resume-summary" id="resume-summary"></p>
         <div class="resume-actions">
@@ -549,9 +554,9 @@
             </button>
           </div>
           <div class="resume-session-actions">
-            <button id="resume-archive" type="button">ARCHIVE</button>
-            <button id="resume-delete" type="button">DELETE</button>
-            <button id="resume-fork" type="button">FORK</button>
+            <button id="resume-archive" type="button">归档</button>
+            <button id="resume-delete" type="button">删除</button>
+            <button id="resume-fork" type="button">复刻</button>
           </div>
         </div>
         <div class="resume-delete-confirm" id="resume-delete-confirm" hidden>
@@ -560,14 +565,14 @@
             JSONL、trace 和摘要会一起消失，不可恢复。
           </p>
           <div>
-            <button id="resume-delete-cancel" type="button">CANCEL</button>
+            <button id="resume-delete-cancel" type="button">取消</button>
             <button id="resume-delete-confirm-button" type="button">
               DELETE FOREVER
             </button>
           </div>
         </div>
         <form class="resume-fork-form" id="resume-fork-form" hidden>
-          <label for="resume-fork-through">COPY FIRST N MESSAGES</label>
+          <label for="resume-fork-through">复制前 N 条消息</label>
           <div class="resume-fork-meta">
             <span id="resume-fork-source"></span>
             <output id="resume-fork-max"></output>
@@ -582,12 +587,12 @@
           />
           <p id="resume-fork-preview"></p>
           <div>
-            <button id="resume-fork-cancel" type="button">CANCEL</button>
-            <button id="resume-fork-submit" type="submit">FORK</button>
+            <button id="resume-fork-cancel" type="button">取消</button>
+            <button id="resume-fork-submit" type="submit">复刻</button>
           </div>
         </form>
         <label class="resume-search-field">
-          <span>FILTER INDEX</span>
+          <span>过滤索引</span>
           <input
             id="resume-search"
             type="search"
@@ -597,7 +602,7 @@
           />
         </label>
         <form class="resume-rename-form" id="resume-rename-form" hidden>
-          <label for="resume-rename-input">RENAME SELECTED SESSION</label>
+          <label for="resume-rename-input">重命名选中会话</label>
           <input
             id="resume-rename-input"
             type="text"
@@ -606,8 +611,8 @@
             maxlength="120"
           />
           <div>
-            <button id="resume-rename-cancel" type="button">CANCEL</button>
-            <button type="submit">SAVE</button>
+            <button id="resume-rename-cancel" type="button">取消</button>
+            <button type="submit">保存</button>
           </div>
         </form>
         <div class="resume-list" id="resume-list" role="listbox"></div>
@@ -627,7 +632,7 @@
       >
         <header class="conversation-find-header">
           <div>
-            <span class="eyebrow">CURRENT SESSION / RENDERED MESSAGES</span>
+            <span class="eyebrow">当前会话 · 已渲染消息</span>
             <h2 id="conversation-find-title">会话内查找</h2>
           </div>
           <button
@@ -642,7 +647,7 @@
           </button>
         </header>
         <label class="conversation-find-field">
-          <span>FIND</span>
+          <span>查找</span>
           <input
             id="conversation-find-input"
             type="search"
@@ -657,7 +662,7 @@
           role="listbox"
         ></div>
         <footer class="conversation-find-footer">
-          <span>↑↓ SELECT</span><span>ENTER LOCATE</span><span>ESC CLOSE</span>
+          <span>↑↓ SELECT</span><span>Enter 定位</span><span>Esc 关闭</span>
           <span id="conversation-find-count">0 MATCHES</span>
         </footer>
       </section>

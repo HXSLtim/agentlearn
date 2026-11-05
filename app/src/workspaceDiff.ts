@@ -1,6 +1,16 @@
 // 工作区 diff 抽屉：文件列表与 hunk 的只读渲染，自己接线自己的按钮。
 import { API_BASE, readError } from "./api";
 import { escapeHtml } from "./format";
+
+const DIFF_STATUS_LABELS: Record<string, string> = {
+  modified: "已修改",
+  added: "新增",
+  deleted: "删除",
+  renamed: "重命名",
+  copied: "复制",
+  untracked: "未跟踪",
+  typechange: "类型变更",
+};
 import { promptInput, requireElement } from "./dom";
 import type { WorkspaceDiffResponse } from "./types";
 
@@ -20,8 +30,8 @@ function renderWorkspaceDiff(): void {
   }
   workspaceDiffSummary.innerHTML = `
     <span>${escapeHtml(workspaceDiff.root)}</span>
-    <span>TRACKED ${workspaceDiff.files.filter((file) => file.status !== "untracked").length}</span>
-    <span>UNTRACKED ${workspaceDiff.include_untracked ? "INCLUDED" : "EXCLUDED"} ${workspaceDiff.untracked_count}</span>
+    <span>已跟踪 ${workspaceDiff.files.filter((file) => file.status !== "untracked").length}</span>
+    <span>未跟踪 ${workspaceDiff.include_untracked ? "计入" : "排除"} · ${workspaceDiff.untracked_count}</span>
   `;
   workspaceDiffList.innerHTML = workspaceDiff.files.length
     ? workspaceDiff.files
@@ -29,13 +39,13 @@ function renderWorkspaceDiff(): void {
           (file) => `
             <details class="workspace-diff-item is-${escapeHtml(file.status)}" open>
               <summary>
-                <span class="workspace-diff-status">${escapeHtml(file.status.toUpperCase())}</span>
+                <span class="workspace-diff-status">${escapeHtml(DIFF_STATUS_LABELS[file.status] ?? file.status.toUpperCase())}</span>
                 <span class="workspace-diff-file-heading">
                 <strong>${escapeHtml(file.path)}</strong>
                 ${file.old_path ? `<small>${escapeHtml(file.old_path)} → ${escapeHtml(file.path)}</small>` : ""}
                 <small class="workspace-diff-counts">+${file.additions} −${file.deletions}</small>
-                ${file.binary ? '<small class="workspace-diff-binary">BINARY</small>' : ""}
-                ${file.truncated ? '<small class="workspace-diff-truncated">PATCH TRUNCATED</small>' : ""}
+                ${file.binary ? '<small class="workspace-diff-binary">二进制</small>' : ""}
+                ${file.truncated ? '<small class="workspace-diff-truncated">补丁已截断</small>' : ""}
                 </span>
                 <span class="workspace-diff-fold" aria-hidden="true"></span>
               </summary>
@@ -66,7 +76,7 @@ export async function loadWorkspaceDiff(): Promise<void> {
   const sequence = ++workspaceDiffLoadSequence;
   workspaceDiffRefreshButton.disabled = true;
   workspaceDiffSummary.innerHTML = "<span>READING GIT STATUS…</span>";
-  workspaceDiffList.innerHTML = `<div class="workspace-diff-empty">READING WORKSPACE</div>`;
+  workspaceDiffList.innerHTML = `<div class="workspace-diff-empty">正在读取工作区</div>`;
   try {
     const response = await fetch(
       `${API_BASE}/workspace/diff?include_untracked=true`,
@@ -85,10 +95,10 @@ export async function loadWorkspaceDiff(): Promise<void> {
       return;
     }
     workspaceDiff = null;
-    workspaceDiffSummary.innerHTML = "<span>WORKSPACE UNAVAILABLE</span>";
+    workspaceDiffSummary.innerHTML = "<span>工作区不可用</span>";
     workspaceDiffList.innerHTML = `
       <div class="workspace-diff-empty is-error">
-        <strong>WORKSPACE READ FAILED</strong>
+        <strong>工作区读取失败</strong>
         <p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p>
       </div>
     `;
@@ -99,14 +109,18 @@ export async function loadWorkspaceDiff(): Promise<void> {
   }
 }
 
+const workspaceDiffToggleButton = requireElement<HTMLButtonElement>("#workspace-diff-toggle");
+
 export function openWorkspaceDiff(): void {
   workspaceDiffModal.hidden = false;
+  workspaceDiffToggleButton.setAttribute("aria-pressed", "true");
   void loadWorkspaceDiff();
 }
 
 export function closeWorkspaceDiff(): void {
   workspaceDiffLoadSequence += 1;
   workspaceDiffModal.hidden = true;
+  workspaceDiffToggleButton.setAttribute("aria-pressed", "false");
   promptInput.focus();
 }
 

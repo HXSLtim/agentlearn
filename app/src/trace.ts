@@ -113,7 +113,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
   if (!span) {
     return `
       <div class="trace-empty">
-        <strong>NO SPAN SELECTED</strong>
+        <strong>未选择 span</strong>
         <p>从左侧选择一步，查看入参、耗时、状态和落盘回答。</p>
       </div>
     `;
@@ -143,7 +143,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
   if (span.name === "llm_request") {
     body = `
       <section class="trace-detail-section">
-        <h3>MODEL REQUEST</h3>
+        <h3>模型请求</h3>
         <div class="trace-fields">
           ${traceField("model", data.model)}
           ${traceField("messages", data.messages)}
@@ -161,17 +161,17 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
   } else if (span.name === "tool_call") {
     body = `
       <section class="trace-detail-section">
-        <h3>TOOL CALL</h3>
+        <h3>工具调用</h3>
         <div class="trace-fields">
           ${traceField("tool", data.tool)}
         </div>
       </section>
       <section class="trace-detail-section">
-        <h3>INPUT</h3>
+        <h3>输入</h3>
         <pre>${escapeHtml(JSON.stringify(data.input ?? {}, null, 2))}</pre>
       </section>
       <section class="trace-detail-section">
-        <h3>OUTPUT</h3>
+        <h3>输出</h3>
         <pre class="${span.status === "error" ? "is-error" : ""}">${escapeHtml(String(data.output ?? "—"))}</pre>
       </section>
     `;
@@ -179,7 +179,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
   if (Object.keys(remaining).length) {
     body += `
       <section class="trace-detail-section">
-        <h3>SPAN DATA</h3>
+        <h3>Span 数据</h3>
         <pre>${escapeHtml(JSON.stringify(remaining, null, 2))}</pre>
       </section>
     `;
@@ -187,7 +187,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
   if (data.message) {
     body += `
       <section class="trace-detail-section">
-        <h3>ERROR MESSAGE</h3>
+        <h3>错误信息</h3>
         <pre class="is-error">${escapeHtml(String(data.message))}</pre>
       </section>
     `;
@@ -195,7 +195,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
   if (answer) {
     body += `
       <section class="trace-detail-section trace-answer">
-        <h3>PAIRED ANSWER</h3>
+        <h3>配对回答</h3>
         <div class="markdown">${renderMarkdown(answer)}</div>
       </section>
     `;
@@ -231,7 +231,7 @@ function selectTraceSpan(spanId: string): void {
   traceDetail.innerHTML = traceDetailMarkup(span);
   traceSelectedState.textContent = span
     ? `${span.status.toUpperCase()} · ${traceDuration(span)}`
-    : "WAITING";
+    : "等待选择";
 }
 
 function renderTrace(): void {
@@ -245,12 +245,12 @@ function renderTrace(): void {
     .filter((span) => span.name === "turn")
     .reduce((total, span) => total + (span.duration_ms ?? 0), 0);
   traceSummary.innerHTML = `
-    <span>SESSION ${escapeHtml(shortSession(traceSessionId))}</span>
-    <span>TURNS ${turns}</span>
-    <span>SPANS ${traceSpans.length}</span>
-    <span>ERRORS ${errors}</span>
-    <span>RUNNING ${running}</span>
-    <span>WALL ${wall}ms</span>
+    <span>会话 ${escapeHtml(shortSession(traceSessionId))}</span>
+    <span>轮次 ${turns}</span>
+    <span>span ${traceSpans.length}</span>
+    <span>错误 ${errors}</span>
+    <span>运行中 ${running}</span>
+    <span>总耗时 ${wall}ms</span>
   `;
   traceTree.innerHTML = traceTreeMarkup();
   selectTraceSpan(traceSelectedSpanId);
@@ -268,24 +268,24 @@ export async function loadTrace(): Promise<void> {
     traceSpans = [];
     traceAnswers = {};
     traceSelectedSpanId = "";
-    traceSummary.innerHTML = "<span>SESSION PENDING</span><span>NO TRACE</span>";
+    traceSummary.innerHTML = "<span>会话待定</span><span>暂无轨迹</span>";
     traceTree.innerHTML = "";
     traceDetail.innerHTML = `
       <div class="trace-empty">
-        <strong>NO SESSION YET</strong>
+        <strong>会话尚未落盘</strong>
         <p>先发送一轮消息，span 从第一轮开始写入。</p>
       </div>
     `;
     traceCount.textContent = "0";
-    traceSelectedState.textContent = "WAITING";
+    traceSelectedState.textContent = "等待选择";
     return;
   }
   const sequence = ++traceLoadSequence;
   traceRefreshButton.disabled = true;
-  traceSummary.innerHTML = `<span>SESSION ${escapeHtml(shortSession(traceSessionId))}</span><span>READING SQLITE + JSONL…</span>`;
-  traceTree.innerHTML = `<div class="trace-loading">LOADING SPAN TREE</div>`;
-  traceDetail.innerHTML = `<div class="trace-loading">READING TRACE</div>`;
-  traceSelectedState.textContent = "LOADING";
+  traceSummary.innerHTML = `<span>会话 ${escapeHtml(shortSession(traceSessionId))}</span><span>正在读取 SQLite + JSONL…</span>`;
+  traceTree.innerHTML = `<div class="trace-loading">正在读取 span 树</div>`;
+  traceDetail.innerHTML = `<div class="trace-loading">正在读取轨迹</div>`;
+  traceSelectedState.textContent = "读取中";
   try {
     const response = await fetch(
       `${API_BASE}/sessions/${encodeURIComponent(traceSessionId)}/trace`,
@@ -314,11 +314,11 @@ export async function loadTrace(): Promise<void> {
     traceAnswers = {};
     traceTree.innerHTML = "";
     traceCount.textContent = "0";
-    traceSummary.innerHTML = `<span>SESSION ${escapeHtml(shortSession(traceSessionId))}</span><span>TRACE UNAVAILABLE</span>`;
-    traceSelectedState.textContent = "ERROR";
+    traceSummary.innerHTML = `<span>会话 ${escapeHtml(shortSession(traceSessionId))}</span><span>轨迹不可用</span>`;
+    traceSelectedState.textContent = "错误";
     traceDetail.innerHTML = `
       <div class="trace-empty is-error">
-        <strong>TRACE READ FAILED</strong>
+        <strong>轨迹读取失败</strong>
         <p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p>
       </div>
     `;
@@ -329,17 +329,21 @@ export async function loadTrace(): Promise<void> {
   }
 }
 
+const traceToggleButton = requireElement<HTMLButtonElement>("#trace-toggle");
+
 export function openTrace(): void {
   const thread = activeThread();
   traceSessionId = thread.sessionId;
   traceModal.hidden = false;
-  document.title = `AgentLearn · trace ${shortSession(thread.sessionId)}`;
+  traceToggleButton.setAttribute("aria-pressed", "true");
+  document.title = `AgentLearn · 轨迹 ${shortSession(thread.sessionId)}`;
   void loadTrace();
 }
 
 export function closeTrace(): void {
   traceLoadSequence += 1;
   traceModal.hidden = true;
+  traceToggleButton.setAttribute("aria-pressed", "false");
   document.title = "AgentLearn";
   promptInput.focus();
 }
