@@ -2,6 +2,23 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-05（十八）：界面换装 Apple 设计语言
+
+- desktop 全量换 Apple 风格：色彩收敛为语义 token（label 分层文本、
+  systemBlue 强调、语义状态色），`prefers-color-scheme` 随系统明暗两套
+  全自动切换，`<meta name="color-scheme">` + 双 theme-color 跟手。
+- 字体换 `-apple-system` / `SF Mono` 栈（Tauri 的 WebKit 里就是真 SF），
+  移除 IBM Plex 依赖；标题栏 `titleBarStyle: overlay` + 隐藏标题，
+  头部 `data-tauri-drag-region` 接管拖拽，内容顶到窗口边。
+- 头部三枚视图开关（轨迹 / 变更 / 日志）改成 segmented control，
+  `aria-pressed` 表达选中态；卡面统一 10px 圆角 + 阴影，模态走
+  backdrop-filter 材质，主按钮改胶囊形，焦点环换 systemBlue。
+- 全大写标签整体改 sentence case / 中文：账本、设置、恢复框、抽屉、
+  命令回执的状态枚举（approve/auto/yolo、queue/cooperative/preemptive）
+  落屏前过 `format.ts` 的中文名映射。
+- TUI 主题换 Apple 深色语义配色：画布 1C1C1E、浮层 2C2C2E、强调
+  0A84FF、红/橙/青/绿各归其位；常量名沿用旧词汇表，chat/ 包 CSS 零改动。
+
 ## 2026-11-03（十七）：desktop diff 工作台第一步
 
 - 新增只读 `GET /workspace/diff`：`git status --porcelain=v1 -z
