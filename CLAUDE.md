@@ -13,7 +13,9 @@
 - `server/`：Python 后端。入口 `main.py`（子命令 tui / trace / desktop，web 为兼容别名）。
   - `src/domain/`：纯数据类型，不依赖任何层。
   - `src/infrastructure/`：llm.py（运输）、adapter.py（协议翻译）、config.py、transcript.py（JSONL 正文）、store.py（SQLite 索引 + trace/spans）。
-  - `src/interfaces/tui/`：唯一终端入口包；`__init__.py` 是门面，chat.py / trace.py 是两个内部模式。
+  - `src/interfaces/tui/`：唯一终端入口包；`__init__.py` 是门面，`chat/` 是对话工作台包
+    （screen.py 装配 App，composer / palette / cards / modals / panels 分件，`chat/__init__.py` 只重导出），
+    trace.py 是只读检查器。
   - `src/interfaces/web/server.py`：desktop 的 HTTP/SSE 适配层。
   - `src/application/`：conversation.py，TUI 与 desktop 共用的会话循环（turn 落盘、日志都在这）。
 - `app/`：Tauri 桌面端，通过 HTTP 调 server，不共享代码。
@@ -50,6 +52,8 @@ uv run python main.py web [--port 8000]             # desktop 兼容别名
 7. 消息存盘必须存完整内容块（含 thinking 的 signature），只存可见文字会导致会话续不上。
 8. `main.py` 只做组合根；终端只保留 `interfaces/tui` 一个公开门面，不要再恢复 cli.py 或并列的 trace_tui.py。
 9. 设置写入必须保留 `config.ini` 注释和其他段落；先写临时文件并完整校验，失败不能覆盖原配置。
+10. Python 文件名用小驼峰（如 `sessionManager.py`）；代码内标识符（函数/变量/类）保持 snake_case，
+    跟随标准库与既有 SDK 签名。数据/markdown 文件不受 import 约束：md 用连字符，其余跟小驼峰。
 
 ## 已知坑与欠账
 

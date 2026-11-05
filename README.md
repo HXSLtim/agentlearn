@@ -41,8 +41,9 @@
 - `infrastructure/config.py`：读写 config.ini，支持 `${环境变量}` 引用；对外只返回密钥来源，不回传密钥。
 - `infrastructure/transcript.py`：会话正文，一个会话一个 JSONL 文件，存在 `server/data/`。
 - `infrastructure/store.py`：会话索引和执行轨迹（spans，父子关系 + 耗时），存在 `server/data/agent.db`。
-- `interfaces/tui/`：唯一的终端入口包；`__init__.py` 只导出 `run_chat` 与 `run_trace`，
-  对话工作台和 trace 检查器分文件实现。
+- `interfaces/tui/`：唯一的终端入口包；`__init__.py` 只导出 `run_chat` 与 `run_trace`。
+  对话工作台在 `tui/chat/` 包里（screen 装配 App，composer / palette / cards / modals / panels 分件），
+  trace 检查器是 `tui/trace.py`。
 - `interfaces/web/server.py`：HTTP 入口，给 `app/` 调用。
 
 空的层不提前建；application 在收拢两入口循环时（2026-11-01）成立。
