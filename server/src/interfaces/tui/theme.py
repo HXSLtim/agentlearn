@@ -1,30 +1,30 @@
-"""TUI 的 Apple 深色语义配色。
+"""TUI 的「墨与琥珀」语义配色（与 desktop 同一套设计语言，D30）。
 
-与 desktop 共享「Apple 设计语言」的视觉方向：深灰画布、系统蓝强调、
-语义状态色（红/橙/青/绿各归其位）。终端里没有 SF 字体和毛玻璃，
-能带走的是色彩体系——具体色值分别维护，Textual 的语义色、光标、
-选区和滚动条都从这里落。常量名沿用拆分前的一套（PAPER=前景、
-INK=画布……），改的是值不是词汇表，chat/ 包里的 CSS 引用零改动。
+两个界面各画各的，但词汇表一致：墨黑带暖调的画布、纸色文本、
+琥珀强调（批注笔）、红/赭/青/绿各归其位。终端里没有字体和毛玻璃，
+能带走的是色彩体系——Textual 的语义色、光标、选区和滚动条都从这里落。
+常量名沿用拆分前的一套（PAPER=前景、INK=画布……），改的是值不是
+词汇表，chat/ 包里的 CSS 引用零改动。
 """
 from textual.app import App
 from textual.theme import Theme
 
-# Apple 深色模式语义色（macOS HIG）：
-#   画布 1C1C1E（systemBackground）、浮层 2C2C2E（tertiarySystemBackground）
-#   文本 F5F5F7（label）、分隔线 3A3A3C（separator）
-#   强调 0A84FF（systemBlue）、红 FF453A / 橙 FF9F0A / 青 64D2FF / 绿 30D158
-INK = "#1c1c1e"
-PANEL = "#242426"
-PANEL_RAISED = "#2c2c2e"
-PAPER = "#f5f5f7"
-MUTED = "#98989d"
-DIM = "#6e6e73"
-SIGNAL = "#0a84ff"
-TOOL = "#64d2ff"
-WARN = "#ff9f0a"
-ERROR = "#ff453a"
-LINE = "#3a3a3c"
-SUCCESS = "#30d158"
+# 墨与琥珀深色（终端默认深底）：
+#   画布 151412（墨黑带暖）、浮层 26231E（抬升一档）
+#   文本 ECE7DD（纸色）、分隔线 35312A
+#   强调 EDA03C（琥珀批注）、红 FF6A58 / 赭 EDA03C / 青 7CCFE0 / 绿 4CC38A
+INK = "#151412"
+PANEL = "#1c1a17"
+PANEL_RAISED = "#26231e"
+PAPER = "#ece7dd"
+MUTED = "#948d7f"
+DIM = "#6f695e"
+SIGNAL = "#eda03c"
+TOOL = "#7ccfe0"
+WARN = "#f0942e"
+ERROR = "#ff6a58"
+LINE = "#35312a"
+SUCCESS = "#4cc38a"
 
 
 AGENTLEARN_THEME = Theme(
