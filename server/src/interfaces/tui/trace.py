@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from application.trace_view import answer_texts, answers_for_requests
+from application.traceView import answer_texts, answers_for_requests
 from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
@@ -424,7 +424,7 @@ def _local_time(value: str) -> str:
 
 
 def _answer_texts(messages) -> list[str]:
-    # 薄别名：调用点写的是它，逻辑在 application.trace_view（web 端点共用）。
+    # 薄别名：调用点写的是它，逻辑在 application.traceView（web 端点共用）。
     return answer_texts(messages)
 
 

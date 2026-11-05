@@ -24,7 +24,7 @@ from application.sandbox import CHILD_ENV, SANDBOX
 from domain.message import ImageBlock
 from domain.tool import Tool
 from infrastructure.config import load_mcp_servers
-from infrastructure.mcp_client import MCPManager
+from infrastructure.mcpClient import MCPManager
 # 单条命令的墙上时间上限。模型偶尔会提交 `cat`（没参数就等 stdin）或
 # `python`（进交互解释器）这类「看起来在跑、其实永远不结束」的命令，
 # 没有超时整轮对话就挂在它身上。

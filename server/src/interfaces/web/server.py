@@ -41,7 +41,7 @@ POST /chat
                      和 done(stop_reason="cancelled")，半截回答不落盘；
                      本连接等它退场后正常跑自己的轮
     没有轮次在跑时三档等价，直接开跑。档位的等待颗粒度和线程模型见
-    application/session_manager.py。
+    application/sessionManager.py。
 
 GET /settings
     返回可展示的模型设置和密钥来源，不包含真实密钥。
@@ -94,9 +94,9 @@ from application.jobs import restore_jobs
 from application.plan import PlanBroker
 from application.tools import append_memory, read_memory
 from application.proactivity import ProactivityRunner, UNATTENDED_MAX_TOOL_ROUNDS
-from application.session_manager import MODES, SessionManager
-from application.trace_view import answers_for_requests, answer_texts
-from application.transcript_export import transcript_to_markdown
+from application.sessionManager import MODES, SessionManager
+from application.traceView import answers_for_requests, answer_texts
+from application.transcriptExport import transcript_to_markdown
 from application.workspace import WorkspaceError, changed_files
 from application.workspace import complete_paths
 from infrastructure.config import (
@@ -258,7 +258,7 @@ class ChatRequest(BaseModel):
     # 空字符串表示新会话。前端续接时把上次拿到的 id 传回来。
     # 不是 UUID 的值由端点校验并返回 422（见下面的 chat 函数）。
     session_id: str = ""
-    # 同会话连发消息时的处理档位（见 session_manager.py）：
+    # 同会话连发消息时的处理档位（见 sessionManager.py）：
     #   queue（默认，等当前轮跑完）/ cooperative（下一个请求间隙并入当前轮）
     #   / preemptive（抢占当前轮，半截回答不落盘）。
     # 没有轮次在跑时三档等价：直接开跑。
@@ -775,7 +775,7 @@ def chat_events(
     编排（登记会话、落盘、历史、日志）都在 Conversation 里，
     这里做两件事：把 turn() 产出的事件原样推进 SSE，以及按 steering
     档位决定这条请求和「正在跑的那轮」怎么相处（档位语义见
-    session_manager.py）。这个会话没有轮次在跑时，三档殊途同归：
+    sessionManager.py）。这个会话没有轮次在跑时，三档殊途同归：
     都落到下面的 turn_lock 里跑自己的一整轮。
     """
     # 没带 session_id 就是新会话，分配一个 UUID。

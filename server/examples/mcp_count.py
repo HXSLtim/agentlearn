@@ -10,7 +10,7 @@
 它的形状就是 MCP stdio 协议本体：stdin 逐行读 JSON-RPC，stdout 逐行回。
 真实服务器会实现更多能力（资源、采样、进度通知）；这个例子只做验收
 需要的最小集：initialize / tools/list / tools/call。服务器端手写和
-客户端（src/infrastructure/mcp_client.py）手写是同一个理由：协议要看
+客户端（src/infrastructure/mcpClient.py）手写是同一个理由：协议要看
 过原始形状才算学过。
 """
 import json

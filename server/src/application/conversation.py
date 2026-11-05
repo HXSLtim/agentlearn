@@ -116,7 +116,7 @@ class Conversation:
             if constitution_path is not None
             else Path(__file__).resolve().parents[2] / "constitution.md"
         )
-        # steering 是同会话并发的钩子（见 session_manager.py），鸭子类型：
+        # steering 是同会话并发的钩子（见 sessionManager.py），鸭子类型：
         #   cancelled() -> bool      被抢占了吗（preemptive 档设的标志）
         #   drain() -> list[str]     取走等待插入的新消息（cooperative 档的 inbox）
         # TUI 单连接用不上，None = 没有并发，所有检查点都变空操作。

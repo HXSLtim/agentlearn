@@ -53,9 +53,9 @@ from application.approval import APPROVAL_MODES, ApprovalBroker
 from application.conversation import Conversation, TurnCancelled
 from application.plan import PlanBroker
 from application.tools import append_memory, read_memory
-from application.session_manager import MODES as STEERING_MODES
-from application.session_manager import RunningTurn
-from application.transcript_export import transcript_to_markdown
+from application.sessionManager import MODES as STEERING_MODES
+from application.sessionManager import RunningTurn
+from application.transcriptExport import transcript_to_markdown
 from application.workspace import changed_files
 from domain.message import ImageBlock
 from domain.message import Message as DomainMessage
