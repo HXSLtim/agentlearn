@@ -230,28 +230,17 @@ export const conversationFindCount = requireElement<HTMLElement>(
 
 export const traceModal = requireElement<HTMLElement>("#trace-modal");
 
-export const traceCloseButton = requireElement<HTMLButtonElement>("#trace-close");
 
-export const traceRefreshButton = requireElement<HTMLButtonElement>("#trace-refresh");
 
-export const traceSummary = requireElement<HTMLElement>("#trace-summary");
 
-export const traceTree = requireElement<HTMLElement>("#trace-tree");
 
-export const traceCount = requireElement<HTMLElement>("#trace-count");
 
-export const traceDetail = requireElement<HTMLElement>("#trace-detail");
 
-export const traceSelectedState = requireElement<HTMLElement>("#trace-selected-state");
 
 export const workspaceDiffToggle = requireElement<HTMLButtonElement>("#workspace-diff-toggle");
 
 export const workspaceDiffModal = requireElement<HTMLElement>("#workspace-diff-modal");
 
-export const workspaceDiffCloseButton = requireElement<HTMLButtonElement>("#workspace-diff-close");
 
-export const workspaceDiffRefreshButton = requireElement<HTMLButtonElement>("#workspace-diff-refresh");
 
-export const workspaceDiffSummary = requireElement<HTMLElement>("#workspace-diff-summary");
 
-export const workspaceDiffList = requireElement<HTMLElement>("#workspace-diff-list");

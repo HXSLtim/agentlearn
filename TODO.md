@@ -86,7 +86,8 @@ desktop / TUI 还没接上的界面：
 
 路线图后段（层本身已完成，这里是剩下的事）：
 
-- [ ] 意图分类做路由：闲聊直接答、任务进 agent loop、明确命令走快捷路径。验收：分类器省不下主模型开销就不启用。
+- [ ] main.ts 继续按特性拆分：types/dom/slashCommands/api/format/trace/workspaceDiff 已出（2026-11-05，intent-funnel 分支），settings/resume/palette/images/审批还留在 main.ts（4232 行）。模式已立：特性模块自带状态与 DOM 句柄、自接线自己的按钮，从 main 取活绑定（activeThread 等，core 抽取后改指 core）。验收：每步 `npm run build` + 真机 380×900（本机窗口下限 500 亦可）开抽屉截图。
+- [ ] 意图分类做路由：闲聊直接答、任务进 agent loop、明确命令走快捷路径。验收：分类器省不下主模型开销就不启用。设计见 docs/superpowers/specs/2026-11-05-intent-funnel-design.md（三层漏斗：规则 → few-shot → 微调兜底）。
 - [ ] 意图分类做工具裁剪：请求里只放相关工具定义。
 - [ ] 意图分类给 steering 档位建议。验收：前端传入的档位仍可覆盖建议。
 - [ ] 分类结果写入 span。验收：错分能在 trace 里看见；分类失败降级为完整 agent loop。
