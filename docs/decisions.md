@@ -812,3 +812,25 @@ marker，实际未执行且 tool span 为 `plan_blocked`；未确认消费返回
 **平台件保留**：`prefers-color-scheme` 双主题、backdrop-filter 材质、
 focus ring、`titleBarStyle: Overlay` + `hiddenTitle` + 头部拖拽区
 （注意 schema 枚举是 PascalCase `Overlay`，小写会拒启）。
+
+## D31 模型请求必须有界：读超时 120s、连接 5s、重试 1 次（2026-11-05）
+
+2026-11-05 晚一次卡死复盘：上游中转挂起（连接在、不回包），
+`llm.py` 建客户端没设超时，用的是 SDK 默认 600s × 2 次重试——
+挂起被放大成最长半小时。`/stop` 只设取消标志、检查点在流事件之间，
+挂起的请求永远到不了检查点，界面就钉死在「停止中 · 等待检查点」。
+
+**决定**：
+
+- 两个客户端统一 `httpx2.Timeout(connect=5, read=timeout_s, write=10, pool=5)`，
+  `max_retries=1`。`timeout_s` 进 `[llm]`，缺省 120，流式下约束的是
+  相邻 chunk 的间隔而不是整轮时长（长回答不会被误杀）。
+- 超时走 SDK 的 APITimeoutError → `turn()` 既有的错误通道：两个 span
+  标 error、SSE 发错误、界面出「运行错误 + 重试」。不再需要 /stop
+  去打断一个挂死的请求——它自己会在时限内收线。
+- 注意这代 SDK 用 `httpx2`（不是 `httpx`），传错包的 Timeout 会被
+  `_reject_httpx_object` 直接拒绝；`httpx2` 是 anthropic/openai 的
+  传递依赖，不需要写进 pyproject。
+
+**验收**：本地起一个只 accept 不回包的端口，`timeout_s=2` 时 4.5s
+内抛 APITimeoutError（含 1 次重试），此前无限挂起。
