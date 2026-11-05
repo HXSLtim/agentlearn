@@ -36,6 +36,11 @@ class LLMConfig:
     # 模型流量绕过代理的主机列表（NO_PROXY 语义，逗号分隔，* = 全部绕过）。
     # 空 = 完全尊重环境里的代理变量，不替用户做决定。允许缺省。
     no_proxy: str = ""
+    # 单次模型请求的读超时（秒）。上游挂起时最多等这么久就报错，
+    # 而不是 SDK 默认的 600s×重试把「停止中」钉死在界面上。
+    # 流式请求里它约束的是相邻两个 chunk 之间的间隔，不是整轮时长。
+    # 允许缺省，默认 120。
+    timeout_s: float = 120.0
 
 
 @dataclass(frozen=True)
@@ -100,6 +105,19 @@ def load_config(path: Path = Path("config.ini")) -> LLMConfig:
         raise SystemExit("no_proxy 是逗号分隔的主机列表，不能包含换行。")
     no_proxy = ",".join(item.strip() for item in raw_no_proxy.split(",") if item.strip())
 
+    # timeout_s 允许缺省（默认 120）；写了就必须是正数。
+    timeout_raw = section["timeout_s"].strip() if "timeout_s" in section else ""
+    timeout_s = 120.0
+    if timeout_raw:
+        try:
+            timeout_s = float(timeout_raw)
+        except ValueError as exc:
+            raise SystemExit(
+                f"timeout_s 要是数字（秒），现在写的是 {timeout_raw}。"
+            ) from exc
+        if timeout_s <= 0:
+            raise SystemExit("timeout_s 要是正数（秒）。")
+
     return LLMConfig(
         provider=provider,
         base_url=_value(section, "base_url", path),
@@ -108,6 +126,7 @@ def load_config(path: Path = Path("config.ini")) -> LLMConfig:
         max_tokens=int(max_tokens_raw),
         effort=effort,
         no_proxy=no_proxy,
+        timeout_s=timeout_s,
     )
 
 

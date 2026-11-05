@@ -28,6 +28,7 @@ import os
 import json
 
 import anthropic
+import httpx2
 from openai import OpenAI
 
 from domain.message import Message, TextBlock, ThinkingBlock
@@ -61,7 +62,7 @@ _OPENAI_REASON = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "too
 class AnthropicChat:
     """走 Anthropic 协议的客户端。连官方接口或兼容这个协议的中转都能用。"""
 
-    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000, effort: str = "") -> None:
+    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000, effort: str = "", timeout_s: float = 120.0) -> None:
         # 模型 ID。不同的中转有不同的命名，这里不做校验，由配置传入。
         self.model = model
         # 这一次回复的输出上限，不限制输入。设得太小，回答会被掐断，
@@ -72,7 +73,16 @@ class AnthropicChat:
         self.effort = effort
         self.effort_wire, self.effort_note = effort_to_anthropic(effort)
         # base_url 指向中转或官方地址，api_key 是对应的密钥。
-        self.client = anthropic.Anthropic(base_url=url, api_key=key)
+        # 超时四档：连接 5s（代理死了别傻等）、读 timeout_s（流式下约束
+        # 相邻 chunk 的间隔）、写 10s、池 5s；重试压到 1 次——SDK 默认
+        # 600s×2 次重试会把一次上游挂起放大成半小时的「停止中」，
+        # /stop 只在检查点生效，挂起的请求永远到不了检查点。
+        self.client = anthropic.Anthropic(
+            base_url=url,
+            api_key=key,
+            timeout=httpx2.Timeout(connect=5.0, read=timeout_s, write=10.0, pool=5.0),
+            max_retries=1,
+        )
         # 流跑完之前没有结束原因，所以先是 None。调用方读完 stream 之后再看它。
         self.stop_reason: str | None = None
         # 流跑完之前这一轮的内容块也是空的，同样是读完 stream 再看。
@@ -169,13 +179,20 @@ class OpenAIChat:
     base_url 要带 /v1，SDK 会在后面自动拼 /chat/completions。
     """
 
-    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000, effort: str = "") -> None:
+    def __init__(self, url: str, key: str, model: str, max_tokens: int = 64000, effort: str = "", timeout_s: float = 120.0) -> None:
         # 含义和 AnthropicChat 相同，只是底层 SDK 不同。
         self.model = model
         self.max_tokens = max_tokens
         self.effort = effort
         self.effort_wire, self.effort_note = effort_to_openai(effort)
-        self.client = OpenAI(base_url=url, api_key=key)
+        # 超时语义同 AnthropicChat：连接 5s、读 timeout_s、写 10s、池 5s，
+        # 重试 1 次。理由见那边的注释。
+        self.client = OpenAI(
+            base_url=url,
+            api_key=key,
+            timeout=httpx2.Timeout(connect=5.0, read=timeout_s, write=10.0, pool=5.0),
+            max_retries=1,
+        )
         self.stop_reason: str | None = None
         self.blocks: list = []
         self.usage: dict = {}
@@ -290,11 +307,11 @@ def build_chat(config: LLMConfig) -> AnthropicChat | OpenAIChat:
         if config.provider == "anthropic":
             return AnthropicChat(url=config.base_url, key=config.api_key,
                                  model=config.model_id, max_tokens=config.max_tokens,
-                                 effort=config.effort)
+                                 effort=config.effort, timeout_s=config.timeout_s)
         if config.provider == "openai":
             return OpenAIChat(url=config.base_url, key=config.api_key,
                               model=config.model_id, max_tokens=config.max_tokens,
-                              effort=config.effort)
+                              effort=config.effort, timeout_s=config.timeout_s)
     except ImportError as e:
         # 本机代理坑：shell 里挂着 all_proxy=socks5://… 时，httpx 建客户端
         # 就要 SOCKS 支持，环境里没有 socksio 直接 ImportError。这里翻译成
