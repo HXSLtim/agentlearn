@@ -6,717 +6,242 @@ import "@fontsource/ibm-plex-mono/latin-500.css";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
+import type {
+  ApprovalMode,
+  SteeringMode,
+  TranscriptMode,
+  PlanEvent,
+  ImageAttachment,
+  ToolEvent,
+  ToolPart,
+  AssistantPart,
+  UiMessage,
+  TurnUsage,
+  Thread,
+  PersistedState,
+  SettingsSnapshot,
+  SettingsPayload,
+  ModelListResponse,
+  CapabilitiesResponse,
+  ApprovalScope,
+  ChatEvent,
+  ApprovalModeResponse,
+  PlanConfirmResponse,
+  ServerSession,
+  SessionForkResponse,
+  SessionSearchHit,
+  SessionSearchResponse,
+  ConversationSearchMatch,
+  ServerMessage,
+  TraceSpan,
+  TraceResponse,
+  WorkspaceDiffResponse,
+  WorkspacePathsResponse,
+  StopResponse,
+  ActivityItem,
+  PaletteMode,
+  StreamContext,
+} from "./types";
+import {
+  SlashCommand,
+  SLASH_COMMANDS,
+  SLASH_COMMANDS_BY_NAME,
+} from "./slashCommands";
+import {
+  appShell,
+  threadList,
+  threadCount,
+  newThreadButton,
+  railCloseButton,
+  railOpenButton,
+  traceToggle,
+  runRailToggle,
+  runRail,
+  scrim,
+  threadKicker,
+  threadTitle,
+  connectionPill,
+  conversation,
+  conversationScroll,
+  composer,
+  promptInput,
+  composerStatus,
+  sendButton,
+  sendLabel,
+  stopButton,
+  composerShell,
+  composerAttachments,
+  commandPalette,
+  commandList,
+  commandPaletteTitle,
+  commandPaletteEnterAction,
+  runState,
+  runStateCopy,
+  runSession,
+  runTurns,
+  runTools,
+  runElapsed,
+  runInputTokens,
+  runOutputTokens,
+  runCacheRead,
+  runCacheWrite,
+  runCacheHit,
+  runCost,
+  runEffort,
+  runApproval,
+  runSteering,
+  runStop,
+  activityList,
+  activityCount,
+  runtimeLight,
+  ledgerLight,
+  toast,
+  settingsModal,
+  settingsCloseButton,
+  settingsCancelButton,
+  settingsForm,
+  settingsProvider,
+  settingsModel,
+  settingsModelCount,
+  settingsBaseUrl,
+  settingsMaxTokens,
+  settingsEffort,
+  settingsApiKey,
+  settingsKeySource,
+  settingsStatus,
+  settingsSave,
+  settingsSaveLabel,
+  resumeModal,
+  resumeCloseButton,
+  resumeList,
+  resumeSummary,
+  resumeSearch,
+  resumeRenameButton,
+  resumePinButton,
+  resumeActiveViewButton,
+  resumeArchiveViewButton,
+  resumeArchiveButton,
+  resumeDeleteButton,
+  resumeDeleteConfirm,
+  resumeDeleteTitle,
+  resumeDeleteCancelButton,
+  resumeDeleteConfirmButton,
+  resumeForkButton,
+  resumeForkForm,
+  resumeForkSource,
+  resumeForkMax,
+  resumeForkInput,
+  resumeForkPreview,
+  resumeForkCancelButton,
+  resumeForkSubmitButton,
+  resumeRenameForm,
+  resumeRenameInput,
+  resumeRenameCancel,
+  conversationFindModal,
+  conversationFindCloseButton,
+  conversationFindInput,
+  conversationFindList,
+  conversationFindCount,
+  traceModal,
+  traceCloseButton,
+  traceRefreshButton,
+  traceSummary,
+  traceTree,
+  traceCount,
+  traceDetail,
+  traceSelectedState,
+  workspaceDiffToggle,
+  workspaceDiffModal,
+  workspaceDiffCloseButton,
+  workspaceDiffRefreshButton,
+  workspaceDiffSummary,
+  workspaceDiffList,
+} from "./dom";
+
 const API_BASE = "http://127.0.0.1:8000";
+
 const STORAGE_KEY = "agentlearn.desktop.v1";
 
 marked.setOptions({ gfm: true, breaks: true });
 
-type ApprovalMode = "approve" | "auto" | "yolo";
-type SteeringMode = "queue" | "cooperative" | "preemptive";
-type ToolState = "waiting" | "running" | "done";
-type TranscriptMode = "normal" | "thinking" | "verbose";
-
-interface PlanEvent {
-  id: string;
-  threadId: string;
-  sessionId: string;
-  text: string;
-  confirmed: boolean;
-  discarded: boolean;
-  executed: boolean;
-}
-
-interface ImageAttachment {
-  media_type: string;
-  data: string;
-}
-
-interface ToolEvent {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-  output?: string;
-  image?: ImageAttachment;
-  hasImage?: boolean;
-  isError?: boolean;
-  elapsedMs?: number;
-  approvalId?: string;
-  state: ToolState;
-}
-
-interface TextPart {
-  type: "text";
-  text: string;
-}
-
-interface ThinkingPart {
-  type: "thinking";
-  text: string;
-}
-
-interface ToolPart {
-  type: "tool";
-  tool: ToolEvent;
-}
-
-interface PlanPart {
-  type: "plan";
-  plan: PlanEvent;
-}
-
-type AssistantPart = TextPart | ThinkingPart | ToolPart | PlanPart;
-
-interface UiMessage {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  images?: ImageAttachment[];
-  thinking: string;
-  parts: AssistantPart[];
-  error: string;
-  stopReason: string;
-  durationMs?: number;
-  createdAt: number;
-  streaming?: boolean;
-  queued?: boolean;
-  steeringState?: "queued" | "acknowledged" | "delivered" | "failed";
-}
-
-interface TurnUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  cache_hit_ratio: number;
-}
-
-interface ContextWarning {
-  estimate_tokens: number;
-  budget_tokens: number;
-  ratio: number;
-}
-
-interface Thread {
-  id: string;
-  sessionId: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  stopReason: string;
-  approvalMode: ApprovalMode;
-  steeringMode: SteeringMode;
-  model: string;
-  pinned: boolean;
-  archived: boolean;
-  usage?: TurnUsage;
-  contextWarning?: ContextWarning;
-  serverTurns?: number;
-  runStartedAt?: number;
-  stopping?: boolean;
-  messagesLoaded?: boolean;
-  messages: UiMessage[];
-}
-
-interface PersistedState {
-  version: 1;
-  activeThreadId: string;
-  threads: Thread[];
-}
-
-interface SettingsSnapshot {
-  provider: "anthropic" | "openai";
-  base_url: string;
-  model_id: string;
-  max_tokens: number;
-  effort: "" | "off" | "low" | "medium" | "high" | "max";
-  api_key_configured: boolean;
-  api_key_source: string;
-  pricing: {
-    currency: string;
-    input_per_million: string;
-    cache_read_per_million: string;
-    cache_write_per_million: string;
-    output_per_million: string;
-  } | null;
-}
-
-interface SettingsPayload {
-  provider: string;
-  base_url: string;
-  model_id: string;
-  max_tokens: number;
-  effort: string;
-  api_key: string | null;
-}
-
-interface ModelListResponse {
-  provider: "anthropic" | "openai";
-  models: string[];
-}
-
-interface CapabilitiesResponse {
-  tools: Array<{
-    name: string;
-    source: string;
-    description: string;
-  }>;
-  mcp: Array<{
-    alias: string;
-    state: string;
-    command?: string;
-  }>;
-  skills: Array<{ name: string; description: string }>;
-  environment: {
-    cwd: string;
-    sandbox: string;
-    sandbox_boundary: string;
-    memory_file: string;
-  };
-  runtime: {
-    python: string;
-    provider: string;
-    model: string;
-    effort: string;
-    triggers: number;
-  };
-}
-
-type ApprovalScope = "once" | "session";
-
-interface ChatEvent {
-  kind:
-    | "thinking"
-    | "text"
-    | "tool_use"
-    | "tool_approval"
-    | "tool_result"
-    | "plan"
-    | "usage"
-    | "context_warning"
-    | "steering_ack"
-    | "steering_injected"
-    | "steering_cancelled"
-    | "done"
-    | "error";
-  text?: string;
-  id?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-  output?: string;
-  is_error?: boolean;
-  denied?: boolean;
-  elapsed_ms?: number;
-  stop_reason?: string;
-  session_id?: string;
-  message?: string;
-  approval_id?: string;
-  mode?: ApprovalMode;
-  has_image?: boolean;
-  usage?: TurnUsage;
-  estimate_tokens?: number;
-  budget_tokens?: number;
-  ratio?: number;
-  plan_id?: string;
-}
-
-interface ApprovalModeResponse {
-  ok: boolean;
-  active: boolean;
-  mode: ApprovalMode;
-  auto_approved: string[];
-}
-
-interface PlanConfirmResponse {
-  ok: boolean;
-  plan_id: string;
-  confirmed: boolean;
-}
-
-interface ServerSession {
-  id: string;
-  title: string;
-  model: string;
-  created_at: string;
-  updated_at: string;
-  turns: number;
-  stop_reason: string;
-  pinned: boolean;
-  archived: boolean;
-}
-
-interface SessionForkResponse {
-  ok: boolean;
-  session_id: string;
-  copied: number;
-}
-
-interface SessionSearchHit {
-  session_id: string;
-  title: string;
-  message_index: number;
-  role: string;
-  snippet: string;
-}
-
-interface SessionSearchResponse {
-  q: string;
-  hits: SessionSearchHit[];
-}
-
-interface ConversationSearchMatch {
-  messageId: string;
-  role: UiMessage["role"];
-  snippet: string;
-}
-
-interface ServerContentBlock {
-  type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
-  text?: string;
-  thinking?: string;
-  id?: string;
-  tool_use_id?: string;
-  name?: string;
-  input?: Record<string, unknown>;
-  content?: string;
-  is_error?: boolean;
-  media_type?: string;
-  data?: string;
-  image?: ImageAttachment | null;
-}
-
-interface ServerMessage {
-  role: "user" | "assistant";
-  content: ServerContentBlock[];
-}
-
-interface TraceSpan {
-  span_id: string;
-  parent_id: string | null;
-  name: string;
-  start_time: string;
-  end_time: string | null;
-  status: "running" | "ok" | "error" | "cancelled";
-  data: Record<string, unknown>;
-  duration_ms: number | null;
-}
-
-interface TraceResponse {
-  spans: TraceSpan[];
-  answers: Record<string, string>;
-}
-
-interface WorkspaceDiffFile {
-  path: string;
-  old_path: string | null;
-  status: string;
-  binary: boolean;
-  truncated: boolean;
-  hunks: WorkspaceDiffHunk[];
-  additions: number;
-  deletions: number;
-}
-
-interface WorkspaceDiffHunk {
-  header: string;
-  old_start: number;
-  old_count: number;
-  new_start: number;
-  new_count: number;
-  lines: WorkspaceDiffLine[];
-}
-
-interface WorkspaceDiffLine {
-  kind: "context" | "add" | "delete" | "meta";
-  old_line: number | null;
-  new_line: number | null;
-  text: string;
-}
-
-interface WorkspaceDiffResponse {
-  root: string;
-  files: WorkspaceDiffFile[];
-  untracked_count: number;
-  include_untracked: boolean;
-}
-
-interface WorkspacePathsResponse {
-  root: string;
-  prefix: string;
-  paths: string[];
-  total: number;
-  limited: boolean;
-}
-
-interface StopResponse {
-  ok: boolean;
-  active: boolean;
-  cancelled: boolean;
-}
-
-interface SlashCommand {
-  name: string;
-  usage: string;
-  description: string;
-  group: string;
-  aliases?: string[];
-  takesArgument?: boolean;
-}
-
-interface ActivityItem {
-  key: string;
-  tag: string;
-  title: string;
-  detail: string;
-  status: string;
-}
-
-const SLASH_COMMANDS: SlashCommand[] = [
-  {
-    name: "resume",
-    usage: "/resume [id]",
-    description: "选择并续接历史会话",
-    group: "SESSION",
-    takesArgument: true,
-  },
-  {
-    name: "clear",
-    usage: "/clear",
-    description: "清空当前上下文并开新会话",
-    group: "SESSION",
-  },
-  {
-    name: "new",
-    usage: "/new",
-    description: "新开一个空会话",
-    group: "SESSION",
-  },
-  {
-    name: "memory",
-    usage: "/memory [内容]",
-    description: "往跨会话记忆记一条；不带参数查看",
-    group: "SESSION",
-    takesArgument: true,
-  },
-  {
-    name: "find",
-    usage: "/find [关键词]",
-    description: "定位当前会话里的一条已渲染消息",
-    group: "SESSION",
-    takesArgument: true,
-  },
-  {
-    name: "status",
-    usage: "/status",
-    description: "查看当前会话与运行状态",
-    group: "RUNTIME",
-  },
-  {
-    name: "trace",
-    usage: "/trace",
-    description: "打开当前会话的 span 树与回答配对",
-    group: "RUNTIME",
-  },
-  {
-    name: "stop",
-    usage: "/stop",
-    description: "在下一个检查点停止当前运行轮",
-    group: "RUNTIME",
-  },
-  {
-    name: "retry",
-    usage: "/retry",
-    description: "重跑上一条失败的请求，不新增用户消息卡片",
-    group: "RUNTIME",
-  },
-  {
-    name: "steering",
-    usage: "/steering [mode]",
-    description: "切换 queue / cooperative / preemptive",
-    group: "RUNTIME",
-    takesArgument: true,
-  },
-  {
-    name: "effort",
-    usage: "/effort [level]",
-    description: "切换思考等级；不带参数循环",
-    group: "RUNTIME",
-    takesArgument: true,
-  },
-  {
-    name: "approval",
-    usage: "/approval [mode]",
-    description: "切换 approve / auto / yolo",
-    group: "RUNTIME",
-    takesArgument: true,
-  },
-  {
-    name: "plan",
-    usage: "/plan <task>",
-    description: "Read-only exploration, then a human-confirmed plan",
-    group: "RUNTIME",
-    takesArgument: true,
-  },
-  {
-    name: "capabilities",
-    usage: "/capabilities",
-    description: "Show tools, MCP health, runtime and sandbox facts",
-    group: "SYSTEM",
-  },
-  {
-    name: "transcript",
-    usage: "/transcript [mode]",
-    description: "切换 normal / thinking / verbose 三档正文视图",
-    group: "RUNTIME",
-    takesArgument: true,
-  },
-  {
-    name: "copy",
-    usage: "/copy",
-    description: "复制最近一条完整回答",
-    group: "SYSTEM",
-  },
-  {
-    name: "export",
-    usage: "/export",
-    description: "把当前会话导出为 Markdown",
-    group: "SYSTEM",
-  },
-  {
-    name: "model",
-    usage: "/model <id>",
-    description: "切换运行模型；不带参数打开设置",
-    group: "RUNTIME",
-    takesArgument: true,
-  },
-  {
-    name: "config",
-    usage: "/config",
-    description: "打开 config.ini 模型设置",
-    group: "RUNTIME",
-    aliases: ["settings"],
-  },
-  {
-    name: "now",
-    usage: "/now",
-    description: "触发 now_time 示例",
-    group: "TASK",
-  },
-  {
-    name: "files",
-    usage: "/files",
-    description: "查看 sandbox 目录",
-    group: "TASK",
-  },
-  {
-    name: "boundary",
-    usage: "/boundary",
-    description: "触发 reason / act / report 示例",
-    group: "TASK",
-  },
-  {
-    name: "help",
-    usage: "/help",
-    description: "显示全部命令",
-    group: "SYSTEM",
-  },
-];
-const SLASH_COMMANDS_BY_NAME = new Map<string, SlashCommand>();
-for (const command of SLASH_COMMANDS) {
-  SLASH_COMMANDS_BY_NAME.set(command.name, command);
-  for (const alias of command.aliases ?? []) {
-    SLASH_COMMANDS_BY_NAME.set(alias, command);
-  }
-}
-
-function requireElement<T extends Element>(selector: string): T {
-  const element = document.querySelector<T>(selector);
-  if (!element) {
-    throw new Error(`Missing element: ${selector}`);
-  }
-  return element;
-}
-
-const appShell = requireElement<HTMLElement>("#app-shell");
-const threadList = requireElement<HTMLElement>("#thread-list");
-const threadCount = requireElement<HTMLElement>("#thread-count");
-const newThreadButton = requireElement<HTMLButtonElement>("#new-thread");
-const railCloseButton = requireElement<HTMLButtonElement>("#rail-close");
-const railOpenButton = requireElement<HTMLButtonElement>("#rail-open");
-const traceToggle = requireElement<HTMLButtonElement>("#trace-toggle");
-const runRailToggle = requireElement<HTMLButtonElement>("#run-rail-toggle");
-const runRail = requireElement<HTMLElement>("#run-rail");
-const scrim = requireElement<HTMLElement>("#scrim");
-const threadKicker = requireElement<HTMLElement>("#thread-kicker");
-const threadTitle = requireElement<HTMLElement>("#thread-title");
-const connectionPill = requireElement<HTMLElement>("#connection-pill");
-const conversation = requireElement<HTMLElement>("#conversation");
-const conversationScroll = requireElement<HTMLElement>("#conversation-scroll");
-const composer = requireElement<HTMLFormElement>("#composer");
-const promptInput = requireElement<HTMLTextAreaElement>("#prompt");
-const composerStatus = requireElement<HTMLElement>("#composer-status");
-const sendButton = requireElement<HTMLButtonElement>("#send");
-const sendLabel = requireElement<HTMLElement>("#send-label");
-const stopButton = requireElement<HTMLButtonElement>("#stop");
-const composerShell = requireElement<HTMLElement>("#composer-shell");
-const composerAttachments = requireElement<HTMLElement>("#composer-attachments");
-const commandPalette = requireElement<HTMLElement>("#command-palette");
-const commandList = requireElement<HTMLElement>("#command-list");
-const commandPaletteTitle = requireElement<HTMLElement>("#command-palette-title");
-const commandPaletteEnterAction = requireElement<HTMLElement>(
-  "#command-palette-enter-action",
-);
-const runState = requireElement<HTMLElement>("#run-state");
-const runStateCopy = requireElement<HTMLElement>("#run-state-copy");
-const runSession = requireElement<HTMLElement>("#run-session");
-const runTurns = requireElement<HTMLElement>("#run-turns");
-const runTools = requireElement<HTMLElement>("#run-tools");
-const runElapsed = requireElement<HTMLElement>("#run-elapsed");
-const runInputTokens = requireElement<HTMLElement>("#run-input-tokens");
-const runOutputTokens = requireElement<HTMLElement>("#run-output-tokens");
-const runCacheRead = requireElement<HTMLElement>("#run-cache-read");
-const runCacheWrite = requireElement<HTMLElement>("#run-cache-write");
-const runCacheHit = requireElement<HTMLElement>("#run-cache-hit");
-const runCost = requireElement<HTMLElement>("#run-cost");
-const runEffort = requireElement<HTMLElement>("#run-effort");
-const runApproval = requireElement<HTMLElement>("#run-approval");
-const runSteering = requireElement<HTMLElement>("#run-steering");
-const runStop = requireElement<HTMLElement>("#run-stop");
-const activityList = requireElement<HTMLElement>("#activity-list");
-const activityCount = requireElement<HTMLElement>("#activity-count");
-const runtimeLight = requireElement<HTMLElement>("#runtime-light");
-const ledgerLight = requireElement<HTMLElement>("#ledger-light");
-const toast = requireElement<HTMLElement>("#toast");
-const settingsModal = requireElement<HTMLElement>("#settings-modal");
-const settingsCloseButton = requireElement<HTMLButtonElement>("#settings-close");
-const settingsCancelButton = requireElement<HTMLButtonElement>("#settings-cancel");
-const settingsForm = requireElement<HTMLFormElement>("#settings-form");
-const settingsProvider = requireElement<HTMLSelectElement>("#settings-provider");
-const settingsModel = requireElement<HTMLSelectElement>("#settings-model");
-const settingsModelCount = requireElement<HTMLElement>(
-  "#settings-model-count",
-);
-const settingsBaseUrl = requireElement<HTMLInputElement>("#settings-base-url");
-const settingsMaxTokens = requireElement<HTMLInputElement>("#settings-max-tokens");
-const settingsEffort = requireElement<HTMLSelectElement>("#settings-effort");
-const settingsApiKey = requireElement<HTMLInputElement>("#settings-api-key");
-const settingsKeySource = requireElement<HTMLElement>("#settings-key-source");
-const settingsStatus = requireElement<HTMLElement>("#settings-status");
-const settingsSave = requireElement<HTMLButtonElement>("#settings-save");
-const settingsSaveLabel = requireElement<HTMLElement>("#settings-save-label");
-const resumeModal = requireElement<HTMLElement>("#resume-modal");
-const resumeCloseButton = requireElement<HTMLButtonElement>("#resume-close");
-const resumeList = requireElement<HTMLElement>("#resume-list");
-const resumeSummary = requireElement<HTMLElement>("#resume-summary");
-const resumeSearch = requireElement<HTMLInputElement>("#resume-search");
-const resumeRenameButton = requireElement<HTMLButtonElement>("#resume-rename");
-const resumePinButton = requireElement<HTMLButtonElement>("#resume-pin");
-const resumeActiveViewButton = requireElement<HTMLButtonElement>(
-  "#resume-active-view",
-);
-const resumeArchiveViewButton = requireElement<HTMLButtonElement>(
-  "#resume-archive-view",
-);
-const resumeArchiveButton = requireElement<HTMLButtonElement>("#resume-archive");
-const resumeDeleteButton = requireElement<HTMLButtonElement>("#resume-delete");
-const resumeDeleteConfirm = requireElement<HTMLElement>(
-  "#resume-delete-confirm",
-);
-const resumeDeleteTitle = requireElement<HTMLElement>("#resume-delete-title");
-const resumeDeleteCancelButton = requireElement<HTMLButtonElement>(
-  "#resume-delete-cancel",
-);
-const resumeDeleteConfirmButton = requireElement<HTMLButtonElement>(
-  "#resume-delete-confirm-button",
-);
-const resumeForkButton = requireElement<HTMLButtonElement>("#resume-fork");
-const resumeForkForm = requireElement<HTMLFormElement>("#resume-fork-form");
-const resumeForkSource = requireElement<HTMLElement>("#resume-fork-source");
-const resumeForkMax = requireElement<HTMLElement>("#resume-fork-max");
-const resumeForkInput = requireElement<HTMLInputElement>(
-  "#resume-fork-through",
-);
-const resumeForkPreview = requireElement<HTMLElement>(
-  "#resume-fork-preview",
-);
-const resumeForkCancelButton = requireElement<HTMLButtonElement>(
-  "#resume-fork-cancel",
-);
-const resumeForkSubmitButton = requireElement<HTMLButtonElement>(
-  "#resume-fork-submit",
-);
-const resumeRenameForm = requireElement<HTMLFormElement>("#resume-rename-form");
-const resumeRenameInput = requireElement<HTMLInputElement>("#resume-rename-input");
-const resumeRenameCancel = requireElement<HTMLButtonElement>("#resume-rename-cancel");
-const conversationFindModal = requireElement<HTMLElement>(
-  "#conversation-find-modal",
-);
-const conversationFindCloseButton = requireElement<HTMLButtonElement>(
-  "#conversation-find-close",
-);
-const conversationFindInput = requireElement<HTMLInputElement>(
-  "#conversation-find-input",
-);
-const conversationFindList = requireElement<HTMLElement>(
-  "#conversation-find-list",
-);
-const conversationFindCount = requireElement<HTMLElement>(
-  "#conversation-find-count",
-);
-const traceModal = requireElement<HTMLElement>("#trace-modal");
-const traceCloseButton = requireElement<HTMLButtonElement>("#trace-close");
-const traceRefreshButton = requireElement<HTMLButtonElement>("#trace-refresh");
-const traceSummary = requireElement<HTMLElement>("#trace-summary");
-const traceTree = requireElement<HTMLElement>("#trace-tree");
-const traceCount = requireElement<HTMLElement>("#trace-count");
-const traceDetail = requireElement<HTMLElement>("#trace-detail");
-const traceSelectedState = requireElement<HTMLElement>("#trace-selected-state");
-const workspaceDiffToggle = requireElement<HTMLButtonElement>("#workspace-diff-toggle");
-const workspaceDiffModal = requireElement<HTMLElement>("#workspace-diff-modal");
-const workspaceDiffCloseButton = requireElement<HTMLButtonElement>("#workspace-diff-close");
-const workspaceDiffRefreshButton = requireElement<HTMLButtonElement>("#workspace-diff-refresh");
-const workspaceDiffSummary = requireElement<HTMLElement>("#workspace-diff-summary");
-const workspaceDiffList = requireElement<HTMLElement>("#workspace-diff-list");
-
 let state = loadState();
+
 let currentEffort: SettingsSnapshot["effort"] = "";
+
 let currentPricing: SettingsSnapshot["pricing"] = null;
+
 let currentModelOptions: string[] = [];
+
 let approvalModeSync: Promise<void> = Promise.resolve();
+
 const autoApprovedApprovalIds = new Set<string>();
+
 let toastTimer: number | undefined;
+
 let renderFrame: number | undefined;
+
 let renderTarget: { threadId: string; messageId: string } | null = null;
+
 let commandMatches: SlashCommand[] = [...SLASH_COMMANDS];
+
 let commandSelection = 0;
-type PaletteMode = "command" | "file";
+
 let paletteMode: PaletteMode = "command";
+
 let pendingImages: ImageAttachment[] = [];
+
 let fileMatches: string[] = [];
+
 let fileSelection = 0;
+
 let fileCompletionTimer: number | undefined;
+
 let fileCompletionSequence = 0;
+
 let resumeMatches: Thread[] = [];
+
 let resumeSelection = 0;
+
 let resumeQuery = "";
+
 let resumeArchived = false;
+
 let contentHits = new Map<string, SessionSearchHit>();
+
 let contentSearchSequence = 0;
+
 let renameThreadId = "";
+
 let deleteThreadId = "";
+
 let forkThreadId = "";
+
 let forkMessages: ServerMessage[] = [];
+
 let conversationFindMatches: ConversationSearchMatch[] = [];
+
 let conversationFindSelection = 0;
+
 let conversationFindThreadId = "";
+
 let conversationFindMessageId = "";
+
 let traceSpans: TraceSpan[] = [];
+
 let traceAnswers: Record<string, string> = {};
+
 let traceSelectedSpanId = "";
+
 let traceSessionId = "";
+
 let traceLoadSequence = 0;
+
 let workspaceDiff: WorkspaceDiffResponse | null = null;
+
 let workspaceDiffLoadSequence = 0;
+
 let transcriptMode: TranscriptMode = "normal";
+
 let commandReceipt: {
   threadId: string;
   title: string;
@@ -1933,12 +1458,6 @@ function getAssistantTool(message: UiMessage, id: string): ToolEvent | undefined
     .filter((part): part is ToolPart => part.type === "tool")
     .map((part) => part.tool)
     .find((tool) => tool.id === id);
-}
-
-interface StreamContext {
-  thread: Thread;
-  assistant: UiMessage;
-  userMessage?: UiMessage;
 }
 
 function markStreamActivity(context: StreamContext): void {
