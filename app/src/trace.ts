@@ -208,7 +208,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
     <article class="trace-span-card">
       <header>
         <div>
-          <span class="eyebrow">SPAN / ${escapeHtml(span.span_id.slice(0, 12))}</span>
+          <span class="eyebrow">Span ${escapeHtml(span.span_id.slice(0, 12))}</span>
           <h2>${escapeHtml(span.name)}</h2>
         </div>
         <span class="trace-status ${traceStatusClass(span.status)}">${escapeHtml(span.status.toUpperCase())}</span>

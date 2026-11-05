@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1c1c1e" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f5f1" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#151412" />
     <meta name="description" content="AgentLearn local agent workbench" />
     <title>AgentLearn</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -16,7 +16,7 @@
   <body>
     <div class="app-shell" id="app-shell">
       <aside class="thread-rail" id="thread-rail" aria-label="会话列表">
-        <header class="rail-header">
+        <header class="rail-header" data-tauri-drag-region>
           <a class="wordmark" href="/" aria-label="AgentLearn 首页">
             <span class="wordmark-mark" aria-hidden="true">
               <svg viewBox="0 0 24 24" role="img">
@@ -135,7 +135,7 @@
             </div>
             <div class="command-list" id="command-list" role="listbox"></div>
             <div class="command-palette-footer">
-              <span>↑↓ SELECT</span>
+              <span>↑↓ 选择</span>
               <span>Tab 补全</span>
               <span id="command-palette-enter-action">Enter 执行</span>
               <span>Esc 关闭</span>
@@ -143,7 +143,6 @@
           </div>
           <div class="composer-shell" id="composer-shell">
             <div class="composer-heading">
-              <span>输入</span>
               <span id="composer-status">Enter 发送 · Shift+Enter 换行</span>
             </div>
             <div class="composer-attachments" id="composer-attachments" hidden></div>
@@ -158,12 +157,10 @@
             ></textarea>
             <div class="composer-footer">
               <div class="composer-hints">
-                <span><kbd>↵</kbd> 发送</span>
                 <span><kbd>/</kbd> 命令</span>
                 <span><kbd>@</kbd> 文件路径</span>
-                <span><kbd>⇧ ↵</kbd> 换行</span>
                 <span><kbd>⌥ T</kbd> 思考</span>
-                <span><kbd>⌥ S</kbd> Steering</span>
+                <span><kbd>⌥ S</kbd> 插话</span>
                 <span><kbd>⇧ Tab</kbd> 执行</span>
                 <span><kbd>⌘ N</kbd> 新会话</span>
               </div>
@@ -175,10 +172,10 @@
                   title="停止当前运行轮（Esc）"
                   hidden
                 >
-                  STOP
+                  停止
                 </button>
                 <button class="send-button" id="send" type="submit">
-                  <span id="send-label">RUN</span>
+                  <span id="send-label">发送</span>
                   <svg viewBox="0 0 20 20" aria-hidden="true">
                     <path d="M4 10h11M10 5l5 5-5 5" />
                   </svg>
@@ -203,7 +200,7 @@
 
         <section class="run-status-card">
           <span class="mini-label">状态</span>
-          <strong id="run-state">READY</strong>
+          <strong id="run-state">就绪</strong>
           <p id="run-state-copy">等待第一条消息</p>
         </section>
 
@@ -320,7 +317,7 @@
           class="workspace-diff-summary"
           id="workspace-diff-summary"
         >
-          <span>READING GIT STATUS…</span>
+          <span>正在读取 git status…</span>
         </div>
         <div class="workspace-diff-list" id="workspace-diff-list">
           <div class="workspace-diff-empty">正在读取工作区</div>
@@ -363,7 +360,7 @@
           </div>
         </header>
         <div class="trace-summary-line" id="trace-summary">
-          <span>SESSION —</span><span>span 0</span><span>暂无数据</span>
+          <span>会话 —</span><span>span 0</span><span>暂无数据</span>
         </div>
         <div class="trace-workspace">
           <section class="trace-tree-panel">
@@ -435,7 +432,7 @@
             <label class="settings-field">
               <span>模型 ID</span>
               <select id="settings-model" name="model_id"></select>
-              <small id="settings-model-count">READING MODELS…</small>
+              <small id="settings-model-count">正在读取模型列表…</small>
             </label>
 
             <label class="settings-field settings-field-wide">
@@ -524,7 +521,7 @@
           </div>
           <div class="resume-header-actions">
             <button id="resume-rename" type="button">重命名</button>
-            <button id="resume-pin" type="button">PIN</button>
+            <button id="resume-pin" type="button">置顶</button>
             <button
               class="icon-button resume-close"
               id="resume-close"
@@ -538,7 +535,7 @@
           </div>
         </header>
         <div class="resume-index-line">
-          <span>↑↓ SELECT</span>
+          <span>↑↓ 选择</span>
           <span>Enter 续接</span>
           <span>Esc 关闭</span>
           <span>本地界面索引</span>
@@ -662,7 +659,7 @@
           role="listbox"
         ></div>
         <footer class="conversation-find-footer">
-          <span>↑↓ SELECT</span><span>Enter 定位</span><span>Esc 关闭</span>
+          <span>↑↓ 选择</span><span>Enter 定位</span><span>Esc 关闭</span>
           <span id="conversation-find-count">0 MATCHES</span>
         </footer>
       </section>

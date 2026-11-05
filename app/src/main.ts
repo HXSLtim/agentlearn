@@ -36,6 +36,7 @@ import type {
   ActivityItem,
   PaletteMode,
   StreamContext,
+  TraceResponse,
 } from "./types";
 import {
   SlashCommand,
@@ -549,6 +550,49 @@ function mergeServerSessions(sessions: ServerSession[]): void {
   }
 }
 
+// span-tick 的数据源：恢复会话时从 trace 拉一次 turn span 时长，
+// 配到每轮收尾的助手消息（后面跟着用户消息、或全会话最后一条）上。
+// span 按 id 排（store.spans_for），与轮次一一对应；拉不到就静默——
+// 账本不造假，tick 只在真有数据时出现。
+async function hydrateTurnDurations(thread: Thread): Promise<void> {
+  if (!thread.sessionId || durationHydrationTried.has(thread.id)) {
+    return;
+  }
+  durationHydrationTried.add(thread.id);
+  try {
+    const response = await fetch(
+      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}/trace`,
+    );
+    if (!response.ok) {
+      return;
+    }
+    const { spans } = (await response.json()) as TraceResponse;
+    const turnDurations = spans
+      .filter((span) => span.name === "turn" && span.duration_ms !== null)
+      .map((span) => span.duration_ms as number);
+    if (!turnDurations.length) {
+      return;
+    }
+    const closers = thread.messages.filter(
+      (message, index) =>
+        message.role === "assistant" &&
+        (index === thread.messages.length - 1 ||
+          thread.messages[index + 1]?.role === "user"),
+    );
+    closers.forEach((message, index) => {
+      if (message.durationMs === undefined && turnDurations[index] !== undefined) {
+        message.durationMs = turnDurations[index];
+      }
+    });
+    if (thread.id === state.activeThreadId) {
+      renderConversation(false);
+    }
+  } catch (error) {
+    // 拉不到不造数据；warn 一声方便发现接口断了
+    console.warn("span-tick 数据水合失败", error);
+  }
+}
+
 async function fetchServerSessions(
   reportError = false,
   archived = false,
@@ -589,6 +633,8 @@ async function fetchServerSessions(
 }
 
 const hydrationJobs = new Map<string, Promise<void>>();
+// span-tick 数据每个会话拉一次就够（页面生命周期内）
+const durationHydrationTried = new Set<string>();
 
 async function hydrateThread(thread: Thread, force = false): Promise<void> {
   if (!thread.sessionId || (thread.messagesLoaded && !force) || isThreadRunning(thread)) {
@@ -614,6 +660,7 @@ async function hydrateThread(thread: Thread, force = false): Promise<void> {
       thread.messagesLoaded = true;
       thread.updatedAt = Date.now();
       persistState();
+      void hydrateTurnDurations(thread);
       if (thread.id === state.activeThreadId) {
         renderEverything(true);
       } else {
@@ -763,7 +810,7 @@ function emptyStateMarkup(): string {
     <section class="empty-state">
       <header class="empty-boot">
         <span class="eyebrow">新会话 · 本地运行时</span>
-        <span class="empty-signal"><i></i> READY</span>
+        <span class="empty-signal"><i></i> 就绪</span>
       </header>
       <div class="empty-console" aria-label="Agent 已就绪">
         <span class="empty-prefix">agentlearn@local</span>
@@ -794,8 +841,6 @@ function emptyStateMarkup(): string {
         </button>
       </div>
       <div class="empty-footnote">
-        <span>Enter 发送</span>
-        <span>Shift+Enter 换行</span>
         <span>本地 JSONL + SQLite</span>
       </div>
     </section>
@@ -903,6 +948,17 @@ function renderImages(images: ImageAttachment[], label: string): string {
   `;
 }
 
+
+function assistantMaxDurationMs(): number {
+  let max = 0;
+  for (const message of activeThread().messages) {
+    if (message.role === "assistant" && message.durationMs) {
+      max = Math.max(max, message.durationMs);
+    }
+  }
+  return max || 1;
+}
+
 function renderAssistant(message: UiMessage): string {
   const parts = message.parts
     .map((part, index) => {
@@ -985,7 +1041,7 @@ function renderAssistant(message: UiMessage): string {
       ? `<span>结束 · ${escapeHtml(message.stopReason)}</span>`
       : "";
   return `
-    <article class="message assistant-message" data-message-id="${escapeHtml(message.id)}">
+    <article class="message assistant-message${message.streaming ? " is-streaming" : ""}" data-message-id="${escapeHtml(message.id)}">
       <header class="message-heading">
         <span class="message-avatar">A</span>
         <span>智能体</span>
@@ -1001,6 +1057,11 @@ function renderAssistant(message: UiMessage): string {
         ${stop}
         ${message.durationMs !== undefined ? `<span>${message.durationMs}ms</span>` : ""}
       </footer>
+      ${
+        message.durationMs !== undefined && !message.streaming
+          ? `<span class="span-tick" title="本轮耗时 ${message.durationMs}ms · 全会话最长轮为基准"><i style="width: ${Math.max(3, Math.round((message.durationMs / assistantMaxDurationMs()) * 100))}%"></i></span>`
+          : ""
+      }
     </article>
   `;
 }
@@ -1089,9 +1150,7 @@ function filterConversationMatches(query: string): void {
 }
 
 function renderConversationFindList(): void {
-  conversationFindCount.textContent = `${conversationFindMatches.length} MATCH${
-    conversationFindMatches.length === 1 ? "" : "ES"
-  }`;
+  conversationFindCount.textContent = `${conversationFindMatches.length} 条匹配`;
   conversationFindList.innerHTML = conversationFindMatches.length
     ? conversationFindMatches
         .map(
@@ -1135,6 +1194,9 @@ function applyConversationFindHighlight(): void {
 
 function renderConversation(forceBottom = false): void {
   const thread = activeThread();
+  if (thread.sessionId) {
+    void hydrateTurnDurations(thread);
+  }
   const nearBottom =
     conversationScroll.scrollHeight -
       conversationScroll.scrollTop -
