@@ -130,7 +130,6 @@ def _run_tui(session_id: str | None) -> None:
                 session_id,
                 approval=approval,
                 plan_broker=plans,
-                capability_loader=load_capabilities,
             )
         except ValueError as exc:
             raise SystemExit(str(exc))
