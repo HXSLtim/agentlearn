@@ -1,22 +1,30 @@
-"""TUI 的黑绿控制台配色。
+"""TUI 的 Apple 深色语义配色。
 
-与 desktop 共享“近黑画布、酸性绿信号、硬边框控制台”的视觉方向；
-具体色值分别维护，Textual 的语义色、光标、选区和滚动条都从这里落。
+与 desktop 共享「Apple 设计语言」的视觉方向：深灰画布、系统蓝强调、
+语义状态色（红/橙/青/绿各归其位）。终端里没有 SF 字体和毛玻璃，
+能带走的是色彩体系——具体色值分别维护，Textual 的语义色、光标、
+选区和滚动条都从这里落。常量名沿用拆分前的一套（PAPER=前景、
+INK=画布……），改的是值不是词汇表，chat/ 包里的 CSS 引用零改动。
 """
 from textual.app import App
 from textual.theme import Theme
 
-INK = "#050705"
-PANEL = "#0b0f0b"
-PANEL_RAISED = "#101710"
-PAPER = "#e2eadb"
-MUTED = "#87947f"
-DIM = "#68765f"
-SIGNAL = "#b8ff4a"
-TOOL = "#8ee85a"
-WARN = "#ffc857"
-ERROR = "#ff604d"
-LINE = "#34472d"
+# Apple 深色模式语义色（macOS HIG）：
+#   画布 1C1C1E（systemBackground）、浮层 2C2C2E（tertiarySystemBackground）
+#   文本 F5F5F7（label）、分隔线 3A3A3C（separator）
+#   强调 0A84FF（systemBlue）、红 FF453A / 橙 FF9F0A / 青 64D2FF / 绿 30D158
+INK = "#1c1c1e"
+PANEL = "#242426"
+PANEL_RAISED = "#2c2c2e"
+PAPER = "#f5f5f7"
+MUTED = "#98989d"
+DIM = "#6e6e73"
+SIGNAL = "#0a84ff"
+TOOL = "#64d2ff"
+WARN = "#ff9f0a"
+ERROR = "#ff453a"
+LINE = "#3a3a3c"
+SUCCESS = "#30d158"
 
 
 AGENTLEARN_THEME = Theme(
@@ -25,7 +33,7 @@ AGENTLEARN_THEME = Theme(
     secondary=TOOL,
     warning=WARN,
     error=ERROR,
-    success=TOOL,
+    success=SUCCESS,
     accent=SIGNAL,
     foreground=PAPER,
     background=INK,
@@ -46,15 +54,15 @@ AGENTLEARN_THEME = Theme(
         "scrollbar": LINE,
         "scrollbar-active": SIGNAL,
         "scrollbar-hover": SIGNAL,
-        "scrollbar-background": PANEL,
+        "scrollbar-background": INK,
         "scrollbar-background-active": PANEL,
         "scrollbar-background-hover": PANEL,
         "scrollbar-corner-color": PANEL,
         "text-primary": SIGNAL,
-        "text-secondary": TOOL,
+        "text-secondary": MUTED,
         "text-muted": MUTED,
         "text-disabled": DIM,
-        "text-success": TOOL,
+        "text-success": SUCCESS,
         "text-warning": WARN,
         "text-error": ERROR,
     },
