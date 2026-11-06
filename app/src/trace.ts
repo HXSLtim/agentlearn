@@ -28,11 +28,12 @@ function traceDuration(span: TraceSpan): string {
   return span.duration_ms === null ? "进行中" : `${span.duration_ms}ms`;
 }
 
-// 状态类名跟后端枚举走（is-ok / is-error / is-running），展示文字走中文。
+// 状态类名跟后端枚举走（is-ok / is-error / is-running / is-cancelled），展示文字走中文。
 const TRACE_STATUS_LABELS: Record<string, string> = {
   ok: "正常",
   error: "错误",
   running: "运行中",
+  cancelled: "已取消",
 };
 
 function traceStatusLabel(status: TraceSpan["status"]): string {

@@ -2,6 +2,26 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-06（二十一）：断连的轮次不再假「运行中」
+
+- 起因：会话 `1738cd58` 积了三对永久 `running` 的 turn + llm_request
+  span，界面一直显示「还在跑」；服务端实测空闲——是 SSE 客户端在
+  L4 压缩静默期断开后，GeneratorExit 按 D11 旧策略留下 running。
+- 后端：`turn()` 改成 `yield from` 薄包装，捕获 GeneratorExit 后把
+  本轮未收尾的 span（turn / llm_request / tool_call）统一收成
+  `cancelled` + end_time + 断连注记；新增 `_start_span` / `_end_span`
+  维护每轮清单。半截回答仍不落盘，tool_use/tool_result 配对补齐不变
+  （D33 修订 D11）。
+- 桌面端：Stop 收到 `POST /stop` 的 `active=false` 时把本地这轮就地
+  收线——助手消息标「已取消」、卡在 waiting/running 的工具卡收成
+  错误结果（不再永远「等待结果…」）、并 abort 还挂着的 SSE 读；
+  abort 触发的异常不再覆盖成「错误」。
+- trace：状态表补 `cancelled → 已取消` 中文标签（TUI 早已按 cancelled
+  着色，两端口径一致）。
+- 验证：离线假 client drill 覆盖流中途断开 / 工具结果处断开 / 请求后收尾前断开 / 正常
+  跑完 / 抢占五条路径，span 终态全部符合预期；`npm run build`、
+  `compileall` 通过。旧库里已积的 running 行不追改（TODO 清扫欠账）。
+
 ## 2026-11-05（二十）：可回放时间戳与细节收口
 
 - JSONL 每行在落盘时由存储层加盖 `ts`（秒），`to_dict()` 仍只给

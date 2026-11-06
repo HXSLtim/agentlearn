@@ -857,3 +857,35 @@ OpenAI 的出站 payload，不能把 `ts` 混进发给模型的形状里。
 `role/content`（离线临时目录验证）；旧行无 `ts` 仍能读取；desktop
 恢复 18 轮会话时消息时间不再全部相同，`npm run build` 与
 `compileall` 通过。
+
+## D33 断连的轮次把 span 收成 cancelled（修订 D11，2026-11-06）
+
+D11 的策略是「断连留 running，如实反映这轮没跑完」。实际运行下来
+它撒的谎比说的真话多：会话 `1738cd58` 三天里积了三对永久 `running`
+的 turn + llm_request span（两次在不该关窗时关窗，一次在 L4 压缩的
+8 秒静默期里 SSE 客户端消失）。trace 里它和真在跑的轮次长得一样，
+桌面端界面也分不清——而且「还在跑」的判断会一直传下去，Stop 按钮
+拿着后端诚实的 `active=false` 却清不掉本地的 streaming 标志，只能
+刷新页面。没跑完是事实，但「没结束」不是。
+
+**决定**：
+
+- 断连终态用 `cancelled`，不用 `aborted`（不新增状态，和一键停止 /
+  抢占收尾同一个词），也不改成功率统计的口径。
+- `turn()` 变成一层薄包装（循环本体移进 `_turn_impl`），`yield from`
+  之下捕获 `GeneratorExit`，把本轮还开着的 span 统一收成 cancelled
+  + end_time + `{"note": "客户端断开，本轮中止"}`。改用 `_start_span`
+  / `_end_span` 记账：每个 turn 一份「未收尾清单」，正常收尾即摘除。
+  循环里的三个 `except GeneratorExit`（补 tool_result 配对）不动。
+- 内容落盘语义不变：半截回答仍然丢弃，配对补齐仍然照旧。
+- desktop 的 Stop 收到 `active=false` 时把本地这轮收线：助手消息
+  标 cancelled、卡在 running/waiting 的工具卡收成错误结果、abort
+  还挂着的 SSE 读；runChatRequest 不再把 abort 的异常盖成「错误」。
+
+**验收**：离线假 client drill 五条收场——流中途 close（turn 与
+llm_request 均 cancelled 且有 end_time）、tool_result 事件处 close
+（turn cancelled、llm_request 与 tool_call 已 ok）、请求已收尾但轮次
+未走完时 close（turn cancelled、llm_request ok）、正常跑完（全 ok）、
+抢占（TurnCancelled 语义不变，两个 span cancelled）全部通过；
+`compileall` 与 `npm run build` 通过。旧库遗留的 running 行不追改，
+按 TODO 的清扫欠账处理。

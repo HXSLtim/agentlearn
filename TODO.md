@@ -82,7 +82,14 @@ desktop / TUI 还没接上的界面：
 - [ ] 前端 API 地址可配置。验收：`app/src/main.ts` 不再写死 `http://127.0.0.1:8000`，`main.py desktop --port` 改端口后前端能跟上。
 - [ ] 替换 Tauri 模板图标为 AgentLearn 图标。
 - [ ] 顶层包名出现冲突时，再把 `domain` / `application` / `infrastructure` / `interfaces` 收成 `agentlearn.*`。验收：现在不改；`server/pyproject.toml` 的 `packages.find.where = src` 就是现状。
-- [ ] 有成功率统计需求时，再把客户端断开的 `GeneratorExit` 收成 `aborted`。验收：没有这个需求之前，span 继续停在 running（D11）。这一条不和上面的「断连补齐 tool_result」混为一谈。
+- [x] 客户端断开的 `GeneratorExit` 收成 `cancelled`（2026-11-06，D33）：不改
+      成功率统计的语义，只解决「trace 永久挂运行中、界面分不清假运行」。
+      turn 外层包一层 `yield from`，把本轮还开着的 span（turn / llm_request /
+      tool_call）统一收成 cancelled + end_time + 断连注记；桌面端 Stop 在
+      后端回 `active=false` 时把本地 streaming 收线并掐掉挂着的 SSE 读，
+      不再只能靠刷新恢复。离线假 client 验证流中途断开、工具结果处断开、请求后收尾前
+      断开、正常收尾、抢占各条路径的 span 终态；`npm run build`、`compileall` 通过。
+      旧库里已积的 running 行仍按文末欠账处理。
 - [ ] 「墨与琥珀」浅色主题里 11px 琥珀小字（eyebrow / 状态 / 快捷键提示）对纸底只有约 3.5:1，低于 AA 的 4.5:1；大标题与描边不受影响。验收：要么加一档 `--accent-text`（浅色用 `#a85510`、深色仍用 `#eda03c`）只套小字，要么明确记录 accent 小字只是装饰、正文信息不用它。依据：2026-11-05 细节巡检按 WCAG 公式算得，属既有取色，不阻塞当前工作。
 
 路线图后段（层本身已完成，这里是剩下的事）：
@@ -284,7 +291,7 @@ P1 / P2 里没做完的条目已逐条拆到文首，这里只留已完成记录
 
 ## 已知欠账
 
-未勾的欠账已逐条拆到文首。D17 的取舍不变：`data/sandbox` 只是起跑点，不是安全边界；对外服务前要容器化或独立用户。断连 span 停在 running 仍是 D11 的刻意选择，和文首「断连补齐 tool_result」不是同一件事。
+未勾的欠账已逐条拆到文首。D17 的取舍不变：`data/sandbox` 只是起跑点，不是安全边界；对外服务前要容器化或独立用户。断连 span 自 D33 起收成 cancelled，和文首「断连补齐 tool_result」不是同一件事。
 
 - [x] 换挡对模型不透明（2026-11-03，D21）：system 的运行态段写着当前模型和
       effort_note（留空和 off 写成「未设置」），和 trace 是同一个值。
@@ -309,6 +316,6 @@ P1 / P2 里没做完的条目已逐条拆到文首，这里只留已完成记录
 - [ ] 模型请求超时已兜底（D31），但 `/stop` 仍打断不了「正在读」的
   单个请求——它要等读超时（最长 timeout_s）才回到检查点。真·即时取消
   需要把同步 SDK 调用挪到可取消的线程/异步模型，暂不值。
-- [ ] 历史遗留的 `running` span（客户端断开/超时之前的旧轮）没有回收；
-  trace 里会一直显示运行中。要么接受这是「如实记录」，要么做启动时
-  清扫（按 span 起始时间超过阈值标 error）。
+- [ ] 历史遗留的 `running` span（D33 之前客户端断开留下的旧轮）没有回收；
+  trace 里会一直显示运行中。新断连不再产生这类行；要么接受旧行是历史证据，
+  要么做一次性清扫（按 span 起始时间超过阈值标 cancelled）。

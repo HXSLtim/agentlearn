@@ -143,6 +143,10 @@ class Conversation:
         # 检查点散落在循环各处、拿不到局部变量，挂在自己身上。
         # TUI 串行复用同一个 Conversation，每次 turn() 开头覆盖，安全。
         self._turn_span: str | None = None
+        # 本轮开了还没收尾的 span。GeneratorExit 只会落在 yield 上，而 yield
+        # 散在循环各处、拿不到局部变量；这里记一份，生成器被消费者关闭时
+        # （web 端 SSE 断开）统一收成 cancelled，trace 不再永久挂「运行中」。
+        self._open_spans: list[str] = []
         # 最近一轮的结束原因，turn 完整跑完才有值。
         # 带 tools 的一轮可能经历多次请求，这里是最后一次的。
         self.stop_reason: str | None = None
@@ -214,8 +218,7 @@ class Conversation:
             for row in self.store.spans_for(self.session_id)
         ):
             return None
-        span = self.store.start_span(
-            self.session_id,
+        span = self._start_span(
             "context_warning",
             parent_id=turn_span,
             data={
@@ -224,7 +227,7 @@ class Conversation:
                 "ratio": round(ratio, 3),
             },
         )
-        self.store.end_span(span, status="ok")
+        self._end_span(span, status="ok")
         return {
             "kind": "context_warning",
             "estimate_tokens": estimate_tokens_total,
@@ -395,8 +398,7 @@ class Conversation:
             prompt = compaction.build_summary_prompt(
                 summary_text, compaction.render_for_summary(history[covered:cut])
             )
-            span = self.store.start_span(
-                self.session_id,
+            span = self._start_span(
                 "llm_request",
                 parent_id=turn_span,
                 data={
@@ -421,15 +423,15 @@ class Conversation:
                     # 已花的压缩 token 记在 cancelled 的 span 上。
                     self._checkpoint()
             except TurnCancelled:
-                self.store.end_span(span, status="cancelled")
+                self._end_span(span, status="cancelled")
                 raise
             except Exception as e:
                 # 摘要是派生物，压不成不该拖垮对话。沿用旧摘要对应的
                 # covered 边界：把已覆盖原文再发一遍会让模型看到两份事实。
-                self.store.end_span(span, status="error", data={"message": str(e)})
+                self._end_span(span, status="error", data={"message": str(e)})
                 return history[covered:], summary_text, covered
             new_text = "".join(pieces).strip() or summary_text
-            self.store.end_span(
+            self._end_span(
                 span,
                 status="ok",
                 data={**chat.usage, "summary_chars": len(new_text)},
@@ -450,6 +452,41 @@ class Conversation:
                 return getter()
         return self.approval_mode
 
+    def _start_span(
+        self,
+        name: str,
+        parent_id: str | None = None,
+        data: dict | None = None,
+    ) -> str:
+        """开 span 并登记进本轮未收尾清单——断连收尾要靠这份清单找回 id。"""
+        span_id = self.store.start_span(
+            self.session_id, name, parent_id=parent_id, data=data
+        )
+        self._open_spans.append(span_id)
+        return span_id
+
+    def _end_span(
+        self, span_id: str, status: str = "ok", data: dict | None = None
+    ) -> None:
+        """收 span：先摘出清单再回填。正常收尾的不再出现在断连收尾里。"""
+        if span_id in self._open_spans:
+            self._open_spans.remove(span_id)
+        self.store.end_span(span_id, status=status, data=data)
+
+    def _abort_open_spans(self) -> None:
+        """生成器被提前关闭（客户端断开）时，把本轮还开着的 span 收成 cancelled。
+
+        GeneratorExit 不是 Exception 的子类，循环里的 except 都接不住；
+        不收尾就会永久停在 running——D11 原策略说这叫「如实反映没跑完」，
+        但 trace 上它和真在跑的轮次长得一模一样（都是「运行中」+ 无限时长），
+        实际观感是假运行、还越积越多。cancelled 才是如实：没跑完，但结束了。
+        """
+        while self._open_spans:
+            span_id = self._open_spans.pop()
+            self._end_span(
+                span_id, status="cancelled", data={"note": "客户端断开，本轮中止"}
+            )
+
     def _checkpoint(self) -> None:
         """抢占检查点：在把事件交给消费者之后、开新的厂商请求之前调用。
 
@@ -461,7 +498,7 @@ class Conversation:
         """
         if self.steering is not None and self.steering.cancelled():
             if self._turn_span:
-                self.store.end_span(
+                self._end_span(
                     self._turn_span, status="cancelled",
                     data={"note": "被抢占打断，半截回答未落盘"},
                 )
@@ -474,7 +511,7 @@ class Conversation:
 
         GeneratorExit 可能落在 tool_use、审批或 tool_result 事件上；这里
         不猜断点，只对照 assistant 块补缺失结果，并把已有结果一起落盘。
-        span 不顺手收尾——断连留 running 是 D11 的证据策略。
+        span 不在这里收——turn 外层统一按 cancelled 收尾（见 _abort_open_spans）。
         """
         completed_ids = {result.tool_use_id for result in results}
         missing = [
@@ -493,6 +530,33 @@ class Conversation:
             self.transcript.append(self.session_id, Message("user", results))
 
     def turn(
+        self,
+        question: str,
+        origin: str = "",
+        append_user: bool = True,
+        images: list[ImageBlock] | None = None,
+        plan_mode: bool = False,
+    ):
+        """跑一轮对话。公共入口只做一件循环体里做不到的事，循环在 _turn_impl。
+
+        消费者提前关闭生成器（web 端 SSE 断开 → close()）时，GeneratorExit
+        会从内层冒出来。它不是 Exception 的子类，循环里的 except 接不住；
+        在这里统一把本轮还开着的 span 收成 cancelled 再放行，trace 才不会
+        永久停在「运行中」。
+        """
+        try:
+            yield from self._turn_impl(
+                question,
+                origin=origin,
+                append_user=append_user,
+                images=images,
+                plan_mode=plan_mode,
+            )
+        except GeneratorExit:
+            self._abort_open_spans()
+            raise
+
+    def _turn_impl(
         self,
         question: str,
         origin: str = "",
@@ -550,13 +614,15 @@ class Conversation:
                     "（可能已重试过、轮次已成功、或还没问过）。"
                 )
 
+        # 本轮新的未收尾清单：上一轮若被异常打断，残留的旧清单不归这轮管，
+        # 不能拿它去收尾（那会把别的轮次的 span 标成这次的断连）。
+        self._open_spans = []
         # turn span：整轮的根，不挂父。它下面的所有 span 都算这轮的开销。
         # origin：这轮是谁发起的——空 = 界面里的人敲的；"trigger:<名>"
         # = 无人值守轮（D27）。trace 里区分「人的轮次」和「它自己的轮次」
         # 全靠这一个字段。
-        turn_span = self.store.start_span(
-            self.session_id, "turn",
-            data={"origin": origin} if origin else None,
+        turn_span = self._start_span(
+            "turn", data={"origin": origin} if origin else None
         )
         self._turn_span = turn_span
 
@@ -622,8 +688,8 @@ class Conversation:
             }
             if covered:
                 span_data["compaction_covered"] = covered
-            llm_span = self.store.start_span(
-                self.session_id, "llm_request", parent_id=turn_span, data=span_data
+            llm_span = self._start_span(
+                "llm_request", parent_id=turn_span, data=span_data
             )
 
             # TTFT（首 token 延迟）：从发起请求到第一个片段回来。
@@ -647,16 +713,17 @@ class Conversation:
             except TurnCancelled:
                 # 被抢占不是出错：llm span 收成 cancelled（这次请求是被掐的），
                 # turn span 已由 _checkpoint 收尾，这里只结束自己这一层再往外抛。
-                self.store.end_span(llm_span, status="cancelled")
+                self._end_span(llm_span, status="cancelled")
                 raise
             except Exception as e:
                 # 出错：两个 span 都标 error，错误消息记在子 span 上（离错误最近）。
-                self.store.end_span(llm_span, status="error", data={"message": str(e)})
-                self.store.end_span(turn_span, status="error")
+                self._end_span(llm_span, status="error", data={"message": str(e)})
+                self._end_span(turn_span, status="error")
                 raise
             # 注意：客户端中途断开（web 端 SSE 被掐掉）时，生成器收到的是
             # GeneratorExit，它不是 Exception 的子类，不走上面的 except——
-            # span 就停在 running、end_time 为空，如实反映「这轮没跑完」。
+            # 未收尾的 llm/turn span 由 turn 外层的 _abort_open_spans 统一
+            # 记成 cancelled（D33 修订了 D11「留 running」的旧策略）。
 
             # 完整内容块从客户端拿（Anthropic：最终消息，含 signature 和解析好的
             # 入参；OpenAI：流里拼好）。落盘用完整块，不用展示片段。
@@ -671,7 +738,7 @@ class Conversation:
                 data["effort"] = chat.effort_note
             self.turn_usage_tokens += self._usage_tokens(chat.usage)
             usage_snapshot = self._record_usage(chat.usage)
-            self.store.end_span(llm_span, status="ok", data=data)
+            self._end_span(llm_span, status="ok", data=data)
             yield {"kind": "usage", "usage": usage_snapshot}
             warning = self._context_warning(
                 self.transcript.read(self.session_id),
@@ -697,7 +764,7 @@ class Conversation:
                             self.session_id, plan_text
                         )
                 end_data = {"plan_id": plan_id} if plan_id else None
-                self.store.end_span(turn_span, status="ok", data=end_data)
+                self._end_span(turn_span, status="ok", data=end_data)
                 if plan_id:
                     yield {
                         "kind": "plan",
@@ -726,8 +793,7 @@ class Conversation:
                     self._append_disconnect_tool_results(blocks, results)
                     raise
                 approval_mode = self._approval_mode_now()
-                tool_span = self.store.start_span(
-                    self.session_id,
+                tool_span = self._start_span(
                     "tool_call",
                     parent_id=turn_span,
                     data={
@@ -824,7 +890,7 @@ class Conversation:
                     # 图绝不进 span（D11：spans 只记控制流，base64 一张几十 K），
                     # 记个大小留痕：这张图进过模型上下文。
                     span_data["image_bytes"] = len(image.data) * 3 // 4
-                self.store.end_span(tool_span, status=status, data=span_data)
+                self._end_span(tool_span, status=status, data=span_data)
                 # 耗时用 span 的起止时间，和 trace 回放是同一个算法（store.span_duration_ms）：
                 # 前端看到的 elapsed_ms 跟 `main.py trace` 打出来的毫秒数一致。
                 elapsed_ms = self.store.span_duration_ms(tool_span)
@@ -859,4 +925,4 @@ class Conversation:
             # 强行收住并在轨迹里留痕；stop_reason 保持最后一次的 "tool_use"，
             # 如实反映「是我不想再跑了」，不是模型说完了。
             self.stop_reason = chat.stop_reason
-            self.store.end_span(turn_span, status="ok", data={"note": "达到工具轮数上限"})
+            self._end_span(turn_span, status="ok", data={"note": "达到工具轮数上限"})

@@ -2184,6 +2184,10 @@ async function submitSteering(
   );
 }
 
+// 每个线程当前那次 SSE 流的控制器。断流收线时（后端说没在跑）用它把
+// 还挂着的读掐掉——否则 fetch 永远 pending，前端只能靠刷新恢复。
+const streamingControllers = new Map<string, AbortController>();
+
 async function runChatRequest(
   context: StreamContext,
   question: string,
@@ -2194,6 +2198,8 @@ async function runChatRequest(
   planId = "",
 ): Promise<void> {
   const { thread } = context;
+  const controller = new AbortController();
+  streamingControllers.set(thread.id, controller);
   let gotDone = false;
   let receivedError = false;
   let acknowledged = false;
@@ -2219,6 +2225,7 @@ async function runChatRequest(
         ...(planMode ? { plan_mode: true } : {}),
         ...(planId ? { plan_id: planId } : {}),
       }),
+      signal: controller.signal,
     });
     if (!response.ok) {
       throw new Error(await readError(response));
@@ -2243,19 +2250,26 @@ async function runChatRequest(
       throw new Error("SSE 连接结束但没有收到 done 事件");
     }
   } catch (error) {
-    const message =
-      error instanceof TypeError
-        ? "连不上本地后端。先在 server/ 运行：uv run python main.py desktop"
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    context.assistant.error = message;
-    if (context.userMessage?.steeringState) {
-      context.userMessage.steeringState = "failed";
+    // 被 stopActiveTurn 主动掐断的流：本地状态已经按「已中断」收过线，
+    // 不要把 abort 的异常再标成错误盖上去。
+    if (!controller.signal.aborted) {
+      const message =
+        error instanceof TypeError
+          ? "连不上本地后端。先在 server/ 运行：uv run python main.py desktop"
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      context.assistant.error = message;
+      if (context.userMessage?.steeringState) {
+        context.userMessage.steeringState = "failed";
+      }
+      thread.stopReason = "error";
+      showToast(message);
     }
-    thread.stopReason = "error";
-    showToast(message);
   } finally {
+    if (streamingControllers.get(thread.id) === controller) {
+      streamingControllers.delete(thread.id);
+    }
     context.assistant.streaming = false;
     context.assistant.queued = false;
     thread.stopping = false;
@@ -2286,6 +2300,35 @@ async function runChatRequest(
   }
 }
 
+function finalizeInterruptedTurn(thread: Thread): void {
+  // 只收「本地以为在跑」的那条助手消息：done/cancelled 事件既然到不了，
+  // 它没有别的机会收线。卡在假 running/waiting 的工具卡一并收成错误结果，
+  // 不然「等待结果…」会永远转下去。
+  const assistant = runningAssistant(thread);
+  if (assistant) {
+    for (const tool of assistantTools(assistant)) {
+      if (tool.state !== "done") {
+        tool.state = "done";
+        tool.isError = true;
+        tool.output = tool.output || "连接中断，没有拿到结果。";
+        tool.elapsedMs = undefined;
+        tool.approvalId = undefined;
+      }
+    }
+    assistant.streaming = false;
+    assistant.queued = false;
+    assistant.stopReason = "cancelled";
+    assistant.durationMs ??= Date.now() - assistant.createdAt;
+  }
+  thread.stopReason = "cancelled";
+  thread.stopping = false;
+  thread.runStartedAt = undefined;
+  // 掐掉还挂着的读——正是它让这轮看起来永远在跑。
+  streamingControllers.get(thread.id)?.abort();
+  streamingControllers.delete(thread.id);
+  schedulePersist();
+}
+
 async function stopActiveTurn(thread = activeThread()): Promise<void> {
   if (!thread.sessionId || !isThreadRunning(thread) || thread.stopping) {
     if (!isThreadRunning(thread)) {
@@ -2309,8 +2352,10 @@ async function stopActiveTurn(thread = activeThread()): Promise<void> {
     }
     const result = (await response.json()) as StopResponse;
     if (!result.active) {
-      thread.stopping = false;
-      showToast("后端没有正在运行的轮次；本地事件流可能刚刚结束");
+      // 后端如实说「没在跑」：本地的 streaming 是断流残留——SSE 客户端
+      // 先断了，done/error 永远到不了。就地收线，让 Stop 真能解锁。
+      finalizeInterruptedTurn(thread);
+      showToast("后端没有正在运行的轮次，本地这轮已收为中断");
       if (thread.id === state.activeThreadId) {
         renderEverything();
       }
