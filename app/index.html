@@ -184,7 +184,7 @@
             </div>
           </div>
           <p class="composer-note">
-            本地模型调用 · 工具执行与 trace 留在本机
+            本地模型调用 · 工具执行与轨迹留在本机
           </p>
         </form>
       </main>
@@ -544,10 +544,10 @@
         <div class="resume-actions">
           <div class="resume-view-toggle" role="group" aria-label="会话视图">
             <button id="resume-active-view" type="button" aria-pressed="true">
-              ACTIVE
+              进行中
             </button>
             <button id="resume-archive-view" type="button" aria-pressed="false">
-              ARCHIVED
+              已归档
             </button>
           </div>
           <div class="resume-session-actions">
@@ -559,12 +559,12 @@
         <div class="resume-delete-confirm" id="resume-delete-confirm" hidden>
           <p>
             永久删除 <strong id="resume-delete-title"></strong>？
-            JSONL、trace 和摘要会一起消失，不可恢复。
+            JSONL、轨迹和摘要会一起消失，不可恢复。
           </p>
           <div>
             <button id="resume-delete-cancel" type="button">取消</button>
             <button id="resume-delete-confirm-button" type="button">
-              DELETE FOREVER
+              永久删除
             </button>
           </div>
         </div>
@@ -589,11 +589,11 @@
           </div>
         </form>
         <label class="resume-search-field">
-          <span>过滤索引</span>
+          <span>检索</span>
           <input
             id="resume-search"
             type="search"
-            placeholder="按标题、id、模型、stop reason 或正文搜索…"
+            placeholder="按标题、id、模型、结束原因或正文搜索…"
             autocomplete="off"
             spellcheck="false"
           />
@@ -660,11 +660,15 @@
         ></div>
         <footer class="conversation-find-footer">
           <span>↑↓ 选择</span><span>Enter 定位</span><span>Esc 关闭</span>
-          <span id="conversation-find-count">0 MATCHES</span>
+          <span id="conversation-find-count">0 条匹配</span>
         </footer>
       </section>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <div class="context-menu" id="thread-context-menu" role="menu" hidden>
+      <button type="button" role="menuitem" id="copy-session-id">复制会话 ID</button>
+    </div>
   </body>
 </html>

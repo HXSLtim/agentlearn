@@ -25,7 +25,18 @@ let traceSessionId = "";
 let traceLoadSequence = 0;
 
 function traceDuration(span: TraceSpan): string {
-  return span.duration_ms === null ? "open" : `${span.duration_ms}ms`;
+  return span.duration_ms === null ? "进行中" : `${span.duration_ms}ms`;
+}
+
+// 状态类名跟后端枚举走（is-ok / is-error / is-running），展示文字走中文。
+const TRACE_STATUS_LABELS: Record<string, string> = {
+  ok: "正常",
+  error: "错误",
+  running: "运行中",
+};
+
+function traceStatusLabel(status: TraceSpan["status"]): string {
+  return TRACE_STATUS_LABELS[status] ?? status;
 }
 
 function traceStatusClass(status: TraceSpan["status"]): string {
@@ -36,7 +47,7 @@ function traceSpanHint(span: TraceSpan): string {
   if (span.name === "llm_request") {
     const ttft = span.data.ttft_ms;
     const model = span.data.model;
-    return [model, ttft !== undefined && ttft !== null ? `ttft ${ttft}ms` : ""]
+    return [model, ttft !== undefined && ttft !== null ? `首字 ${ttft}ms` : ""]
       .filter(Boolean)
       .join(" · ");
   }
@@ -82,7 +93,7 @@ function traceTreeMarkup(): string {
         <span class="trace-node-dot ${traceStatusClass(span.status)}" aria-hidden="true"></span>
         <span class="trace-node-main">
           <strong>${escapeHtml(span.name)}</strong>
-          <small>${escapeHtml(span.status)} · ${traceDuration(span)}${hint ? ` · ${escapeHtml(hint)}` : ""}</small>
+          <small>${escapeHtml(traceStatusLabel(span.status))} · ${traceDuration(span)}${hint ? ` · ${escapeHtml(hint)}` : ""}</small>
         </span>
       </button>
       ${(children.get(span.span_id) ?? [])
@@ -145,15 +156,15 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
       <section class="trace-detail-section">
         <h3>模型请求</h3>
         <div class="trace-fields">
-          ${traceField("model", data.model)}
-          ${traceField("messages", data.messages)}
-          ${traceField("ttft", data.ttft_ms === undefined ? "—" : `${data.ttft_ms}ms`)}
-          ${traceField("stop", data.stop_reason)}
-          ${traceField("effort", data.effort)}
-          ${traceField("tokens", `in ${data.input_tokens ?? "—"} / out ${data.output_tokens ?? "—"}`)}
+          ${traceField("模型", data.model)}
+          ${traceField("消息", data.messages)}
+          ${traceField("首字", data.ttft_ms === undefined ? "—" : `${data.ttft_ms}ms`)}
+          ${traceField("结束原因", data.stop_reason)}
+          ${traceField("思考强度", data.effort)}
+          ${traceField("token", `入 ${data.input_tokens ?? "—"} / 出 ${data.output_tokens ?? "—"}`)}
           ${traceField(
-            "cache",
-            `read ${data.cache_read_tokens ?? "—"} / write ${data.cache_write_tokens ?? "—"} / hit ${data.cache_hit_ratio ?? "—"}‰`,
+            "缓存",
+            `读 ${data.cache_read_tokens ?? "—"} / 写 ${data.cache_write_tokens ?? "—"} / 命中 ${data.cache_hit_ratio ?? "—"}‰`,
           )}
         </div>
       </section>
@@ -163,7 +174,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
       <section class="trace-detail-section">
         <h3>工具调用</h3>
         <div class="trace-fields">
-          ${traceField("tool", data.tool)}
+          ${traceField("工具", data.tool)}
         </div>
       </section>
       <section class="trace-detail-section">
@@ -211,13 +222,13 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
           <span class="eyebrow">Span ${escapeHtml(span.span_id.slice(0, 12))}</span>
           <h2>${escapeHtml(span.name)}</h2>
         </div>
-        <span class="trace-status ${traceStatusClass(span.status)}">${escapeHtml(span.status.toUpperCase())}</span>
+        <span class="trace-status ${traceStatusClass(span.status)}">${escapeHtml(traceStatusLabel(span.status))}</span>
       </header>
       <div class="trace-fields trace-span-meta">
-        ${traceField("duration", traceDuration(span))}
-        ${traceField("start", localStart)}
-        ${traceField("end", localEnd)}
-        ${traceField("parent", span.parent_id ?? "root")}
+        ${traceField("耗时", traceDuration(span))}
+        ${traceField("开始", localStart)}
+        ${traceField("结束", localEnd)}
+        ${traceField("父 span", span.parent_id ?? "根")}
       </div>
       ${body || `<div class="trace-empty"><p>这段 span 没有附加数据。</p></div>`}
     </article>
@@ -230,7 +241,7 @@ function selectTraceSpan(spanId: string): void {
   traceTree.innerHTML = traceTreeMarkup();
   traceDetail.innerHTML = traceDetailMarkup(span);
   traceSelectedState.textContent = span
-    ? `${span.status.toUpperCase()} · ${traceDuration(span)}`
+    ? `${traceStatusLabel(span.status)} · ${traceDuration(span)}`
     : "等待选择";
 }
 

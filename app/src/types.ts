@@ -279,6 +279,8 @@ export interface ServerContentBlock {
 export interface ServerMessage {
   role: "user" | "assistant";
   content: ServerContentBlock[];
+  /** JSONL 落盘时间（秒）；老数据没有这个键。 */
+  ts?: number | null;
 }
 
 export interface TraceSpan {

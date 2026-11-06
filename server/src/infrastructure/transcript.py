@@ -12,6 +12,7 @@ JSONL 就是「一行一个 JSON」：一行是一条 Message，文件从上到�
 """
 import json
 import re
+import time
 from pathlib import Path
 
 # 只依赖 domain，不依赖任何 SDK。
@@ -66,21 +67,30 @@ class Transcript:
         # parents=True 连同父目录一起建，exist_ok=True 目录已在时不报错。
         self.directory.mkdir(parents=True, exist_ok=True)
         # ensure_ascii=False：中文原样写进去，而不是写成 \uXXXX。
-        line = json.dumps(message.to_dict(), ensure_ascii=False)
+        # ts 只在存储层加盖：to_dict 同时是 Anthropic 请求的 payload，
+        # 不能把时间戳混进发给模型的消息形状里。
+        payload = message.to_dict()
+        payload.setdefault("ts", time.time())
+        line = json.dumps(payload, ensure_ascii=False)
         # "a" 是追加模式，只在文件末尾写，不会覆盖已有内容。
         with self.path_for(session_id).open("a", encoding="utf-8") as f:
             f.write(line + "\n")
 
-    def read(self, session_id: str) -> list[Message]:
-        """按顺序读出全部消息。文件不存在说明是新会话，返回空列表。"""
+    def read_rows(self, session_id: str) -> list[dict]:
+        """按顺序读出原始字典行（含存储层加盖的 ts）。空行跳过；截断行照样抛。"""
         path = self.path_for(session_id)
         if not path.exists():
             return []
-        messages = []
+        rows = []
         # splitlines 按行切开并去掉行尾换行。
         # 空行跳过，防的是 json.loads("") 报错；真发生截断时那一行是非空的
         # 非法 JSON，照样会抛——宁可报错，不静默丢数据。
         for line in path.read_text(encoding="utf-8").splitlines():
             if line:
-                messages.append(Message.from_dict(json.loads(line)))
-        return messages
+                rows.append(json.loads(line))
+        return rows
+
+    def read(self, session_id: str) -> list[Message]:
+        """按顺序读出全部消息。文件不存在说明是新会话，返回空列表。"""
+        # from_dict 只读 role/content，多出来的 ts 键会被自然忽略。
+        return [Message.from_dict(row) for row in self.read_rows(session_id)]

@@ -241,6 +241,6 @@ export const workspaceDiffToggle = requireElement<HTMLButtonElement>("#workspace
 
 export const workspaceDiffModal = requireElement<HTMLElement>("#workspace-diff-modal");
 
+export const threadContextMenu = requireElement<HTMLElement>("#thread-context-menu");
 
-
-
+export const copySessionIdButton = requireElement<HTMLButtonElement>("#copy-session-id");

@@ -464,7 +464,8 @@ def get_sessions(archived: bool = False):
 def get_session_messages(session_id: str):
     """一个会话的完整内容块（首屏恢复用）。JSONL 仍是唯一事实来源。"""
     _validated_session(session_id)
-    return [message.to_dict() for message in _transcript.read(session_id)]
+    # 直接返回存储行：role/content 形状不变，多带一个落盘时间 ts（老数据没有）。
+    return _transcript.read_rows(session_id)
 
 
 @app.get("/sessions/{session_id}/markdown")

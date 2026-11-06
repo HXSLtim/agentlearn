@@ -834,3 +834,26 @@ focus ring、`titleBarStyle: Overlay` + `hiddenTitle` + 头部拖拽区
 
 **验收**：本地起一个只 accept 不回包的端口，`timeout_s=2` 时 4.5s
 内抛 APITimeoutError（含 1 次重试），此前无限挂起。
+
+## D32 JSONL 落盘时间由存储层加盖（2026-11-05）
+
+恢复旧会话时，desktop 以前只能按下标合成「现在 − N + i」的假时间，
+一整场对话的消息全挤在同一分钟里，span-tick 之外看不出节奏。时间
+是存储事实，不是模型协议：`Message.to_dict()` 同时是 Anthropic /
+OpenAI 的出站 payload，不能把 `ts` 混进发给模型的形状里。
+
+**决定**：
+
+- `Transcript.append` 在 `to_dict()` 的副本上 `setdefault("ts",
+  time.time())` 再写行；秒级浮点，和 span 的起止时间同一时基。
+- `GET /sessions/{id}/messages` 改为返回原始行（`read_rows`），
+  `role/content` 形状不变，多一个可选 `ts`；老行没有这个键也算合法。
+  `read()` 仍按 `Message.from_dict` 还原，`ts` 被自然忽略。
+- 前端只在 `ts` 是有限数字时用它，否则退回合成序时；`/trace` 有
+  turn span 时再用 span 起止回填用户/助手时间（老 JSONL 的补救）。
+- SQLite 索引和 span 形状不动，JSONL 仍是唯一事实来源。
+
+**验收**：新行带正的秒级 `ts`，而 `Message.to_dict()` 的键仍只有
+`role/content`（离线临时目录验证）；旧行无 `ts` 仍能读取；desktop
+恢复 18 轮会话时消息时间不再全部相同，`npm run build` 与
+`compileall` 通过。

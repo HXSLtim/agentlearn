@@ -141,6 +141,8 @@ import {
   traceModal,
   workspaceDiffToggle,
   workspaceDiffModal,
+  threadContextMenu,
+  copySessionIdButton,
 } from "./dom";
 
 import {
@@ -456,7 +458,10 @@ function parseServerMessages(
   const baseTime = Date.now() - messages.length;
 
   for (const [index, message] of messages.entries()) {
-    const createdAt = baseTime + index;
+    const createdAt =
+      typeof message.ts === "number" && Number.isFinite(message.ts)
+        ? message.ts * 1000
+        : baseTime + index;
     if (message.role === "assistant") {
       const assistant: UiMessage = {
         ...createAssistantMessage(),
@@ -576,15 +581,42 @@ async function hydrateTurnDurations(thread: Thread): Promise<void> {
     if (!turnDurations.length) {
       return;
     }
-    const closers = thread.messages.filter(
-      (message, index) =>
-        message.role === "assistant" &&
-        (index === thread.messages.length - 1 ||
-          thread.messages[index + 1]?.role === "user"),
-    );
-    closers.forEach((message, index) => {
-      if (message.durationMs === undefined && turnDurations[index] !== undefined) {
-        message.durationMs = turnDurations[index];
+    // 按用户消息切轮：turns[k] ↔ 第 k 个 turn span，顺序一一对应。
+    const turns: { user: UiMessage; assistants: UiMessage[] }[] = [];
+    for (const message of thread.messages) {
+      if (message.role === "user") {
+        turns.push({ user: message, assistants: [] });
+      } else {
+        turns[turns.length - 1]?.assistants.push(message);
+      }
+    }
+    const turnSpans = spans.filter((span) => span.name === "turn");
+    turns.forEach((turn, index) => {
+      const span = turnSpans[index];
+      if (!span) {
+        return;
+      }
+      // 老 JSONL 没有 ts，恢复后时间是合成序时——用 span 的真实起止
+      // 回填：用户消息取 turn 开始，助手消息取 turn 结束。
+      const startedAt = Date.parse(span.start_time);
+      const endedAt = span.end_time ? Date.parse(span.end_time) : NaN;
+      if (Number.isFinite(startedAt)) {
+        turn.user.createdAt = startedAt;
+      }
+      if (Number.isFinite(endedAt)) {
+        for (const assistant of turn.assistants) {
+          assistant.createdAt = endedAt;
+        }
+      }
+      const duration = Number(span.duration_ms);
+      const closer = turn.assistants[turn.assistants.length - 1];
+      if (
+        closer &&
+        closer.durationMs === undefined &&
+        Number.isFinite(duration) &&
+        duration >= 0
+      ) {
+        closer.durationMs = duration;
       }
     });
     if (thread.id === state.activeThreadId) {
@@ -786,7 +818,6 @@ function renderThreadList(): void {
       const messageCount =
         thread.serverTurns ??
         thread.messages.filter((message) => message.role === "user").length;
-      const badge = thread.sessionId ? shortSession(thread.sessionId).slice(0, 4) : "新";
       const status = threadStatus(thread);
       const statusClass = threadStatusClass(status);
       return `
@@ -799,9 +830,8 @@ function renderThreadList(): void {
           <span class="thread-marker ${statusClass}" aria-hidden="true"></span>
           <span class="thread-copy">
             <strong>${escapeHtml(thread.title)}</strong>
-            <small><b class="thread-state ${statusClass}">${status}</b> · ${thread.pinned ? "置顶 · " : ""}${relativeTime(thread.updatedAt)} · ${messageCount} turns</small>
+            <small><b class="thread-state ${statusClass}">${status}</b> · ${thread.pinned ? "置顶 · " : ""}${relativeTime(thread.updatedAt)} · ${messageCount} 轮</small>
           </span>
-          <span class="thread-badge">${badge}</span>
         </button>
       `;
     })
@@ -823,7 +853,7 @@ function emptyStateMarkup(): string {
         <span class="empty-cursor" aria-hidden="true">_</span>
       </div>
       <p class="empty-copy">
-        输入任务，模型请求、工具执行和 trace 会沿同一条执行线展开。
+        输入任务，模型请求、工具执行和轨迹会沿同一条执行线展开。
         所有记录都留在这台机器。
       </p>
       <div class="starter-list" aria-label="示例任务">
@@ -867,7 +897,7 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
             type="text"
             class="approval-reason"
             data-approval-id="${escapeHtml(tool.approvalId ?? "")}"
-            placeholder="DENIAL REASON (OPTIONAL)"
+            placeholder="拒绝理由（可选）"
             aria-label="拒绝理由（可选）"
           />
           <div>
@@ -878,8 +908,8 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
         </div>
       `
       : tool.state === "running"
-        ? `<span class="tool-pending">waiting for result…</span>`
-        : `<pre>${escapeHtml(tool.output || "(no output)")}</pre>${toolImage}`;
+        ? `<span class="tool-pending">等待结果…</span>`
+        : `<pre>${escapeHtml(tool.output || "（无输出）")}</pre>${toolImage}`;
   const duration =
     tool.elapsedMs === undefined ? "" : `<span>${tool.elapsedMs}ms</span>`;
   const label =
@@ -901,7 +931,7 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
         <code>${escapeHtml(tool.name)}</code>
         ${duration}
       </header>
-      ${showInput ? `<pre class="tool-input">${escapeHtml(args === "{}" ? "(no arguments)" : args)}</pre>` : ""}
+      ${showInput ? `<pre class="tool-input">${escapeHtml(args === "{}" ? "（无参数）" : args)}</pre>` : ""}
       ${output}
     </section>
   `;
@@ -966,7 +996,46 @@ function assistantMaxDurationMs(): number {
   return max || 1;
 }
 
-function renderAssistant(message: UiMessage): string {
+/**
+ * 当前转录档位下，这条助手消息是否还有可见内容。
+ * normal 会隐藏思考与工具明细；若一轮只调了工具，卡片会变成空白框——
+ * 与其留白框，不如让整张卡片不出现（工具活动在右侧账本里仍有记录）。
+ * 真正一条内容都没有的回答仍算可见，由 renderAssistant 写「没有返回内容」。
+ */
+function assistantHasVisibleContent(message: UiMessage): boolean {
+  if (message.streaming || message.error) {
+    return true;
+  }
+  if (!message.parts.length) {
+    return true;
+  }
+  return message.parts.some((part) => {
+    if (part.type === "tool") {
+      return part.tool.state === "waiting" || transcriptMode === "verbose";
+    }
+    if (part.type === "plan") {
+      return true;
+    }
+    if (part.type === "thinking") {
+      return transcriptMode !== "normal" && Boolean(part.text);
+    }
+    return Boolean(part.text);
+  });
+}
+
+/** 上一条真正会渲染的消息是不是助手——决定要不要重复「A 智能体」抬头。 */
+function showAuthorFor(messages: UiMessage[], index: number): boolean {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const previous = messages[cursor];
+    if (previous.role === "assistant" && !assistantHasVisibleContent(previous)) {
+      continue;
+    }
+    return previous.role !== "assistant";
+  }
+  return true;
+}
+
+function renderAssistant(message: UiMessage, showAuthor = true): string {
   const parts = message.parts
     .map((part, index) => {
       if (part.type === "tool") {
@@ -994,8 +1063,8 @@ function renderAssistant(message: UiMessage): string {
           return `
             <section class="reasoning-live" aria-label="模型正在思考">
               <header>
-                <span><i aria-hidden="true"></i> THINKING / LIVE</span>
-                <span>${part.text.length.toLocaleString()} chars</span>
+                <span><i aria-hidden="true"></i> 思考 · 进行中</span>
+                <span>${part.text.length.toLocaleString()} 字</span>
               </header>
               <pre>${tail.length < part.text.length ? "…" : ""}${escapeHtml(tail)}</pre>
             </section>
@@ -1005,7 +1074,7 @@ function renderAssistant(message: UiMessage): string {
           <details class="reasoning-block"${transcriptMode === "thinking" || transcriptMode === "verbose" ? " open" : ""}>
             <summary>
               <span>思考</span>
-              <span>${part.text.length.toLocaleString()} chars</span>
+              <span>${part.text.length.toLocaleString()} 字</span>
             </summary>
             <pre>${escapeHtml(part.text)}</pre>
           </details>
@@ -1047,18 +1116,22 @@ function renderAssistant(message: UiMessage): string {
     message.stopReason && !message.streaming
       ? `<span>结束 · ${escapeHtml(message.stopReason)}</span>`
       : "";
+  // 真空回答（不是被隐藏，而是本来就没有内容）：留一句说明，别留空白卡片
+  const emptyNote =
+    !parts && !error && !message.streaming && !message.parts.length
+      ? `<p class="assistant-empty">本轮没有返回内容。</p>`
+      : "";
   return `
     <article class="message assistant-message${message.streaming ? " is-streaming" : ""}" data-message-id="${escapeHtml(message.id)}">
-      <header class="message-heading">
-        <span class="message-avatar">A</span>
-        <span>智能体</span>
+      <header class="message-heading${showAuthor ? "" : " is-continuation"}">
+        ${showAuthor ? '<span class="message-avatar">A</span><span>智能体</span>' : ""}
         <span class="message-rule"></span>
         <time>${new Date(message.createdAt).toLocaleTimeString("zh-CN", {
           hour: "2-digit",
           minute: "2-digit",
         })}</time>
       </header>
-      <div class="assistant-flow">${waiting}${parts}</div>
+      <div class="assistant-flow">${waiting}${emptyNote}${parts}</div>
       ${error}
       <footer class="message-footer">
         ${stop}
@@ -1081,7 +1154,7 @@ function renderUser(message: UiMessage): string {
   return `
     <article class="message user-message message-appear" data-message-id="${escapeHtml(message.id)}">
       <header class="user-heading">
-        <span>你 · ${steering}</span>
+        <span>你${steering ? ` · ${steering}` : ""}</span>
         <time>${new Date(message.createdAt).toLocaleTimeString("zh-CN", {
           hour: "2-digit",
           minute: "2-digit",
@@ -1101,7 +1174,7 @@ function renderCommandReceipt(): string {
   return `
     <section class="command-receipt ${commandReceipt.error ? "is-error" : ""}">
       <header>
-        <span>COMMAND / ${escapeHtml(commandReceipt.title)}</span>
+        <span>命令 / ${escapeHtml(commandReceipt.title)}</span>
         <span>仅本地</span>
       </header>
       <pre>${escapeHtml(commandReceipt.body)}</pre>
@@ -1171,7 +1244,7 @@ function renderConversationFindList(): void {
               aria-selected="${index === conversationFindSelection}"
               data-find-index="${index}"
             >
-              <span>${match.role === "user" ? "YOU" : "AGENT"}</span>
+              <span>${match.role === "user" ? "你" : "智能体"}</span>
               <strong>${escapeHtml(match.snippet)}</strong>
             </button>
           `,
@@ -1212,12 +1285,18 @@ function renderConversation(forceBottom = false): void {
   if (!thread.messages.length) {
     conversation.innerHTML = emptyStateMarkup() + renderCommandReceipt();
   } else {
-    conversation.innerHTML =
-      thread.messages
-        .map((message) =>
-          message.role === "user" ? renderUser(message) : renderAssistant(message),
-        )
-        .join("") + renderCommandReceipt();
+    const rendered: string[] = [];
+    thread.messages.forEach((message, index) => {
+      if (message.role === "assistant" && !assistantHasVisibleContent(message)) {
+        return;
+      }
+      rendered.push(
+        message.role === "user"
+          ? renderUser(message)
+          : renderAssistant(message, showAuthorFor(thread.messages, index)),
+      );
+    });
+    conversation.innerHTML = rendered.join("") + renderCommandReceipt();
   }
   if (forceBottom || nearBottom) {
     requestAnimationFrame(() => {
@@ -1285,7 +1364,14 @@ function renderRunLedger(): void {
   runTurns.textContent = String(
     thread.messages.filter((message) => message.role === "user").length,
   );
-  runTools.textContent = String(tools.length);
+  // 账本按会话统计（"工具调用"读起来是整场会话的账），
+  // 实时活动那一栏才只看最后一轮。
+  runTools.textContent = String(
+    thread.messages.reduce(
+      (total, message) => total + assistantTools(message).length,
+      0,
+    ),
+  );
   const usage = thread.usage;
   runInputTokens.textContent = String(usage?.input_tokens ?? 0);
   runOutputTokens.textContent = String(usage?.output_tokens ?? 0);
@@ -1322,8 +1408,8 @@ function renderRunLedger(): void {
     activity.push({
       key: "reasoning",
       tag: "思考",
-      title: "Reasoning captured",
-      detail: `${assistant.thinking.length.toLocaleString()} chars`,
+      title: "已捕获思考",
+      detail: `${assistant.thinking.length.toLocaleString()} 字`,
       status: "done",
     });
   }
@@ -1331,19 +1417,19 @@ function renderRunLedger(): void {
     activity.push({
       key: tool.id,
       tag: tool.isError
-        ? "ERR"
+        ? "错误"
         : tool.state === "waiting"
           ? "等待"
           : tool.state === "running"
-            ? "发送"
+            ? "执行"
             : "工具",
       title: tool.name,
       detail:
         tool.state === "waiting"
-          ? "approval required"
+          ? "等待审批"
           : tool.state === "running"
-          ? "executing"
-          : `${tool.elapsedMs ?? 0}ms · ${tool.output?.split("\n")[0]?.slice(0, 48) ?? "done"}`,
+          ? "执行中"
+          : `${tool.elapsedMs ?? 0}ms · ${tool.output?.split("\n")[0]?.slice(0, 48) ?? "完成"}`,
       status: tool.isError ? "error" : tool.state,
     });
   }
@@ -1437,9 +1523,15 @@ function updateAssistant(thread: Thread, message: UiMessage): void {
     );
     if (!article) {
       renderConversation(nearBottom);
+    } else if (!assistantHasVisibleContent(current)) {
+      article.remove();
     } else {
       const wrapper = document.createElement("div");
-      wrapper.innerHTML = renderAssistant(current);
+      const currentIndex = thread.messages.findIndex((m) => m.id === current.id);
+      wrapper.innerHTML = renderAssistant(
+        current,
+        showAuthorFor(thread.messages, currentIndex),
+      );
       article.replaceWith(wrapper.firstElementChild as Element);
     }
     renderRunLedger();
@@ -1724,7 +1816,7 @@ function applySettings(snapshot: SettingsSnapshot): void {
   settingsApiKey.value = "";
   settingsApiKey.placeholder = snapshot.api_key_configured
     ? "留空保持当前密钥"
-    : "输入 API Key，或写 ${ENV_VAR}";
+    : "输入 API 密钥，或写 ${ENV_VAR}";
   settingsKeySource.textContent = `当前密钥：${snapshot.api_key_source} · 留空不改`;
   runEffort.textContent = effortLabel(currentEffort);
 }
@@ -1820,7 +1912,7 @@ function closeSettings(): void {
 async function saveSettings(): Promise<void> {
   const maxTokens = Number.parseInt(settingsMaxTokens.value, 10);
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-    setSettingsStatus("MAX TOKENS 必须是正整数。", "error");
+    setSettingsStatus("最大 token 必须是正整数。", "error");
     settingsMaxTokens.focus();
     return;
   }
@@ -2373,11 +2465,11 @@ function renderResumeList(): void {
           <span class="resume-item-id">${escapeHtml(
             thread.sessionId ? shortSession(thread.sessionId) : "待定",
           )}</span>
-          <span class="resume-item-turns">${turns} TURNS</span>
+          <span class="resume-item-turns">${turns} 轮</span>
           ${current ? '<span class="resume-current">当前</span>' : ""}
           <strong>${escapeHtml(thread.title)}</strong>
-          <small>${thread.pinned ? "置顶 · " : ""}${escapeHtml(thread.model || "model unknown")} · ${escapeHtml(
-            thread.stopReason || "no completed run",
+          <small>${thread.pinned ? "置顶 · " : ""}${escapeHtml(thread.model || "模型未知")} · ${escapeHtml(
+            thread.stopReason || "未完成一轮",
           )}</small>
           ${
             contentHits.has(thread.sessionId)
@@ -2745,7 +2837,7 @@ async function startResumeFork(): Promise<void> {
     resumeForkInput.min = "1";
     resumeForkInput.max = String(messages.length);
     resumeForkInput.value = "1";
-    resumeForkMax.textContent = `OF ${messages.length} MESSAGES`;
+    resumeForkMax.textContent = `共 ${messages.length} 条消息`;
     resumeForkForm.hidden = false;
     updateResumeForkPreview();
     resumeForkInput.focus();
@@ -3018,11 +3110,19 @@ function updateCommandPalette(): void {
     return;
   }
   const prefix = text.slice(1).toLowerCase();
+  // 按组连续排列：组内保持原表顺序，组间按首次出现排。
+  // 否则跨组的命令交替出现时，面板里会重复冒出同名分组头。
+  const groupRank = new Map<string, number>();
+  for (const command of SLASH_COMMANDS) {
+    if (!groupRank.has(command.group)) {
+      groupRank.set(command.group, groupRank.size);
+    }
+  }
   commandMatches = SLASH_COMMANDS.filter((command) =>
     [command.name, ...(command.aliases ?? [])].some((name) =>
       name.startsWith(prefix),
     ),
-  );
+  ).sort((a, b) => (groupRank.get(a.group) ?? 0) - (groupRank.get(b.group) ?? 0));
   if (!commandMatches.length) {
     closeCommandPalette();
     return;
@@ -3602,7 +3702,7 @@ async function copyLatestAnswer(): Promise<void> {
       return;
     }
   }
-  showToast(`已复制最近回答 · ${answer.text.length.toLocaleString()} chars`);
+  showToast(`已复制最近回答 · ${answer.text.length.toLocaleString()} 字`);
 }
 
 async function exportCurrentSession(): Promise<void> {
@@ -4009,6 +4109,88 @@ threadList.addEventListener("click", (event) => {
     switchThread(button.dataset.threadId);
   }
 });
+
+// —— 会话行右键：复制完整会话 ID ——
+// UUID 是给工具和日志用的，不常驻行内（缩略 ID 对人是噪音），
+// 需要时右键取全量。菜单定位到鼠标位置，贴边时向内收。
+let contextMenuThreadId = "";
+
+function hideThreadContextMenu(): void {
+  threadContextMenu.hidden = true;
+  contextMenuThreadId = "";
+}
+
+function showThreadContextMenu(x: number, y: number, threadId: string): void {
+  contextMenuThreadId = threadId;
+  threadContextMenu.hidden = false;
+  const rect = threadContextMenu.getBoundingClientRect();
+  const left = Math.min(x, window.innerWidth - rect.width - 8);
+  const top = Math.min(y, window.innerHeight - rect.height - 8);
+  threadContextMenu.style.left = `${Math.max(8, left)}px`;
+  threadContextMenu.style.top = `${Math.max(8, top)}px`;
+}
+
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    // WKWebView 或权限受限时的兜底：临时 textarea + execCommand
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+}
+
+threadList.addEventListener("contextmenu", (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>(
+    "[data-thread-id]",
+  );
+  if (!button?.dataset.threadId) {
+    return;
+  }
+  event.preventDefault();
+  const thread = state.threads.find((item) => item.id === button.dataset.threadId);
+  if (!thread?.sessionId) {
+    showToast("会话还没有落盘，暂时没有 ID");
+    return;
+  }
+  showThreadContextMenu(event.clientX, event.clientY, thread.id);
+});
+
+copySessionIdButton.addEventListener("click", async () => {
+  const thread = state.threads.find((item) => item.id === contextMenuThreadId);
+  hideThreadContextMenu();
+  if (!thread?.sessionId) {
+    return;
+  }
+  const ok = await copyTextToClipboard(thread.sessionId);
+  showToast(ok ? `已复制会话 ID · ${thread.sessionId.slice(0, 8)}…` : "复制失败");
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (threadContextMenu.hidden) {
+    return;
+  }
+  if (!(event.target as Element).closest("#thread-context-menu")) {
+    hideThreadContextMenu();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !threadContextMenu.hidden) {
+    hideThreadContextMenu();
+  }
+});
+
+window.addEventListener("resize", hideThreadContextMenu);
+threadList.addEventListener("scroll", hideThreadContextMenu);
 conversation.addEventListener("click", (event) => {
   const retryButton = (event.target as Element).closest<HTMLButtonElement>(
     "[data-retry-message-id]",

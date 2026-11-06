@@ -60,18 +60,22 @@ export function threadTitleFor(prompt: string): string {
 export function relativeTime(timestamp: number): string {
   const seconds = Math.round((timestamp - Date.now()) / 1000);
   const formatter = new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" });
+  // Intl 输出「9小时前」，与界面其余「26 个会话 · 16 轮」的数字间距不一致；
+  // 统一在数字和中文单位之间补一个空格（「昨天」这类词不受影响）。
+  const spaced = (value: string): string =>
+    value.replace(/(\d)([一-鿿])/g, "$1 $2");
   if (Math.abs(seconds) < 60) {
-    return formatter.format(seconds, "second");
+    return spaced(formatter.format(seconds, "second"));
   }
   const minutes = Math.round(seconds / 60);
   if (Math.abs(minutes) < 60) {
-    return formatter.format(minutes, "minute");
+    return spaced(formatter.format(minutes, "minute"));
   }
   const hours = Math.round(minutes / 60);
   if (Math.abs(hours) < 24) {
-    return formatter.format(hours, "hour");
+    return spaced(formatter.format(hours, "hour"));
   }
-  return formatter.format(Math.round(hours / 24), "day");
+  return spaced(formatter.format(Math.round(hours / 24), "day"));
 }
 
 

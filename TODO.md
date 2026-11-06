@@ -83,6 +83,7 @@ desktop / TUI 还没接上的界面：
 - [ ] 替换 Tauri 模板图标为 AgentLearn 图标。
 - [ ] 顶层包名出现冲突时，再把 `domain` / `application` / `infrastructure` / `interfaces` 收成 `agentlearn.*`。验收：现在不改；`server/pyproject.toml` 的 `packages.find.where = src` 就是现状。
 - [ ] 有成功率统计需求时，再把客户端断开的 `GeneratorExit` 收成 `aborted`。验收：没有这个需求之前，span 继续停在 running（D11）。这一条不和上面的「断连补齐 tool_result」混为一谈。
+- [ ] 「墨与琥珀」浅色主题里 11px 琥珀小字（eyebrow / 状态 / 快捷键提示）对纸底只有约 3.5:1，低于 AA 的 4.5:1；大标题与描边不受影响。验收：要么加一档 `--accent-text`（浅色用 `#a85510`、深色仍用 `#eda03c`）只套小字，要么明确记录 accent 小字只是装饰、正文信息不用它。依据：2026-11-05 细节巡检按 WCAG 公式算得，属既有取色，不阻塞当前工作。
 
 路线图后段（层本身已完成，这里是剩下的事）：
 

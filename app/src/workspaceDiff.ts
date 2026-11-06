@@ -1,6 +1,8 @@
 // 工作区 diff 抽屉：文件列表与 hunk 的只读渲染，自己接线自己的按钮。
 import { API_BASE, readError } from "./api";
 import { escapeHtml } from "./format";
+import { promptInput, requireElement } from "./dom";
+import type { WorkspaceDiffResponse } from "./types";
 
 const DIFF_STATUS_LABELS: Record<string, string> = {
   modified: "已修改",
@@ -11,8 +13,6 @@ const DIFF_STATUS_LABELS: Record<string, string> = {
   untracked: "未跟踪",
   typechange: "类型变更",
 };
-import { promptInput, requireElement } from "./dom";
-import type { WorkspaceDiffResponse } from "./types";
 
 const workspaceDiffModal = requireElement<HTMLElement>("#workspace-diff-modal");
 const workspaceDiffCloseButton = requireElement<HTMLButtonElement>("#workspace-diff-close");
@@ -31,7 +31,7 @@ function renderWorkspaceDiff(): void {
   workspaceDiffSummary.innerHTML = `
     <span>${escapeHtml(workspaceDiff.root)}</span>
     <span>已跟踪 ${workspaceDiff.files.filter((file) => file.status !== "untracked").length}</span>
-    <span>未跟踪 ${workspaceDiff.include_untracked ? "计入" : "排除"} · ${workspaceDiff.untracked_count}</span>
+    <span>未跟踪 ${workspaceDiff.untracked_count}${workspaceDiff.include_untracked ? "（已计入）" : "（未计入）"}</span>
   `;
   workspaceDiffList.innerHTML = workspaceDiff.files.length
     ? workspaceDiff.files
@@ -55,7 +55,7 @@ function renderWorkspaceDiff(): void {
                     <header>${escapeHtml(hunk.header)}</header>
                     <div class="workspace-diff-lines">
                       ${hunk.lines.map((line) => `
-                        <div class="workspace-diff-line is-${line.kind}">
+                        <div class="workspace-diff-line is-${escapeHtml(line.kind)}">
                           <span>${line.old_line ?? ""}</span>
                           <span>${line.new_line ?? ""}</span>
                           <code>${escapeHtml(line.text)}</code>
@@ -75,7 +75,7 @@ function renderWorkspaceDiff(): void {
 export async function loadWorkspaceDiff(): Promise<void> {
   const sequence = ++workspaceDiffLoadSequence;
   workspaceDiffRefreshButton.disabled = true;
-  workspaceDiffSummary.innerHTML = "<span>READING GIT STATUS…</span>";
+  workspaceDiffSummary.innerHTML = "<span>正在读取 git status…</span>";
   workspaceDiffList.innerHTML = `<div class="workspace-diff-empty">正在读取工作区</div>`;
   try {
     const response = await fetch(
