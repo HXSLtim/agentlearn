@@ -14,3 +14,6 @@ data/
 
 # 本机真实配置，可能含密钥，不进版本库
 server/config.ini
+
+# 验收截图（docs/shots/）：人工检查用的工作产物，随批次重新生成，不入库
+docs/shots/

@@ -516,7 +516,7 @@ run_tool()，外部工具只是注册表里多出来的条目。
 JSON-RPC 2.0、一行一条 JSON；我们要会的只有三个方法：initialize（握手）、
 tools/list（拿说明书）、tools/call（执行）。SDK 把这些全藏掉，而看清
 「工具定义是怎么从另一个进程声明出来的」正是这一层的课题。例子服务器
-（examples/mcp_count.py）也手写，两边看的是同一份协议。
+（examples/mcpCount.py）也手写，两边看的是同一份协议。
 
 **命名**：`别名__工具名`（如 cnt__count_words）。不同服务器可能有同名工具，
 前缀保证全局唯一；内置工具名永远不含 `__`，run_tool 先查内置注册表、
@@ -889,3 +889,214 @@ llm_request 均 cancelled 且有 end_time）、tool_result 事件处 close
 抢占（TurnCancelled 语义不变，两个 span cancelled）全部通过；
 `compileall` 与 `npm run build` 通过。旧库遗留的 running 行不追改，
 按 TODO 的清扫欠账处理。
+
+## D34 运行锁有界等待 + /health 监控面 + 孤儿 span 启动清扫（2026-11-07）
+
+**背景**：真机事故。11-05 20:07 启动的 desktop server（早于 D31/D33 落库）
+在 11-06 13:36 遇到 SSE 断连：`chat_events` 生成器停在 yield 上被挂起时
+仍持有 `slot.turn_lock`，老代码没有 GeneratorExit 收尾，锁从此泄漏。用户
+次日续接同一会话发消息，新请求阻塞在 `with slot.turn_lock:` 上——SSE 已
+200 但生成器一步未走（零 span、零 JSONL 写入），前端「等待首个 token」
+无限挂起。py 栈证据：两个 AnyIO worker 与 proactivity 线程全部停在
+`lock_PyThread_acquire_lock`，无任何线程做 IO；SIGTERM 因关停等待卡死
+线程而失效，需 SIGKILL。
+
+**决定**（三个独立小件，都是把「无限等/永远脏」变成「有界且可见」）：
+
+1. **等锁有界**（server.py）：`with slot.turn_lock:` 改为
+   `acquire(timeout=600)` + try/finally。拿不到锁的排队连接收一条
+   error + done 事件明确退场，不再无限等。600s 的依据：一轮的耗时
+   上限 ≈ 每圈 120s 读超时（D31）× 有限工具圈数 + 工具耗时，正常排队
+   不会命中；命中即锁泄漏，报错文案直接给出重启指引。
+   排队期间收不到客户端断开（GeneratorExit 只能注入停在 yield 处的
+   生成器）这个限制如实接受：泄漏被 600s 上限兜住，不再需要根治。
+2. **GET /health**（server.py + store.py + sessionManager.py）：报
+   uptime、未收尾 span 数与最老年龄、正持有 turn_lock 的会话。锁泄漏
+   的形状（busy_sessions 有条目而 span 早已该结束）一眼可辨。监控不
+   改状态，只读。
+3. **孤儿 span 启动清扫**（store.py `close_stale_spans`）：进程启动时
+   把超过 1 小时仍 running 的 span 收成 cancelled 并打
+   `orphan: process restart` 标记。阈值取 1 小时是防误伤：正常一轮远
+   短于此，并行进程（TUI）正在写的 span 也不会被碰。D33 只管新断连，
+   存量僵尸靠这里一次性清干净。
+
+**验收**：真机复跑会话恢复（重启后消息正常流回，agent 用 say 回应）；
+`/health` 高频采样在 10.6s 轮次上连续 23 个采样点可见 busy/running 非零、
+轮后归零；启动清扫收掉 11-05/11-06 的 3 条僵尸（209/210/216，带 orphan
+标记），10 分钟前的 221 未被误碰；`compileall` 通过。
+
+## D35 会话工作目录：跟会话走，不跟某一轮（2026-11-07）
+
+**背景**：界面里没有「选工作目录」的入口，bash / start_job 的起跑目录
+写死在 `sandbox.py` 的 `SANDBOX`。想在某个项目里干活只能改常量重启。
+用户明确否决了「某一轮换个目录」的形态——目录是工作上下文，不是
+命令参数。
+
+**决定**：
+
+1. **目录是会话的属性**（`sessions.workdir` 列，空 = 默认 data/sandbox）。
+   界面（composer 左上角「目录 …」按钮）改的是这个会话之后每一轮；
+   不同会话可以在不同项目里。中途改不感染正在跑的轮：Conversation
+   每轮开始时读一次库，锁定当轮。
+2. **不是模型参数**。cwd 不进 bash 的 inputSchema：模型每一跳都能改
+   目录的话又变回「某一条命令」。传递用 contextvar
+   （`sandbox.bind_workdir`），Conversation 在每次 `run_tool` 前后
+   set/reset，bash / start_job 读 `current_workdir()`。没绑过就是默认
+   sandbox（TUI、离线测试不受影响）。
+3. **记忆和账本不跟目录走**。`memory.md`、jobs 账本仍固定在
+   data/sandbox：那是 agent 自己的运行时数据，不该混进用户项目。
+   system 提示词里把两处路径都告诉模型，避免它在项目目录里找记忆。
+4. **「变更」和 @file 跟会话走**：两个端点加可选 session_id，git 根从
+   会话工作目录找。不给参数保持旧行为（进程 cwd）。
+5. **落库路径**：新会话的目录随第一条 `/chat`（workdir 字段）进
+   Conversation——会话行本身就是那一轮才建的，PATCH 没处落脚；已建
+   会话用 PATCH /sessions/{id} 立即生效。/chat 只有在字段出现时才写，
+   不会把 curl / TUI 改过的目录冲回默认。
+6. **校验**：必须绝对路径且已存在的目录（422 / 界面内联报错，不偷建
+   目录）；空字符串 = 恢复默认，是合法值。
+
+**验收**：normalize/bind/reset/get_workdir/set_workdir 离线全过（相对
+路径、不存在路径拒绝；临时库 set/get/clear/absent）；真机：新会话设
+AgentLearn 根目录 → `pwd` 返回项目根、ls 见 CLAUDE.md/app/server，
+turn span 记 workdir；变更面板 root 切到 AgentLearn（19+8 文件）；
+@file 补全列出项目文件；恢复默认 → 按钮回「目录 sandbox」、库列清空。
+`compileall` 与 `npm run build` 通过。
+
+## D36 TUI 界面文案对齐 WebUI（D30 补课，2026-11-07）
+
+**背景**：D30「墨与琥珀」只把 WebUI 中文化了，TUI 换了色但界面文案仍是
+英文大写（AGENTLEARN / LOCAL RUNTIME / RUN LOG / COMPOSE / ENTER RUN…）。
+真终端里并排一看，同一个产品两套语言，TUI 像上个版本的遗物。另：用户看到
+的第一张 TUI 截图用 Textual 自带 SVG 导出，中文双宽字符排版错位重叠，
+观感进一步失真——但那只是导出 bug，tmux 真终端网格干净。
+
+**决定**：
+
+1. **词汇表单一来源**：新增 `chat/labels.py`（运行状态 / 审批档位 / 插话
+   档位 / 收条标题四张中文映射表），词与 WebUI `format.ts` 完全同源：
+   READY→就绪、STREAMING→回复中、approve→需审批、queue→队列……
+   screen 与 modals 都要查表，modals 被 screen 导入、反向共享会循环，
+   所以独立成文件（不进 theme.py——那是视觉 token，不装文案）。
+2. **内部枚举不动，只在渲染口翻译**：`_set_running_state("STREAMING")`
+   之类调用点仍传英文枚举（它们是标识符）；`_show_command_result` 在
+   mount 前过一次 `receipt_label()`，一处改动盖住全部 25 个调用点。
+   新枚举值没配中文名时原样大写兜底（与 WebUI 同策略）。
+3. **静态文案直接替换**：台账 17 个标签、顶栏、输入区、键位帮助、
+   底部命令提示、命令面板组名与页脚、六个 modal 标题与按钮
+   （DENY/ACCEPT ONCE/ACCEPT SESSION→拒绝/通过一次/本会话允许）、
+   cards 抬头（AGENT / RESTORED RESPONSE→智能体 · 历史回复）、
+   trace 检查器面板与字段（对齐 trace.ts：正常/错误/运行中/已取消）。
+   主题 token 一律不动，只换字符串。
+4. **顺手修存量崩溃**：`main.py trace` 自 traceView 抽出（b3f6c35 前后）
+   就不能启动——`spans_for` 返回 `sqlite3.Row`，共用的
+   `answers_for_requests` 调 `.get()` 直接 AttributeError；web 端点
+   自己内联翻 dict 所以没炸。Row→dict 转换下沉为
+   `traceView.span_payloads()`，web 与 TUI 共用，TUI 不再自己
+   `json.loads(span["data"])`。
+
+**验收**：tmux 120×36 真终端跑 115 条消息会话：顶栏「本地运行时 · 会话
+1738cd58 · 115 条消息 · ● 就绪」，台账 17 行全中文（需审批/队列/排队中），
+消息抬头「智能体 · 历史回复」，输入区「输入 · Enter 发送 / 发送 ↵」；
+`/` 命令面板组名「运行/会话/任务/系统」+ 中文页脚。trace 检查器 headless
+挂载 139 spans 并渲染 llm_request 详情；`GET /sessions/{id}/trace`
+重构后同样 139 spans / 66 配对。恢复会话滚动到底经 headless 探针证实
+（scroll_y 924/943），此前疑为 bug 实为滚动条读反。截图四张存
+`docs/shots/`（TUI 主屏/命令面板、WebUI 空态/内容态）。`tsc --noEmit`、
+`compileall` 通过。
+
+## D37 UX 复核批：时长/命中率/停止原因的显示口径，孤儿 span 不再伪造结束时间（2026-11-07）
+
+**背景**：UX 梳理攒了一批每天都会撞的小毛病：被打断的轮「用时 0ms」或
+被历史清扫写成几天假时长；缓存命中「457‰」没人读得懂；停止原因直接
+渲染 `end_turn`；真空中断轮补一张「本轮没有返回内容」的空卡；未送达的
+插话 chip 留在原地没有出路；侧栏一排「未命名运行」；相对时间
+「5 天前 / 前天 / 1 小时前」三套粒度；标题 42 字硬截断会切 emoji。
+
+**决定**：
+
+1. **时长统一格式化**：<1 秒按 ms、<1 分钟按秒（一位小数）、<1 小时给
+   「分 秒」、再往上「时 分」；Web（format.ts `formatDuration`）与 TUI
+   （`interfaces/tui/formatting.py`）同一套规则。0ms 显示 `<1ms`——
+   被中断的轮至少看得出发生过。
+2. **缓存命中一律百分数**：API 的 `cache_hit_ratio` 保持千分比不变，
+   两个 UI 落屏除以 10 给一位小数（457 → 45.7%）；台账、trace 面板
+   同口径。
+3. **stop_reason 中文化**：与档位标签同一策略——内部传英文枚举，
+   渲染口映射（end_turn→自然结束、cancelled→已中断、
+   steering/injected→已并入插话…），没命中原样兜底。
+4. **孤儿 span 只改状态，不编造结束时间**：D34 的清扫曾把重启时刻写成
+   `end_time`，duration 于是变成「从几天前跑到重启」（实测出现 6 天
+   假时长，前端把它当成一轮耗时）。现在只写 `status=cancelled` +
+   `orphan` 标记，`end_time` 保持 null；`running_spans()` 与清扫 SQL
+   都加 `status='running'` 条件，取消的孤儿不再被算成在跑/重复清扫。
+   历史假 end_time 已就地清空（本机 10 条）。
+5. **安静收场**：被中断/并入插话的轮不再补「本轮没有返回内容」这句；
+   未送达的插话 chip 变成可点击的「未送达 · 点此重发」（摘掉残影后走
+   正常提交流程；带图消息无法还原附件，提示手动重发）。
+6. **会话标题三层兜底**：服务端启动时从 JSONL 回填历史空标题
+   （set_title_if_empty，实测补了 22 条）；本地自动名（未命名运行/
+   新会话）有正文时用首条用户消息重命名；真空会话显示「空会话 ·
+   MM-DD HH:mm」。顺带修了根因：WebUI 启动时根本不同步 `/sessions`
+   （以前只有打开恢复面板才合并），现在启动就对一次账。
+7. **相对时间单一口径**：<1 分钟给秒、<1 小时给分钟、当天给小时；
+   昨天 →「昨天 HH:mm」，更早直接绝对时间（「5 天前」没人算得出是哪天）。
+   标题截断按码点（Array.from），不再切开 emoji 代理对。
+
+**验收**：真机：侧栏 24 条全部真标题（回填 22 条，剩 1 条本地空草稿归
+「新会话」）；台账「用时 18.1 秒 / 缓存命中 0.0% / 停止原因 自然结束」；
+消息 footer「结束 · 自然结束 18.1 秒」；trace 面板「耗时 18.1 秒、
+命中 0.0%」，孤儿 span 显示「—」且 `/health` 的 running_spans 从 10
+回到 0、重启不再重复报清扫。TUI headless：台账 cancelled →
+「已中断」、12.345s → 「12.3 秒」、457‰ → 「45.7%」；trace 孤儿行
+「● turn 已取消 —」，详情「TURN / 已取消 / —」。`npm run build`、
+`compileall`、两处 import 环（trace ↔ chat）复查通过。
+
+## D38 TUI 布局细节对齐 WebUI：D30 三批细节落地终端（2026-11-07）
+
+**背景**：墨与琥珀改版（D30）和后续三批细节（CHANGELOG 十八/十九/二十）
+只动了 WebUI，TUI 的布局还是改版前的骨架——同一个信息在两边长得
+完全不一样。D36 补了文案，这一条补布局，一次把结构性的差异收齐。
+
+1. **台账一行两列**：WebUI 的 run-metrics 是「标签上、值下」的 dt/dd，
+   终端 36 行放不下 13 行指标的翻倍行数，压成一行两列（标签宽 11、
+   值右对齐），指标集合与行序照抄 index.html（会话/轮次/工具调用/用时/
+   输入输出/缓存读写/命中/成本/思考强度/执行审批/消息插话），TUI 特有
+   的模型/排队中排在后面，底脚「JSONL · SQLite · 仅本地」对应
+   run-rail-footer。侧栏换成 VerticalScroll：内容是 22 行起的固定清单，
+   矮终端靠滚轮看全而不是硬裁。
+2. **key-help 挪窝**：14 行键位表从侧栏底部挪到输入区——常用三键
+   （Enter/Shift+Enter/Esc）进 composer-status，其余压成一行提示。
+   WebUI 的右栏本来就不放键位表（它有 hover），键盘提示属于输入区。
+3. **顶栏挂标题**：原来显示「会话 152acf13 · N 条消息」，N 是启动快照
+   在轮次进行中会说谎；换成会话标题（store 里查不到退回短 id），
+   每轮收线刷新——第一条用户消息落库后标题自动就位。
+4. **抬头不重复**：同 WebUI showAuthorFor 规则——一条用户消息后的
+   第一条助手消息带「智能体」抬头，轮内后续（工具轮后的第二段正文等）
+   不带。实现是 AssistantMessage 加 show_kicker 参数 + 屏幕侧
+   `_expect_kicker` 标志（用户消息挂载置真，助手正文消费置假）。
+5. **span-tick 进终端**：WebUI 的签名元素（每轮耗时按全会话最长轮归一
+   的比例条）在终端是 12 格「█·」条 + 人话时长。恢复会话从 turn span
+   水合：按用户文本消息切轮（tool_result 载体不开新轮，WebUI 同规则，
+   否则和 turn span 错位配错轮），>24h 的时长按脏数据丢弃。基准（最长轮）
+   变化时整批重画。
+6. **输入区两行化**：composer-heading = 键位提示（图片计数前置）+
+   「目录 短名」位（最后两段，同 WebUI workdirLabel）；点击目录位弹
+   用法（终端没有 hover title）。
+7. **/workdir 命令**：与 WebUI 目录按钮同一套语义——`normalize_workdir`
+   校验（绝对路径、已存在）、写 `sessions.workdir`、reset 恢复默认；
+   正在跑的 Conversation 每轮 `_load_workdir` 重读，下一轮生效。
+8. **顺带修掉 /trace 弹层的潜伏雷**：`_command_trace` 一直喂
+   `store.spans_for()` 的 sqlite3.Row，而 SpanDetail._detail 只认 dict
+   （`span["data"].get`）——真点开就 AttributeError。统一走
+   `span_payloads`（web 端点同款），panels 的 `_detail` 也改成吃解析好
+   的 dict。独立 trace 检查器（trace.py）同批中文化补齐：首字时长过
+   `format_duration`（3513ms → 3.5 秒），span/diff 状态词表放
+   `interfaces/tui/formatting.py`（零依赖层，chat 和独立检查器共用，
+   放 chat/labels.py 会经 `chat/__init__` 反向 import trace 成环）。
+
+**验收**：Textual headless 17 项断言全过（台账行序、底脚在 36 行内、
+顶栏标题、抬头数=有正文的轮数、tick 12 格+人话时长、/workdir 四态
+往返并复原现场、/trace 弹层 dict 不炸且全中文）；多轮会话实机 2 抬头 +
+2 tick（14.7 秒满条、1.6 秒一格）；120×36 tmux 实机检查台账全行可见、
+/trace 树「● turn 已取消 10.4 秒」、/diff「已跟踪 28 · 未跟踪 14
+（已计入）」、面板 /workdir 条目；`compileall` 通过。

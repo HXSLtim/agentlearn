@@ -68,6 +68,8 @@ desktop / TUI 还没接上的界面：
 - [x] plan mode 在人确认之后才执行计划 ✅（2026-11-03）：`POST /plans/{id}/confirm` 只记录确认，带 `plan_id` 的 `/chat` 才一次性消费并注入执行轮；未确认 / 重复执行返回 404，`plan_mode + plan_id` 返回 422。TUI Enter 确认后进入待执行；desktop 点击确认后请求顺序为 confirm → `/chat(plan_id)`。未确认前无工作区写入。
 - [x] TUI `/status` 补上与 `GET /capabilities` 相同的事实 ✅（2026-11-03）：能力快照抽到 application 层，TUI 与 HTTP 共用同一份工具来源、MCP health、sandbox 边界、Python/provider/model/effort、触发器数量数据；`/status` 保留原会话运行态并追加 `python/provider/triggers/tools/mcp/sandbox/boundary`。TestClient 验证 `/capabilities` 与 `capability_snapshot()` 完全一致；headless `/status` 断言全部事实并截图人工检查。
 - [x] desktop 用 RUN LOG 或同等面板渲染 `GET /capabilities` ✅（2026-11-03）：新增 `/capabilities` 命令，在同等命令结果面板展示 Python/provider/model/effort、触发器数量、builtin/skill/MCP 工具来源、MCP health、sandbox 路径与「不是安全边界」说明。380×900 mock 验证全部字段、`body/document scrollWidth` 均 380，截图人工检查。
+- [x] TUI 布局细节对齐 WebUI（D30/三批细节落地 TUI）✅（2026-11-07，D38）：台账从「标签上值下」的两行制改成一行两列（标签宽 11 左、值右对齐），指标与行序照抄 WebUI run-metrics，加底脚「JSONL · SQLite · 仅本地」；侧栏改 VerticalScroll，矮终端不裁内容。顶栏从 UUID 换会话标题；连续助手消息不重复「智能体」抬头（同 WebUI is-continuation 规则）；助手消息底部加 span-tick 12 格耗时条（恢复会话从 turn span 水合，>24h 脏时长丢弃）；输入区两行化（键位提示 + 目录位，图片计数写进提示行）；14 行 key-help 从侧栏挪进输入区单行提示。Textual headless 17 项断言全过 + 120×36 tmux 实机截图人工检查。
+- [x] TUI 增加 `/workdir` ✅（2026-11-07，D38）：命令面板新增 `/workdir [路径]`，语义与 WebUI 目录按钮同一套（`normalize_workdir` 校验、写 `sessions.workdir`、`reset` 恢复 sandbox）；输入区右侧常驻「目录 短名」位（最后两段，同 WebUI workdirLabel），点击弹用法提示。headless 验证无参查当前、设 /tmp 生效且短名刷新、reset 清空、非法路径报错不落库；正在跑的 Conversation 每轮 `_load_workdir` 重读，下一轮即生效。
 
 已知欠账拆开：
 
@@ -75,7 +77,7 @@ desktop / TUI 还没接上的界面：
 - [ ] 在准则段后面再打一个缓存断点。验收：只改 `memory.md` 或摘要时，准则前缀仍能 `cache_read`。依据：D21 要求断点在准则后；D22 已实现的是最后一条消息上的断点（`adapter.py` 的 `mark_cache_breakpoint`），这一条还没做。
 - [ ] SQLite 打开 `PRAGMA journal_mode=WAL`。验收：读写不再互相堵住；不上连接池、不上 ORM。依据：`store.py` 仍写着这是欠账，连接上没有 WAL。
 - [ ] bash 超时改为杀掉进程组，和 `stop_job` 一样。验收：超时后 `sleep && ...` 的子进程不残留。依据：`tools.py` 的 `subprocess.run(timeout=...)` 只杀 shell。
-- [ ] 按 session 分开 sandbox 工作目录，或给每个工具一个机器可读的「能否并行」属性。验收：两个会话的相对路径文件互不可见，或者并行执行器会拒绝冲突工具。
+- [x] 按 session 分开 sandbox 工作目录 ✅（2026-11-07，D35）：`sessions.workdir` 记每个会话的起跑目录（界面可选，默认仍是 data/sandbox），bash / start_job 经 contextvar 取当轮目录；「变更」和 @file 跟会话目录走。两个会话的相对路径互不可见✅（各在各的项目里）；后半句（并行执行器的冲突检测）仍未做，跟下面「并行执行」那条一起算。
 - [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
 - [ ] web 在绑定非 127.0.0.1 之前先加鉴权。验收：现在 `uvicorn.run(app, port=port)` 没有 host，默认只本机；没有鉴权时拒绝 `--host 0.0.0.0`。
 - [ ] Tauri 启动时拉起 desktop server，并去掉模板 `greet` 命令。依据：`app/src-tauri/src/lib.rs` 只有 greet。
@@ -94,7 +96,11 @@ desktop / TUI 还没接上的界面：
 
 路线图后段（层本身已完成，这里是剩下的事）：
 
-- [ ] main.ts 继续按特性拆分：types/dom/slashCommands/api/format/trace/workspaceDiff 已出（2026-11-05，intent-funnel 分支），settings/resume/palette/images/审批还留在 main.ts（4232 行）。模式已立：特性模块自带状态与 DOM 句柄、自接线自己的按钮，从 main 取活绑定（activeThread 等，core 抽取后改指 core）。验收：每步 `npm run build` + 真机 380×900（本机窗口下限 500 亦可）开抽屉截图。
+- [x] main.ts 按特性拆分（2026-11-07）：settings / resume / commandPalette /
+      composerImages / approval / conversationFind / toast 各自带状态和按钮接线，
+      从 main 取 activeThread、hydrate、render。main.ts 4542→2803，剩下的是
+      对话渲染、SSE 轮次和斜杠分发（壳，不再按功能切）。`npm run build` 通过。
+      行为是原样搬家，没有改交互，所以没重拍抽屉截图。
 - [ ] 意图分类做路由：闲聊直接答、任务进 agent loop、明确命令走快捷路径。验收：分类器省不下主模型开销就不启用。设计见 docs/superpowers/specs/2026-11-05-intent-funnel-design.md（三层漏斗：规则 → few-shot → 微调兜底）。
 - [ ] 意图分类做工具裁剪：请求里只放相关工具定义。
 - [ ] 意图分类给 steering 档位建议。验收：前端传入的档位仍可覆盖建议。
@@ -316,6 +322,13 @@ P1 / P2 里没做完的条目已逐条拆到文首，这里只留已完成记录
 - [ ] 模型请求超时已兜底（D31），但 `/stop` 仍打断不了「正在读」的
   单个请求——它要等读超时（最长 timeout_s）才回到检查点。真·即时取消
   需要把同步 SDK 调用挪到可取消的线程/异步模型，暂不值。
-- [ ] 历史遗留的 `running` span（D33 之前客户端断开留下的旧轮）没有回收；
-  trace 里会一直显示运行中。新断连不再产生这类行；要么接受旧行是历史证据，
-  要么做一次性清扫（按 span 起始时间超过阈值标 cancelled）。
+- [x] 历史遗留的 `running` span 回收 ✅（2026-11-07，D34）：进程启动时
+  `close_stale_spans` 把超过 1 小时仍 running 的 span 收成 cancelled 并打
+  `orphan: process restart` 标记（阈值防误伤并行进程与刚起步的轮）。
+  真机验证收掉 11-05/11-06 的 3 条僵尸，10 分钟前的正常 span 未被碰。
+- [x] 排队等 `turn_lock` 无上限 ✅（2026-11-07，D34）：老进程锁泄漏
+  （断连生成器停在 yield 上持锁被挂起）曾让续接会话「等待首个 token」
+  永久挂起、SIGTERM 都关不掉。现在 `acquire(timeout=600)` 拿不到锁就
+  error+done 明确收线；另加 GET /health 监控面（uptime、running span
+  年龄、持锁会话），泄漏一眼可辨。排队期间收不到客户端断开的限制
+  如实接受，由超时兜底。
