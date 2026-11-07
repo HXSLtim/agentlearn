@@ -181,9 +181,14 @@ def _parse_patch(patch: bytes) -> dict:
     }
 
 
-def changed_files(include_untracked: bool = False) -> dict:
-    """列出工作区变更文件；不 checkout、不 add、不改索引。"""
-    root = find_repository_root()
+def changed_files(
+    include_untracked: bool = False, start: Path | None = None
+) -> dict:
+    """列出工作区变更文件；不 checkout、不 add、不改索引。
+
+    start 是从哪个目录找 Git 根（会话的工作目录）；不给就是进程 cwd。
+    """
+    root = find_repository_root(start)
     raw = _run_git(
         root,
         ["status", "--porcelain=v1", "-z", "--untracked-files=all"],

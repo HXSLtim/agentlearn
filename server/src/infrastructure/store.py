@@ -20,7 +20,7 @@ import json
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -76,6 +76,9 @@ class Store:
             "alter table sessions add column archived integer not null default 0",
             # 会话库 pin（P1）：置顶标记，列表排序 pinned 优先于最近活动。
             "alter table sessions add column pinned integer not null default 0",
+            # 会话工作目录（D35）：空字符串 = 默认 data/sandbox。
+            # 这是会话的属性，不是某一轮的参数。
+            "alter table sessions add column workdir text not null default ''",
         )
         for statement in migrations:
             try:
@@ -154,7 +157,7 @@ class Store:
             self.conn.execute(
                 """
                 select s.id, s.title, s.model, s.created_at, s.jsonl_path,
-                       s.archived, s.pinned,
+                       s.archived, s.pinned, s.workdir,
                        coalesce(
                            (select max(p.start_time) from spans p
                             where p.session_id = s.id), s.created_at
@@ -204,6 +207,32 @@ class Store:
         cursor = self.conn.execute(
             "update sessions set pinned = ? where id = ?",
             (1 if pinned else 0, session_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    @_locked
+    def get_workdir(self, session_id: str) -> str:
+        """这个会话的工作目录。空字符串 = 还没设，调用方用默认 sandbox。
+
+        会话不在索引里也返回空：第一轮 create_session 之前来问，就当没设过。
+        """
+        row = self.conn.execute(
+            "select workdir from sessions where id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return ""
+        return row["workdir"] or ""
+
+    @_locked
+    def set_workdir(self, session_id: str, workdir: str) -> bool:
+        """记下会话的工作目录。workdir 是已校验的绝对路径，或空字符串（恢复默认）。
+
+        不在这里判断目录存不存在——那是 application 的事，infrastructure
+        只负责把字符串留下。会话不存在返回 False。
+        """
+        cursor = self.conn.execute(
+            "update sessions set workdir = ? where id = ?", (workdir, session_id)
         )
         self.conn.commit()
         return cursor.rowcount > 0
@@ -289,6 +318,50 @@ class Store:
             datetime.fromisoformat(row["end_time"]) - datetime.fromisoformat(row["start_time"])
         ).total_seconds()
         return round(seconds * 1000)
+
+    @_locked
+    def running_spans(self, limit: int = 10) -> list[sqlite3.Row]:
+        """还没收尾的 span，最老的在前。
+
+        /health 的监控面。正常一轮远短于分钟级（读超时 120s × 有限工具圈），
+        一条 span 挂在 running 超过这个量级，就是上个进程的遗孤或锁泄漏，
+        不是真在跑。
+        """
+        return list(
+            self.conn.execute(
+                "select span_id, session_id, name, start_time from spans"
+                # 清扫过的孤儿 span 状态是 cancelled 但 end_time 仍为 null
+                # （不编造结束时间），只看 end_time 会把它们永远算成在跑。
+                " where end_time is null and status = 'running'"
+                " order by start_time limit ?",
+                (limit,),
+            )
+        )
+
+    @_locked
+    def close_stale_spans(self, older_than_seconds: float) -> int:
+        """把超过时限仍 running 的 span 收成 cancelled，返回收掉几条。
+
+        进程重启时调用：上个进程断连/被杀时没来得及收尾的 span 就停在
+        running（D33 之前的老进程真的会漏），不收的话监控面永远脏。
+        只收老的——刚起步的正常 span 远短于时限；并行的另一个进程
+        （比如 TUI 正在跑的一轮）也不会被误伤。data 里补 orphan 标记，
+        trace 里能看出这不是正常收尾。
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+        # 不补 end_time：清扫发生在重启时刻，把此刻写成结束时间会让
+        # duration 变成「从几天前跑到重启」的假数据（前端曾据此显示
+        # 6 天时长）。没有真实结束时间就保持 null，UI 显示「—」。
+        cursor = self.conn.execute(
+            "update spans set status = 'cancelled',"
+            " data = json_set(coalesce(data, '{}'), '$.orphan', 'process restart')"
+            # 只收还挂着 running 的：已清扫过的（cancelled + end_time null）
+            # 不该被重复计数。
+            " where end_time is null and status = 'running' and start_time < ?",
+            (cutoff.isoformat(),),
+        )
+        self.conn.commit()
+        return cursor.rowcount
 
     @_locked
     def spans_for(self, session_id: str) -> list[sqlite3.Row]:

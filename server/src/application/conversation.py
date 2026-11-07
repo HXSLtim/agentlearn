@@ -52,6 +52,7 @@ from infrastructure.transcript import Transcript
 
 from application.approval import APPROVAL_MODES, ApprovalBroker
 from application.plan import PLAN_ALLOWED_TOOLS, PlanBroker
+from application.sandbox import bind_workdir, normalize_workdir, reset_workdir
 from application.tools import SANDBOX, all_tools, read_memory, run_tool
 from application import compaction
 
@@ -93,6 +94,7 @@ class Conversation:
         approval_mode: str = "approve",
         context_budget_tokens: int | None = None,
         max_tool_rounds: int = MAX_TOOL_ROUNDS,
+        workdir: str | None = None,
     ) -> None:
         # 构造时就校验 session_id（必须是 UUID），非法在这里抛 ValueError。
         # TUI 把它转成一句提示退出，web 端点在推流前拦下返回 422。
@@ -106,6 +108,11 @@ class Conversation:
         # 自己的工作目录里 echo >> memory.md 就能写下记忆。参数可注入，
         # 测试换临时文件，不碰真 sandbox。
         self.memory_path = memory_path if memory_path is not None else SANDBOX / "memory.md"
+        # 这一轮要不要改会话的工作目录。None = 别动库里的值；"" = 回到默认
+        # sandbox；其它字符串在 turn 开头校验并写进 sessions.workdir。
+        # 写一次就清掉，工具圈里不会反复写。
+        self._workdir_request = workdir
+        self._turn_workdir = self._load_workdir()
         # 行为准则。放在 server/ 下而不是 sandbox 里：sandbox 是模型自己的
         # 便签目录，准则若放进去，就和记忆混成同一个它能维护的文件。
         # 这不是安全边界——bash 用绝对路径照样写得到（D17）。拆开只为了
@@ -247,6 +254,36 @@ class Conversation:
         tail_tokens = compaction.estimate_history_tokens(history[covered:])
         return summary_tokens, tail_tokens, summary_tokens + tail_tokens
 
+    def _load_workdir(self) -> Path:
+        """会话记下的起跑目录；没有、或目录已经不在了，就回默认 sandbox。
+
+        目录被删掉不让这一轮直接崩：工具自己会报「工作目录不存在」比
+        整轮起不来更可恢复。默认 sandbox 由 current_workdir 负责创建。
+        """
+        raw = self.store.get_workdir(self.session_id)
+        if raw:
+            path = Path(raw)
+            if path.is_dir():
+                return path
+        return SANDBOX.resolve()
+
+    def _adopt_workdir(self) -> None:
+        """把这一轮带来的目录请求写进会话，然后刷新 self._turn_workdir。
+
+        请求是 None 就什么都不写（TUI、没带字段的旧客户端）。写完立刻
+        清掉请求，工具循环每圈都进 turn 的后半段，不能每圈改一次库。
+        """
+        if self._workdir_request is not None and self.store.has_session(self.session_id):
+            if self._workdir_request == "":
+                self.store.set_workdir(self.session_id, "")
+            else:
+                self.store.set_workdir(
+                    self.session_id,
+                    str(normalize_workdir(self._workdir_request)),
+                )
+            self._workdir_request = None
+        self._turn_workdir = self._load_workdir()
+
     def _system_prompt(self, chat: AnthropicChat | OpenAIChat, summary_text: str = "") -> str:
         """拼这一圈的 system。四段顺序固定，见本文件顶部的说明。
 
@@ -270,7 +307,11 @@ class Conversation:
         parts.append(
             f"当前模型：{chat.model}\n"
             f"{effort_line}\n"
-            "档位由用户在界面里切换，你改不了。按这个深度分配思考。"
+            "档位由用户在界面里切换，你改不了。按这个深度分配思考。\n"
+            f"当前工作目录：{self._turn_workdir}\n"
+            "bash 和后台任务从这个目录起跑，整个会话都用它，不是某一条命令自己选的。"
+            "绝对路径和 ../ 仍能走到别处，这不是隔离。\n"
+            f"跨会话记忆不在工作目录里，固定是 {self.memory_path}。"
         )
         if self._turn_plan_mode:
             parts.append(
@@ -614,6 +655,10 @@ class Conversation:
                     "（可能已重试过、轮次已成功、或还没问过）。"
                 )
 
+        # 会话这一刻起使用的工作目录。放在 turn span 之前：路径不合法
+        # 就在这里抛，不留一个 running 的孤儿 span。
+        self._adopt_workdir()
+
         # 本轮新的未收尾清单：上一轮若被异常打断，残留的旧清单不归这轮管，
         # 不能拿它去收尾（那会把别的轮次的 span 标成这次的断连）。
         self._open_spans = []
@@ -622,7 +667,10 @@ class Conversation:
         # = 无人值守轮（D27）。trace 里区分「人的轮次」和「它自己的轮次」
         # 全靠这一个字段。
         turn_span = self._start_span(
-            "turn", data={"origin": origin} if origin else None
+            "turn",
+            data={"origin": origin, "workdir": str(self._turn_workdir)}
+            if origin
+            else {"workdir": str(self._turn_workdir)},
         )
         self._turn_span = turn_span
 
@@ -875,7 +923,13 @@ class Conversation:
                 else:
                     # run_tool 永不抛异常：出错也变成文本结果交回，模型自己调整。
                     # 第三个返回值是附带的图（眼睛）：纯文本工具恒为 None。
-                    content, is_error, image = run_tool(block.name, block.input)
+                    # bind/reset 把这一跳的起跑目录交给 bash / start_job，
+                    # 目录是会话的，不是模型参数（见 sandbox.current_workdir）。
+                    _wd_token = bind_workdir(self._turn_workdir)
+                    try:
+                        content, is_error, image = run_tool(block.name, block.input)
+                    finally:
+                        reset_workdir(_wd_token)
                     status = "error" if is_error else "ok"
                 span_data = {
                     "output": content,

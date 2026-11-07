@@ -10,6 +10,31 @@ from __future__ import annotations
 import json
 
 
+def span_payloads(store, session_id: str) -> list[dict]:
+    """把 spans_for 的 sqlite3.Row 翻成契约 dict（data 解析回对象，含耗时）。
+
+    Web 端点和 TUI 检查器都要这一份形状；以前 web 内联翻一遍、TUI 直接
+    塞 Row，结果 answers_for_requests 只认 dict 的 .get()，`main.py trace`
+    一启动就 AttributeError。转换收敛到这里，两个界面吃同一种输入。
+    """
+    payloads = []
+    for row in store.spans_for(session_id):
+        payloads.append(
+            {
+                "span_id": row["span_id"],
+                "parent_id": row["parent_id"],
+                "name": row["name"],
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "status": row["status"],
+                # data 在库里是 JSON 字符串，出站统一解析成对象。
+                "data": json.loads(row["data"]) if row["data"] else {},
+                "duration_ms": store.span_duration_ms(row["span_id"]),
+            }
+        )
+    return payloads
+
+
 def answer_texts(messages) -> list[str]:
     """取出已落盘的 assistant 正文，按时间顺序排列。"""
     return [

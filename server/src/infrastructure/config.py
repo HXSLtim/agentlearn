@@ -306,7 +306,7 @@ def load_mcp_servers(path: Path = Path("config.ini")) -> list[tuple[str, list[st
     """读 [mcp:<别名>] 配置段：每个段一个 MCP 服务器（第 5 层）。
 
         [mcp:cnt]
-        command = python3 examples/mcp_count.py
+        command = python3 examples/mcpCount.py
 
     返回 [(别名, 命令列表)]，顺序就是配置文件里的顺序。没有这类段返回
     空列表（MCP 是可选能力，不配就只有内置工具）。文件不存在也返回空：
@@ -326,7 +326,7 @@ def load_mcp_servers(path: Path = Path("config.ini")) -> list[tuple[str, list[st
             raise SystemExit(f"MCP 段名 {section} 的别名只能是字母数字下划线。")
         command = parser[section].get("command", "").strip()
         if not command:
-            raise SystemExit(f"[{section}] 缺 command。写一行启动命令，如 python3 examples/mcp_count.py")
+            raise SystemExit(f"[{section}] 缺 command。写一行启动命令，如 python3 examples/mcpCount.py")
         # shlex.split：让引号里的参数（路径带空格）正确切开，
         # 和 shell 看到的分词一致。
         servers.append((alias, shlex.split(command)))

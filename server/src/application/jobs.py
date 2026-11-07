@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from application.sandbox import CHILD_ENV, SANDBOX
+from application.sandbox import CHILD_ENV, SANDBOX, current_workdir
 
 # 任务输出落这里：和 sandbox 同一棵树，bash（以及人）都能直接读。
 JOBS_DIR = SANDBOX / "jobs"
@@ -313,14 +313,19 @@ def start_job(command: str) -> str:
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     job_id = uuid.uuid4().hex[:8]
     log_path = JOBS_DIR / f"{job_id}.log"
-    # 和 bash 工具同一套约束：sandbox 起跑、环境只给 PATH、shell=True。
+    # 和 bash 工具同一套约束：会话工作目录起跑、环境只给 PATH、shell=True。
+    # cwd 在启动这一刻定死写进 Popen——任务活得比这一轮长，不能等以后再问
+    # 「现在的会话目录是什么」。
+    cwd = current_workdir()
+    if not cwd.is_dir():
+        raise ValueError(f"工作目录不存在：{cwd}")
     # 差别只有两个：不 capture 到内存（写文件，多大都装得下）、不等待。
     # start_new_session 让它进自己的进程组——stop_job 才能连子进程一起杀
     # （只杀 shell 的话，它起的后台子进程会残留，bash 工具就有这个坑）。
     proc = subprocess.Popen(
         command,
         shell=True,
-        cwd=SANDBOX,
+        cwd=cwd,
         env=CHILD_ENV,
         stdout=log_path.open("w", encoding="utf-8"),
         stderr=subprocess.STDOUT,

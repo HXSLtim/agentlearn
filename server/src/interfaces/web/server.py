@@ -72,8 +72,10 @@ POST /plans/{plan_id}/confirm
     的 POST /chat 发起。
 """
 import json
+import time
 import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -94,8 +96,9 @@ from application.jobs import restore_jobs
 from application.plan import PlanBroker
 from application.tools import append_memory, read_memory
 from application.proactivity import ProactivityRunner, UNATTENDED_MAX_TOOL_ROUNDS
+from application.sandbox import SANDBOX, normalize_workdir
 from application.sessionManager import MODES, SessionManager
-from application.traceView import answers_for_requests, answer_texts
+from application.traceView import answers_for_requests, answer_texts, span_payloads
 from application.transcriptExport import transcript_to_markdown
 from application.workspace import WorkspaceError, changed_files
 from application.workspace import complete_paths
@@ -179,6 +182,61 @@ _manager = SessionManager()
 _approval = ApprovalBroker()
 _plans = PlanBroker()
 
+# /health 里的 uptime 基准：import 完成的时刻 ≈ 进程可服务的时刻。
+_started_at = time.monotonic()
+
+# 上个进程留下的 running span（断连/被杀时没来得及收尾的）现在收掉。
+# 实例：11-05 启动的老进程带着一条永挂 running 的 llm_request 跑了一天
+# （D33 之前的代码断连不收尾），监控面会一直被这些遗孤污染。只收
+# 1 小时前的——正常一轮远短于这个数，并行进程（比如 TUI）正在写的
+# span 不会被误伤。
+_orphans = _store.close_stale_spans(older_than_seconds=3600)
+if _orphans:
+    print(f"[startup] 收掉 {_orphans} 条遗留的 running span（cancelled/orphan）")
+
+
+def _backfill_session_titles(limit: int = 300) -> int:
+    """给历史会话补标题（title 列后加，老行一直是空标题）。
+
+    规则与 Conversation.turn 一致：首条用户消息压成一行、截 64 字；
+    只写空标题（set_title_if_empty），用户自己起过的名字不动。
+    正文读不到（缺文件/坏 JSONL）就跳过，不在启动时炸掉服务。
+    """
+    patched = 0
+    for row in _store.list_sessions(limit=limit, include_archived=True):
+        if (row["title"] or "").strip():
+            continue
+        try:
+            messages = _transcript.read(row["id"])
+        except (ValueError, OSError):
+            continue
+        text = ""
+        for message in messages:
+            if message.role != "user":
+                continue
+            text = next(
+                (
+                    block.text
+                    for block in message.content
+                    if block.type == "text" and block.text.strip()
+                ),
+                "",
+            )
+            if text:
+                break
+        clean = " ".join(text.split())
+        if clean:
+            _store.set_title_if_empty(
+                row["id"], clean[:64] + ("…" if len(clean) > 64 else "")
+            )
+            patched += 1
+    return patched
+
+
+_backfilled = _backfill_session_titles()
+if _backfilled:
+    print(f"[startup] 给 {_backfilled} 个历史会话补上了标题")
+
 
 def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
     """跑一轮无人值守对话（D27）：主动性触发器扣扳机后的执行端。
@@ -249,6 +307,15 @@ def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
 # 只防厂商请求挂死时把新请求一起拖死。
 _PREEMPT_WAIT_SECONDS = 120
 
+# queue 档排队等运行锁的上限。排队本身是正常语义，但排队线程阻塞在
+# acquire 上时收不到任何信号——客户端断开的 GeneratorExit 只能注入
+# 停在 yield 处的生成器，客户端走了它还在傻等；锁真被泄漏时
+# （D33 前的老进程：断连生成器停在 yield 上带着锁被挂起）这里就是
+# 「永远等」。给个上限把它变成「10 分钟后明确报错收线」。正常排队
+# 不该命中：一轮的耗时上限 ≈ 每圈 120s 读超时 × 有限工具圈 + 工具
+# 耗时，10 分钟只多不少。
+_TURN_LOCK_WAIT_SECONDS = 600
+
 
 class ChatRequest(BaseModel):
     """POST /chat 的请求体。FastAPI 按这个定义解析 JSON。"""
@@ -278,6 +345,9 @@ class ChatRequest(BaseModel):
     # true = 只读探索并产出计划；执行确认轮带 plan_id，不能同时使用。
     plan_mode: bool = False
     plan_id: str = ""
+    # 会话工作目录（D35）：空字符串 = 恢复默认 data/sandbox；不传 = 不动。
+    # 新会话第一轮在这里设（会话行都是这轮才建的，PATCH 没处落脚）。
+    workdir: str | None = None
 
 
 class SettingsRequest(BaseModel):
@@ -335,6 +405,8 @@ class SessionPatchRequest(BaseModel):
     title: str | None = None
     archived: bool | None = None
     pinned: bool | None = None
+    # 会话工作目录：空字符串 = 恢复默认 data/sandbox。None = 这个字段没传。
+    workdir: str | None = None
 
 
 class SessionForkRequest(BaseModel):
@@ -347,6 +419,39 @@ class SessionForkRequest(BaseModel):
 def get_settings():
     """返回可展示的设置；真实密钥永远不出现在响应里。"""
     return asdict(load_settings())
+
+
+@app.get("/health")
+def health() -> dict:
+    """监控面：curl 一下就能看穿「界面看起来卡住了」是真是假。
+
+    - uptime_s：进程活了多久（是不是刚重启过、重启多久了）。
+    - running_spans / oldest_running_span_s：还没收尾的 span 有几条、
+      最老的一条挂了多久。正常一轮是分钟级；这个数上了小时，就是
+      上个进程的遗孤（启动清理只收 1 小时前的）或新一轮泄漏。
+    - busy_sessions：turn_lock 正被持有的会话。有会话一直在这里、
+      而它的 span 早就该结束——锁泄漏的形状，今天重启前的死锁
+      （排队线程全部阻塞在 acquire 上）就是这个样子。
+    """
+    now = datetime.now(timezone.utc)
+    spans = [
+        {
+            "session_id": row["session_id"],
+            "name": row["name"],
+            "age_s": round(
+                (now - datetime.fromisoformat(row["start_time"])).total_seconds(),
+                1,
+            ),
+        }
+        for row in _store.running_spans()
+    ]
+    return {
+        "uptime_s": round(time.monotonic() - _started_at, 1),
+        "running_spans": len(spans),
+        "oldest_running_span_s": spans[0]["age_s"] if spans else None,
+        "spans": spans,
+        "busy_sessions": _manager.busy_sessions(),
+    }
 
 
 @app.get("/models")
@@ -395,22 +500,44 @@ def post_memory(request: MemoryRequest):
     return {"ok": True, "line": line}
 
 
+def _session_workdir(session_id: str) -> Path:
+    """会话的工作目录；session_id 为空（本地没同步过的线程）或没设过就用默认。
+
+    「变更」和 @file 补全都跟会话走：会话在哪个项目里干活，看到的就是
+    那个项目的 git。目录不存在不在这里报错——find_repository_root 的
+    「当前目录不在 Git 工作区里」已经够说清问题。
+    """
+    raw = _store.get_workdir(session_id) if session_id else ""
+    if raw:
+        path = Path(raw)
+        if path.is_dir():
+            return path
+    return SANDBOX.resolve()
+
+
 @app.get("/workspace/diff")
-def get_workspace_diff(include_untracked: bool = False):
-    """只读列出 Git 工作区变更文件，供 desktop diff 工作台使用。"""
+def get_workspace_diff(include_untracked: bool = False, session_id: str = ""):
+    """只读列出 Git 工作区变更文件，供 desktop diff 工作台使用。
+
+    session_id 给了就查那个会话的工作目录，没给保持旧行为（server 进程
+    的 cwd）——@file 补全和它同一个约定。
+    """
     try:
-        return changed_files(include_untracked=include_untracked)
+        return changed_files(
+            include_untracked=include_untracked,
+            start=_session_workdir(session_id) if session_id else None,
+        )
     except WorkspaceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/workspace/paths")
-def get_workspace_paths(q: str = "", limit: int = 50):
+def get_workspace_paths(q: str = "", limit: int = 50, session_id: str = ""):
     """给 desktop `@file` 补全路径名；不读取文件内容。"""
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit 要在 1..100 之间。")
     try:
-        return complete_paths(q, limit=limit)
+        return complete_paths(q, limit=limit, start=_session_workdir(session_id) if session_id else None)
     except WorkspaceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -455,6 +582,7 @@ def get_sessions(archived: bool = False):
             "stop_reason": row["stop_reason"] or "",
             "archived": bool(row["archived"]),
             "pinned": bool(row["pinned"]),
+            "workdir": row["workdir"] or "",
         }
         for row in _store.list_sessions(limit=100, include_archived=archived)
     ]
@@ -510,21 +638,7 @@ def post_stop(request: StopRequest):
 def get_session_trace(session_id: str):
     """spans 树 + 按顺序配对的 assistant 回答（只读 trace 面板用）。"""
     _validated_session(session_id)
-    spans = []
-    for row in _store.spans_for(session_id):
-        spans.append(
-            {
-                "span_id": row["span_id"],
-                "parent_id": row["parent_id"],
-                "name": row["name"],
-                "start_time": row["start_time"],
-                "end_time": row["end_time"],
-                "status": row["status"],
-                # data 是 JSON 字符串（存库形状），出站解析回对象。
-                "data": json.loads(row["data"]) if row["data"] else {},
-                "duration_ms": _store.span_duration_ms(row["span_id"]),
-            }
-        )
+    spans = span_payloads(_store, session_id)
     messages = _transcript.read(session_id)
     paired = answers_for_requests(spans, answer_texts(messages))
     return {"spans": spans, "answers": paired}
@@ -544,6 +658,7 @@ def _session_row(session_id: str) -> dict | None:
                 "stop_reason": row["stop_reason"] or "",
                 "archived": bool(row["archived"]),
                 "pinned": bool(row["pinned"]),
+                "workdir": row["workdir"] or "",
             }
     return None
 
@@ -552,8 +667,15 @@ def _session_row(session_id: str) -> dict | None:
 def patch_session(session_id: str, request: SessionPatchRequest):
     """rename / 归档 / 取消归档。返回更新后的整行。"""
     _validated_session(session_id)
-    if request.title is None and request.archived is None and request.pinned is None:
-        raise HTTPException(status_code=422, detail="没给要改的字段（title / archived / pinned）。")
+    if (
+        request.title is None
+        and request.archived is None
+        and request.pinned is None
+        and request.workdir is None
+    ):
+        raise HTTPException(
+            status_code=422, detail="没给要改的字段（title / archived / pinned / workdir）。"
+        )
     if request.title is not None:
         clean = " ".join(request.title.split())
         if not clean:
@@ -565,6 +687,14 @@ def patch_session(session_id: str, request: SessionPatchRequest):
             raise HTTPException(status_code=404, detail="没有这个会话。")
     if request.pinned is not None:
         if not _store.set_pinned(session_id, request.pinned):
+            raise HTTPException(status_code=404, detail="没有这个会话。")
+    if request.workdir is not None:
+        # 空串 = 回默认 sandbox；其它路径推流前就校验（422），别等下一轮
+        # turn 里才发现打错了。
+        clean_dir = (
+            "" if request.workdir == "" else str(normalize_workdir(request.workdir))
+        )
+        if not _store.set_workdir(session_id, clean_dir):
             raise HTTPException(status_code=404, detail="没有这个会话。")
     return _session_row(session_id)
 
@@ -770,6 +900,7 @@ def chat_events(
     images: list[dict] | None = None,
     plan_mode: bool = False,
     plan_id: str = "",
+    workdir: str | None = None,
 ):
     """产生 SSE 的每一条。这是一个生成器。
 
@@ -805,7 +936,16 @@ def chat_events(
     # 到这里都是「跑自己的一整轮」：queue 直接等锁；抢占者等旧轮退场后
     # 拿锁；软中断竞争失败（旧轮恰好收尾，inject 返回 False）也落到这里。
     # 先来后到是近似的：threading.Lock 不保证 FIFO。
-    with slot.turn_lock:
+    # 等锁有界（见 _TURN_LOCK_WAIT_SECONDS 的注释）：拿不到就明确报错，
+    # 不让前端「等待首个 token」挂到永远。
+    if not slot.turn_lock.acquire(timeout=_TURN_LOCK_WAIT_SECONDS):
+        yield _event({
+            "kind": "error",
+            "message": "等待运行锁超时：这个会话有一轮迟迟不交出执行权，可能是上一轮没有正常收尾。重启 desktop server 可解。",
+        })
+        yield _event({"kind": "done", "stop_reason": "error", "session_id": session_id})
+        return
+    try:
         handle = slot.begin(approval_mode)
         try:
             question_to_run = question
@@ -839,6 +979,7 @@ def chat_events(
                 approval=_approval,
                 plan_broker=_plans,
                 approval_mode=approval_mode,
+                workdir=workdir,
             )
             try:
                 blocks = [
@@ -870,6 +1011,10 @@ def chat_events(
             # 无论正常、出错、被打断还是客户端断开，槽位一定交还——
             # 否则这个会话从此再也跑不了新一轮。
             slot.finish()
+    finally:
+        # with 换成 acquire/try/finally：锁的释放语义不变（GeneratorExit
+        # 注入时同样走到这里），只是多了上面那个「等不到就别进来」的上限。
+        slot.turn_lock.release()
 
 
 def _event(payload: dict) -> str:
@@ -950,6 +1095,13 @@ def chat(request: ChatRequest) -> StreamingResponse:
                 status_code=409,
                 detail="没有可重试的轮次：历史尾部不是用户消息（可能已重试过或已成功）。",
             )
+    # 工作目录推流前校验（非空才查：空串是「回默认」的合法值）。
+    # 422 比流里一条 error 事件诚实——请求根本没被接受。
+    if request.workdir:
+        try:
+            normalize_workdir(request.workdir)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
     return StreamingResponse(
         chat_events(
             request.question,
@@ -960,6 +1112,7 @@ def chat(request: ChatRequest) -> StreamingResponse:
             request.images,
             request.plan_mode,
             request.plan_id,
+            request.workdir,
         ),
         # media_type 告诉客户端这是一段事件流，而不是一次性的 JSON。
         media_type="text/event-stream",

@@ -20,7 +20,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from application.sandbox import CHILD_ENV, SANDBOX
+from application.sandbox import CHILD_ENV, SANDBOX, current_workdir
 from domain.message import ImageBlock
 from domain.tool import Tool
 from infrastructure.config import load_mcp_servers
@@ -86,6 +86,11 @@ def bash(command: str) -> str:
     SANDBOX.mkdir(parents=True, exist_ok=True)
     if not command.strip():
         raise ValueError("空命令")
+    # 起跑目录是会话的 workdir（没设过就是上面的 sandbox），不是模型
+    # 这一跳临时指定的。见 sandbox.current_workdir。
+    cwd = current_workdir()
+    if not cwd.is_dir():
+        raise ValueError(f"工作目录不存在：{cwd}")
     # shell=True 把整条命令交给 /bin/sh -c：管道 |、重定向 >、命令替换 $(...)
     # 都可用，和真实终端一致。放弃 shlex.split + 直接 exec 的方案，因为那等于
     # 向模型承诺一个「残缺的 shell」（$((...))、> 全是字面量），description
@@ -96,7 +101,7 @@ def bash(command: str) -> str:
         proc = subprocess.run(
             command,
             shell=True,
-            cwd=SANDBOX,
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=TIMEOUT_SECONDS,
@@ -206,7 +211,8 @@ NOW_TIME = Tool(
 BASH = Tool(
     name="bash",
     description=(
-        "在专属工作目录里跑一条 shell 命令，返回 stdout、stderr 和退出码。"
+        "在当前会话的工作目录里跑一条 shell 命令，返回 stdout、stderr 和退出码。"
+        "目录由用户在界面里设定，整个会话都用它，不是这一条命令自己选的。"
         "支持管道、重定向、$() 和 $((算术))，例如 echo $((123*456+789))。"
         "文件读写、python -c 一次性脚本都可以。命令有 10 秒超时。"
     ),

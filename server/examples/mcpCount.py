@@ -3,7 +3,7 @@
 第 5 层的验收对象：`config.ini` 里加一段——
 
     [mcp:cnt]
-    command = python3 examples/mcp_count.py
+    command = python3 examples/mcpCount.py
 
 就能让 agent 多出 `cnt__count_words` 这个工具，循环代码一行不改。
 

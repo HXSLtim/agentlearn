@@ -169,3 +169,25 @@ class SessionManager:
             if session_id not in self._slots:
                 self._slots[session_id] = _Slot()
             return self._slots[session_id]
+
+    def busy_sessions(self) -> list[dict]:
+        """turn_lock 正被持有的会话，给 /health 当监控面。
+
+        锁被持有 = 这个会话有一轮在跑（或排队者正阻塞在 acquire 上）。
+        泄漏的形状在这里现形：条目一直不消失、而对应会话的 span 早就
+        该结束。approval_mode 顺带报出来，方便对上「是哪一轮」。
+        """
+        with self._guard:
+            slots = list(self._slots.items())
+        busy = []
+        for session_id, slot in slots:
+            if not slot.turn_lock.locked():
+                continue
+            running = slot.current()
+            busy.append(
+                {
+                    "session_id": session_id,
+                    "approval_mode": running.approval_mode if running else None,
+                }
+            )
+        return busy
