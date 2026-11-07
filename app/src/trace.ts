@@ -1,6 +1,6 @@
 // trace 抽屉：只读 span 树、耗时与回答配对，自己接线自己的按钮。
 import { API_BASE, readError } from "./api";
-import { escapeHtml, renderMarkdown, shortSession } from "./format";
+import { escapeHtml, renderMarkdown, shortSession, formatDuration, cacheHitPercent } from "./format";
 import { promptInput, requireElement } from "./dom";
 import { activeThread } from "./main";
 import type { TraceSpan, TraceResponse } from "./types";
@@ -25,7 +25,12 @@ let traceSessionId = "";
 let traceLoadSequence = 0;
 
 function traceDuration(span: TraceSpan): string {
-  return span.duration_ms === null ? "进行中" : `${span.duration_ms}ms`;
+  // 只有真的还在跑才说「进行中」；被清扫的孤儿 span 没有 end_time，
+  // 显示「—」而不是假装它跑到了现在。
+  if (span.duration_ms === null) {
+    return span.status === "running" ? "进行中" : "—";
+  }
+  return formatDuration(span.duration_ms);
 }
 
 // 状态类名跟后端枚举走（is-ok / is-error / is-running / is-cancelled），展示文字走中文。
@@ -165,7 +170,7 @@ function traceDetailMarkup(span: TraceSpan | undefined): string {
           ${traceField("token", `入 ${data.input_tokens ?? "—"} / 出 ${data.output_tokens ?? "—"}`)}
           ${traceField(
             "缓存",
-            `读 ${data.cache_read_tokens ?? "—"} / 写 ${data.cache_write_tokens ?? "—"} / 命中 ${data.cache_hit_ratio ?? "—"}‰`,
+            `读 ${data.cache_read_tokens ?? "—"} / 写 ${data.cache_write_tokens ?? "—"} / 命中 ${cacheHitPercent(data.cache_hit_ratio)}`,
           )}
         </div>
       </section>

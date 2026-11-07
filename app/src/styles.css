@@ -4868,3 +4868,125 @@ button {
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+/* 会话工作目录（D35）：composer 左上角的小按钮 + 一个单字段的窄弹层。 */
+.workdir-button {
+  padding: 1px 8px;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workdir-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.workdir-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  padding: 24px;
+  place-items: center;
+}
+
+.workdir-modal[hidden] {
+  display: none;
+}
+
+.workdir-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
+.workdir-panel {
+  position: relative;
+  width: min(560px, calc(100vw - 48px));
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  box-shadow: var(--card-shadow);
+}
+
+.workdir-panel::before {
+  display: block;
+  height: 4px;
+  content: "";
+  background: var(--accent);
+}
+
+.workdir-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 18px 22px 10px;
+}
+
+.workdir-form {
+  padding: 0 22px 22px;
+}
+
+.workdir-intro {
+  margin: 0 0 14px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.workdir-field {
+  display: grid;
+  gap: 6px;
+}
+
+.workdir-field > span {
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.workdir-field input {
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.workdir-field small {
+  min-height: 14px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.workdir-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.workdir-actions button {
+  padding: 6px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+
+.workdir-actions button[type="submit"] {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}

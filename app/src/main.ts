@@ -18,30 +18,19 @@ import type {
   Thread,
   PersistedState,
   SettingsSnapshot,
-  SettingsPayload,
-  ModelListResponse,
   CapabilitiesResponse,
-  ApprovalScope,
   ChatEvent,
-  ApprovalModeResponse,
   PlanConfirmResponse,
   ServerSession,
-  SessionForkResponse,
-  SessionSearchHit,
-  SessionSearchResponse,
-  ConversationSearchMatch,
   ServerMessage,
-  WorkspacePathsResponse,
   StopResponse,
   ActivityItem,
-  PaletteMode,
   StreamContext,
   TraceResponse,
 } from "./types";
 import {
-  SlashCommand,
-  SLASH_COMMANDS,
   SLASH_COMMANDS_BY_NAME,
+  type SlashCommand,
 } from "./slashCommands";
 import {
   appShell,
@@ -65,12 +54,6 @@ import {
   sendButton,
   sendLabel,
   stopButton,
-  composerShell,
-  composerAttachments,
-  commandPalette,
-  commandList,
-  commandPaletteTitle,
-  commandPaletteEnterAction,
   runState,
   runStateCopy,
   runSession,
@@ -91,53 +74,7 @@ import {
   activityCount,
   runtimeLight,
   ledgerLight,
-  toast,
   settingsModal,
-  settingsCloseButton,
-  settingsCancelButton,
-  settingsForm,
-  settingsProvider,
-  settingsModel,
-  settingsModelCount,
-  settingsBaseUrl,
-  settingsMaxTokens,
-  settingsEffort,
-  settingsApiKey,
-  settingsKeySource,
-  settingsStatus,
-  settingsSave,
-  settingsSaveLabel,
-  resumeModal,
-  resumeCloseButton,
-  resumeList,
-  resumeSummary,
-  resumeSearch,
-  resumeRenameButton,
-  resumePinButton,
-  resumeActiveViewButton,
-  resumeArchiveViewButton,
-  resumeArchiveButton,
-  resumeDeleteButton,
-  resumeDeleteConfirm,
-  resumeDeleteTitle,
-  resumeDeleteCancelButton,
-  resumeDeleteConfirmButton,
-  resumeForkButton,
-  resumeForkForm,
-  resumeForkSource,
-  resumeForkMax,
-  resumeForkInput,
-  resumeForkPreview,
-  resumeForkCancelButton,
-  resumeForkSubmitButton,
-  resumeRenameForm,
-  resumeRenameInput,
-  resumeRenameCancel,
-  conversationFindModal,
-  conversationFindCloseButton,
-  conversationFindInput,
-  conversationFindList,
-  conversationFindCount,
   traceModal,
   workspaceDiffToggle,
   workspaceDiffModal,
@@ -160,6 +97,11 @@ import {
   approvalLabel,
   steeringLabel,
   steeringStateLabel,
+  stopReasonLabel,
+  formatDuration,
+  cacheHitPercent,
+  isAutoThreadTitle,
+  fallbackSessionTitle,
 } from "./format";
 import {
   openTrace,
@@ -171,70 +113,63 @@ import {
   closeWorkspaceDiff,
   loadWorkspaceDiff,
 } from "./workspaceDiff";
+import { showToast } from "./toast";
+import {
+  hasPendingImages,
+  parseImage,
+  peekPendingImages,
+  takePendingImages,
+} from "./composerImages";
+import {
+  closeSettings,
+  currentEffort,
+  currentPricing,
+  cycleEffort,
+  openSettings,
+  quickSetModel,
+  refreshEffort,
+  selectedModelId,
+  setCurrentEffort,
+  setEffort,
+} from "./settings";
+import {
+  autoApprovedApprovalIds,
+  cycleApprovalMode,
+  setApprovalMode,
+} from "./approval";
+import { renderWorkdir } from "./workdir";
+import {
+  applyConversationFindHighlight,
+  closeConversationFind,
+  findConversationMatch,
+  isConversationFindOpen,
+  openConversationFind,
+} from "./conversationFind";
+import {
+  closeResume,
+  findResumeThread,
+  handleResumeKeydown,
+  isResumeOpen,
+  openResume,
+} from "./resume";
+import {
+  closeCommandPalette,
+  completeSelectedCommand,
+  completeSelectedFile,
+  isCommandPaletteOpen,
+  isFilePalette,
+  moveCommandSelection,
+  resetCommandSelection,
+  updateCommandPalette,
+} from "./commandPalette";
 const STORAGE_KEY = "agentlearn.desktop.v1";
 
 
-let state = loadState();
-
-let currentEffort: SettingsSnapshot["effort"] = "";
-
-let currentPricing: SettingsSnapshot["pricing"] = null;
-
-let currentModelOptions: string[] = [];
-
-let approvalModeSync: Promise<void> = Promise.resolve();
-
-const autoApprovedApprovalIds = new Set<string>();
-
-let toastTimer: number | undefined;
+export let state = loadState();
 
 let renderFrame: number | undefined;
 
 let renderTarget: { threadId: string; messageId: string } | null = null;
-
-let commandMatches: SlashCommand[] = [...SLASH_COMMANDS];
-
-let commandSelection = 0;
-
-let paletteMode: PaletteMode = "command";
-
-let pendingImages: ImageAttachment[] = [];
-
-let fileMatches: string[] = [];
-
-let fileSelection = 0;
-
-let fileCompletionTimer: number | undefined;
-
-let fileCompletionSequence = 0;
-
-let resumeMatches: Thread[] = [];
-
-let resumeSelection = 0;
-
-let resumeQuery = "";
-
-let resumeArchived = false;
-
-let contentHits = new Map<string, SessionSearchHit>();
-
-let contentSearchSequence = 0;
-
-let renameThreadId = "";
-
-let deleteThreadId = "";
-
-let forkThreadId = "";
-
-let forkMessages: ServerMessage[] = [];
-
-let conversationFindMatches: ConversationSearchMatch[] = [];
-
-let conversationFindSelection = 0;
-
-let conversationFindThreadId = "";
-
-let conversationFindMessageId = "";
 
 let transcriptMode: TranscriptMode = "normal";
 
@@ -249,12 +184,12 @@ function createId(): string {
   return crypto.randomUUID();
 }
 
-function createThread(): Thread {
+export function createThread(): Thread {
   const now = Date.now();
   return {
     id: createId(),
     sessionId: "",
-    title: "未命名运行",
+    title: "新会话",
     createdAt: now,
     updatedAt: now,
     stopReason: "",
@@ -263,91 +198,10 @@ function createThread(): Thread {
     model: "",
     pinned: false,
     archived: false,
+    workdir: "",
     messagesLoaded: true,
     messages: [],
   };
-}
-
-const IMAGE_MEDIA_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-  "image/gif",
-]);
-
-function parseImage(
-  image: Pick<Partial<ImageAttachment>, "media_type" | "data"> | null | undefined,
-): ImageAttachment | undefined {
-  const mediaType = image?.media_type ?? "";
-  const data = image?.data ?? "";
-  if (
-    !IMAGE_MEDIA_TYPES.has(mediaType) ||
-    !data ||
-    data.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]+={0,2}$/.test(data)
-  ) {
-    return undefined;
-  }
-  return { media_type: mediaType, data };
-}
-
-function renderPendingImages(): void {
-  pendingImages = pendingImages
-    .map(parseImage)
-    .filter((image): image is ImageAttachment => Boolean(image));
-  composerAttachments.hidden = !pendingImages.length;
-  composerAttachments.innerHTML = pendingImages
-    .map(
-      (image, index) => `
-        <figure class="composer-attachment">
-          <img src="data:${image.media_type};base64,${image.data}" alt="待发送图片 ${index + 1}" />
-          <button type="button" data-remove-image="${index}">移除</button>
-        </figure>
-      `,
-    )
-    .join("");
-}
-
-async function imageFileToAttachment(file: File): Promise<ImageAttachment | undefined> {
-  if (!IMAGE_MEDIA_TYPES.has(file.type)) {
-    return undefined;
-  }
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      resolve(typeof reader.result === "string" ? reader.result : "");
-    };
-    reader.onerror = () => {
-      reject(reader.error ?? new Error(`读取 ${file.name} 失败`));
-    };
-    reader.readAsDataURL(file);
-  });
-  const prefix = `data:${file.type};base64,`;
-  if (!dataUrl.startsWith(prefix)) {
-    return undefined;
-  }
-  return parseImage({
-    media_type: file.type,
-    data: dataUrl.slice(prefix.length),
-  });
-}
-
-async function addImageFiles(
-  files: FileList | File[] | undefined,
-): Promise<void> {
-  const images = await Promise.all(
-    Array.from(files ?? []).map((file) => imageFileToAttachment(file)),
-  );
-  const valid = images.filter((image): image is ImageAttachment => Boolean(image));
-  if (!valid.length) {
-    showToast("没有可发送的图片附件");
-    return;
-  }
-  pendingImages = [...pendingImages, ...valid];
-  renderPendingImages();
-  promptInput.focus();
-  showToast(`已添加 ${valid.length} 张图片 · 发送时使用 queue`);
 }
 
 function normalizeStoredMessage(message: UiMessage): UiMessage {
@@ -389,6 +243,24 @@ function loadState(): PersistedState {
       if (parsed.version === 1 && Array.isArray(parsed.threads) && parsed.threads.length) {
         const threads = parsed.threads.slice(0, 24).map((thread) => ({
           ...thread,
+          // 旧版本把没起名的会话一律存成「未命名运行」；本地有正文的趁着
+          // 加载改成首条用户消息，别等 server 列表合并时还顶着一排占位名。
+          title: (() => {
+            const firstUserText = Array.isArray(thread.messages)
+              ? thread.messages.find(
+                  (message) =>
+                    message.role === "user" && (message.text ?? "").trim(),
+                )?.text
+              : undefined;
+            if (isAutoThreadTitle(thread.title ?? "")) {
+              // 没有正文的旧占位草稿（旧版本一律叫「未命名运行」）
+              // 统一归成新会话默认名，别在列表里留一个假会话。
+              return firstUserText
+                ? threadTitleFor(firstUserText)
+                : "新会话";
+            }
+            return thread.title;
+          })(),
           messages: Array.isArray(thread.messages)
             ? thread.messages.map(normalizeStoredMessage)
             : [],
@@ -404,6 +276,8 @@ function loadState(): PersistedState {
           model: typeof thread.model === "string" ? thread.model : "",
           pinned: thread.pinned === true,
           archived: thread.archived === true,
+          workdir:
+            typeof thread.workdir === "string" ? thread.workdir : "",
           serverTurns:
             typeof thread.serverTurns === "number"
               ? thread.serverTurns
@@ -436,7 +310,7 @@ export function activeThread(): Thread {
   );
 }
 
-function persistState(): void {
+export function persistState(): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
@@ -544,10 +418,25 @@ function mergeServerSessions(sessions: ServerSession[]): void {
       thread.messagesLoaded = false;
       state.threads.push(thread);
     }
-    thread.title = session.title || thread.title || "未命名运行";
+    // 标题优先级：服务端正式名 > 本地已起过的名 > 兜底（会话/空会话 + 时间）。
+    // 本地还是自动名（未命名运行/新会话）时用兜底，别把一排同名占位顶在列表里。
+    const createdAt = parseServerTime(session.created_at);
+    thread.title =
+      session.title ||
+      (isAutoThreadTitle(thread.title)
+        ? fallbackSessionTitle(createdAt, session.turns)
+        : thread.title) ||
+      fallbackSessionTitle(createdAt, session.turns);
     thread.model = session.model || thread.model;
     thread.pinned = session.pinned === true;
     thread.archived = session.archived === true;
+    // 服务端是事实来源；只防一种情况：本地刚改过、但会话行还没建
+    // （首条消息没发），那个值要随下一次 /chat 落上去，别被冲掉。
+    if (typeof session.workdir === "string" && session.workdir !== thread.workdir) {
+      if (!thread.workdir || !thread.sessionId || thread.sessionId === session.id) {
+        thread.workdir = session.workdir;
+      }
+    }
     thread.serverTurns = session.turns;
     thread.stopReason = session.stop_reason || thread.stopReason;
     thread.createdAt = parseServerTime(session.created_at);
@@ -614,7 +503,10 @@ async function hydrateTurnDurations(thread: Thread): Promise<void> {
         closer &&
         closer.durationMs === undefined &&
         Number.isFinite(duration) &&
-        duration >= 0
+        duration >= 0 &&
+        // 历史 D34 清扫曾把孤儿 span 的 end_time 写成重启时刻，换来几天
+        // 的假时长；超过 24h 的轮次时长按脏数据丢弃，宁可不显示。
+        duration < 24 * 3_600_000
       ) {
         closer.durationMs = duration;
       }
@@ -628,7 +520,7 @@ async function hydrateTurnDurations(thread: Thread): Promise<void> {
   }
 }
 
-async function fetchServerSessions(
+export async function fetchServerSessions(
   reportError = false,
   archived = false,
 ): Promise<void> {
@@ -671,7 +563,7 @@ const hydrationJobs = new Map<string, Promise<void>>();
 // span-tick 数据每个会话拉一次就够（页面生命周期内）
 const durationHydrationTried = new Set<string>();
 
-async function hydrateThread(thread: Thread, force = false): Promise<void> {
+export async function hydrateThread(thread: Thread, force = false): Promise<void> {
   if (!thread.sessionId || (thread.messagesLoaded && !force) || isThreadRunning(thread)) {
     return;
   }
@@ -727,7 +619,7 @@ function runningAssistant(thread: Thread): UiMessage | undefined {
   return running.find((message) => !message.queued) ?? running[0];
 }
 
-function isThreadRunning(thread: Thread): boolean {
+export function isThreadRunning(thread: Thread): boolean {
   return runningAssistant(thread) !== undefined;
 }
 
@@ -804,7 +696,7 @@ function setStatusLight(element: HTMLElement, status: string): void {
   element.classList.add(status);
 }
 
-function renderThreadList(): void {
+export function renderThreadList(): void {
   const sorted = state.threads
     .filter((thread) => !thread.archived)
     .sort(
@@ -911,7 +803,9 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
         ? `<span class="tool-pending">等待结果…</span>`
         : `<pre>${escapeHtml(tool.output || "（无输出）")}</pre>${toolImage}`;
   const duration =
-    tool.elapsedMs === undefined ? "" : `<span>${tool.elapsedMs}ms</span>`;
+    tool.elapsedMs === undefined
+      ? ""
+      : `<span>${formatDuration(tool.elapsedMs)}</span>`;
   const label =
     tool.state === "waiting"
       ? "工具审批"
@@ -1114,11 +1008,20 @@ function renderAssistant(message: UiMessage, showAuthor = true): string {
     : "";
   const stop =
     message.stopReason && !message.streaming
-      ? `<span>结束 · ${escapeHtml(message.stopReason)}</span>`
+      ? `<span>结束 · ${escapeHtml(stopReasonLabel(message.stopReason))}</span>`
       : "";
-  // 真空回答（不是被隐藏，而是本来就没有内容）：留一句说明，别留空白卡片
+  // 真空回答（不是被隐藏，而是本来就没有内容）：留一句说明，别留空白卡片。
+  // 但被中断 / 并入插话的轮不补这句——footer 已经写明结局，再补一句只是噪音。
+  const quietStop =
+    message.stopReason === "cancelled" ||
+    message.stopReason === "steering" ||
+    message.stopReason === "injected";
   const emptyNote =
-    !parts && !error && !message.streaming && !message.parts.length
+    !parts &&
+    !error &&
+    !quietStop &&
+    !message.streaming &&
+    !message.parts.length
       ? `<p class="assistant-empty">本轮没有返回内容。</p>`
       : "";
   return `
@@ -1135,11 +1038,11 @@ function renderAssistant(message: UiMessage, showAuthor = true): string {
       ${error}
       <footer class="message-footer">
         ${stop}
-        ${message.durationMs !== undefined ? `<span>${message.durationMs}ms</span>` : ""}
+        ${message.durationMs !== undefined ? `<span>${formatDuration(message.durationMs)}</span>` : ""}
       </footer>
       ${
         message.durationMs !== undefined && !message.streaming
-          ? `<span class="span-tick" title="本轮耗时 ${message.durationMs}ms · 全会话最长轮为基准"><i style="width: ${Math.max(3, Math.round((message.durationMs / assistantMaxDurationMs()) * 100))}%"></i></span>`
+          ? `<span class="span-tick" title="本轮耗时 ${formatDuration(message.durationMs)} · 全会话最长轮为基准"><i style="width: ${Math.max(3, Math.round((message.durationMs / assistantMaxDurationMs()) * 100))}%"></i></span>`
           : ""
       }
     </article>
@@ -1148,9 +1051,12 @@ function renderAssistant(message: UiMessage, showAuthor = true): string {
 
 function renderUser(message: UiMessage): string {
   const steering =
-    message.steeringState
-      ? `<span class="steering-state is-${message.steeringState}">${steeringStateLabel(message.steeringState)}</span>`
-      : "";
+    message.steeringState === "failed"
+      ? // 未送达的消息没进模型也没进 JSONL，给一条自愈路径：点一下重发。
+        `<button type="button" class="steering-state is-failed" data-resend-message-id="${escapeHtml(message.id)}" title="重新发送这条消息">未送达 · 点此重发</button>`
+      : message.steeringState
+        ? `<span class="steering-state is-${message.steeringState}">${steeringStateLabel(message.steeringState)}</span>`
+        : "";
   return `
     <article class="message user-message message-appear" data-message-id="${escapeHtml(message.id)}">
       <header class="user-heading">
@@ -1182,97 +1088,8 @@ function renderCommandReceipt(): string {
   `;
 }
 
-function messageSearchText(message: UiMessage): string {
-  if (message.role === "user") {
-    return message.text;
-  }
-  const chunks = message.parts.map((part) => {
-    if (part.type === "text" || part.type === "thinking") {
-      return part.text;
-    }
-    if (part.type === "plan") {
-      return part.plan.text;
-    }
-    return `${part.tool.name}\n${JSON.stringify(part.tool.input)}\n${
-      part.tool.output ?? ""
-    }`;
-  });
-  return chunks.join("\n");
-}
 
-function conversationSearchSnippet(text: string, query: string): string {
-  const compact = text.replace(/\s+/g, " ").trim();
-  const normalizedQuery = query.trim().toLowerCase();
-  const position = normalizedQuery
-    ? compact.toLowerCase().indexOf(normalizedQuery)
-    : 0;
-  const start = position <= 30 ? 0 : position - 30;
-  return `${start > 0 ? "…" : ""}${compact.slice(start, start + 180)}${
-    start + 180 < compact.length ? "…" : ""
-  }`;
-}
-
-function filterConversationMatches(query: string): void {
-  const normalized = query.trim().toLowerCase();
-  conversationFindMatches = activeThread()
-    .messages.filter((message) => {
-      if (!normalized) {
-        return true;
-      }
-      return messageSearchText(message).toLowerCase().includes(normalized);
-    })
-    .map((message) => ({
-      messageId: message.id,
-      role: message.role,
-      snippet: conversationSearchSnippet(messageSearchText(message), query),
-    }));
-  conversationFindSelection = 0;
-}
-
-function renderConversationFindList(): void {
-  conversationFindCount.textContent = `${conversationFindMatches.length} 条匹配`;
-  conversationFindList.innerHTML = conversationFindMatches.length
-    ? conversationFindMatches
-        .map(
-          (match, index) => `
-            <button
-              class="conversation-find-item${
-                index === conversationFindSelection ? " is-selected" : ""
-              }"
-              type="button"
-              role="option"
-              aria-selected="${index === conversationFindSelection}"
-              data-find-index="${index}"
-            >
-              <span>${match.role === "user" ? "你" : "智能体"}</span>
-              <strong>${escapeHtml(match.snippet)}</strong>
-            </button>
-          `,
-        )
-        .join("")
-    : `<div class="conversation-find-empty">没有匹配的已渲染消息</div>`;
-  const selected = conversationFindList.querySelector(".is-selected");
-  selected?.scrollIntoView({ block: "nearest" });
-}
-
-function applyConversationFindHighlight(): void {
-  conversation
-    .querySelectorAll(".is-search-match")
-    .forEach((element) => element.classList.remove("is-search-match"));
-  if (
-    !conversationFindMessageId ||
-    conversationFindThreadId !== activeThread().id
-  ) {
-    return;
-  }
-  conversation
-    .querySelector(
-      `[data-message-id="${CSS.escape(conversationFindMessageId)}"]`,
-    )
-    ?.classList.add("is-search-match");
-}
-
-function renderConversation(forceBottom = false): void {
+export function renderConversation(forceBottom = false): void {
   const thread = activeThread();
   if (thread.sessionId) {
     void hydrateTurnDurations(thread);
@@ -1318,7 +1135,7 @@ function renderHeader(): void {
     : "当前会话还没有 trace";
 }
 
-function renderRunLedger(): void {
+export function renderRunLedger(): void {
   const thread = activeThread();
   const active = runningAssistant(thread);
   const assistant = active ?? lastAssistant(thread);
@@ -1377,17 +1194,21 @@ function renderRunLedger(): void {
   runOutputTokens.textContent = String(usage?.output_tokens ?? 0);
   runCacheRead.textContent = String(usage?.cache_read_tokens ?? 0);
   runCacheWrite.textContent = String(usage?.cache_write_tokens ?? 0);
-  runCacheHit.textContent = `${usage?.cache_hit_ratio ?? 0}‰`;
+  runCacheHit.textContent = cacheHitPercent(usage?.cache_hit_ratio);
   runCost.textContent = formatCost(usage);
   runEffort.textContent = effortLabel(currentEffort);
   runApproval.textContent = approvalLabel(thread.approvalMode);
   runSteering.textContent = steeringLabel(thread.steeringMode);
-  runStop.textContent = thread.stopReason || "—";
+  runStop.textContent = thread.stopReason
+    ? stopReasonLabel(thread.stopReason)
+    : "—";
   if (active && thread.runStartedAt) {
-    runElapsed.textContent = `${Date.now() - thread.runStartedAt}ms`;
+    runElapsed.textContent = formatDuration(Date.now() - thread.runStartedAt);
   } else {
     runElapsed.textContent =
-      assistant?.durationMs !== undefined ? `${assistant.durationMs}ms` : "—";
+      assistant?.durationMs !== undefined
+        ? formatDuration(assistant.durationMs)
+        : "—";
   }
   setStatusLight(runtimeLight, statusClass);
   setStatusLight(ledgerLight, statusClass);
@@ -1429,7 +1250,7 @@ function renderRunLedger(): void {
           ? "等待审批"
           : tool.state === "running"
           ? "执行中"
-          : `${tool.elapsedMs ?? 0}ms · ${tool.output?.split("\n")[0]?.slice(0, 48) ?? "完成"}`,
+          : `${tool.elapsedMs === undefined ? "" : `${formatDuration(tool.elapsedMs)} · `}${tool.output?.split("\n")[0]?.slice(0, 48) ?? "完成"}`,
       status: tool.isError ? "error" : tool.state,
     });
   }
@@ -1470,7 +1291,7 @@ function formatCost(usage: TurnUsage | undefined): string {
   }`;
 }
 
-function renderEverything(forceBottom = false): void {
+export function renderEverything(forceBottom = false): void {
   const thread = activeThread();
   const running = isThreadRunning(thread);
   const stopping = Boolean(thread.stopping && running);
@@ -1478,6 +1299,7 @@ function renderEverything(forceBottom = false): void {
   renderHeader();
   renderConversation(forceBottom);
   renderRunLedger();
+  renderWorkdir();
   sendButton.disabled = stopping;
   sendLabel.textContent = running ? "插话" : "发送";
   stopButton.hidden = !running;
@@ -1777,187 +1599,10 @@ function handleChatEvent(event: ChatEvent, context: StreamContext): boolean {
   return false;
 }
 
-function setSettingsStatus(
-  message: string,
-  tone: "idle" | "busy" | "ok" | "error" = "idle",
-): void {
-  settingsStatus.textContent = message;
-  settingsStatus.className = `settings-status is-${tone}`;
-}
-
-function renderModelOptions(models: string[], selectedModel: string): void {
-  const options = [...models];
-  if (selectedModel && !options.includes(selectedModel)) {
-    options.unshift(selectedModel);
-  }
-  settingsModel.replaceChildren(
-    ...options.map((modelId) => {
-      const option = document.createElement("option");
-      option.value = modelId;
-      option.textContent = modelId;
-      return option;
-    }),
-  );
-  settingsModel.value = selectedModel;
-  currentModelOptions = options;
-  settingsModelCount.textContent = models.length
-    ? `${models.length} 个模型`
-    : "没有返回模型";
-}
-
-function applySettings(snapshot: SettingsSnapshot): void {
-  currentEffort = snapshot.effort;
-  currentPricing = snapshot.pricing;
-  settingsProvider.value = snapshot.provider;
-  renderModelOptions(currentModelOptions, snapshot.model_id);
-  settingsBaseUrl.value = snapshot.base_url;
-  settingsMaxTokens.value = String(snapshot.max_tokens);
-  settingsEffort.value = snapshot.effort;
-  settingsApiKey.value = "";
-  settingsApiKey.placeholder = snapshot.api_key_configured
-    ? "留空保持当前密钥"
-    : "输入 API 密钥，或写 ${ENV_VAR}";
-  settingsKeySource.textContent = `当前密钥：${snapshot.api_key_source} · 留空不改`;
-  runEffort.textContent = effortLabel(currentEffort);
-}
-
-async function loadModelOptions(
-  selectedModel: string,
-  loadedLabel = "配置已读取",
-): Promise<void> {
-  settingsModel.disabled = true;
-  settingsModelCount.textContent = "正在读取模型列表…";
-  renderModelOptions([selectedModel], selectedModel);
-  try {
-    const response = await fetch(`${API_BASE}/models`);
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const parsed = (await response.json()) as ModelListResponse;
-    renderModelOptions(parsed.models, selectedModel);
-    setSettingsStatus(
-      `${loadedLabel}；模型列表 ${parsed.models.length} 个可选项。`,
-      "ok",
-    );
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : String(error);
-    renderModelOptions([selectedModel], selectedModel);
-    settingsModelCount.textContent = "模型列表不可用";
-    setSettingsStatus(`${loadedLabel}；模型列表不可用：${message}`, "error");
-  } finally {
-    settingsModel.disabled = false;
-  }
-}
-
-function setSettingsBusy(busy: boolean): void {
-  settingsSave.disabled = busy;
-  settingsProvider.disabled = busy;
-  settingsModel.disabled = busy;
-  settingsBaseUrl.disabled = busy;
-  settingsMaxTokens.disabled = busy;
-  settingsEffort.disabled = busy;
-  settingsApiKey.disabled = busy;
-  settingsSaveLabel.textContent = busy ? "同步中…" : "保存并应用";
-}
-
-async function loadSettings(): Promise<void> {
-  setSettingsBusy(true);
-  setSettingsStatus("正在读取本机配置…", "busy");
-  try {
-    const response = await fetch(`${API_BASE}/settings`);
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const snapshot = (await response.json()) as SettingsSnapshot;
-    applySettings(snapshot);
-    setSettingsStatus("配置已读取，修改后保存即可生效。", "ok");
-    settingsModel.focus();
-    await loadModelOptions(snapshot.model_id);
-  } catch (error) {
-    const message =
-      error instanceof TypeError
-        ? "连不上本地后端。先在 server/ 运行：uv run python main.py desktop"
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    setSettingsStatus(message, "error");
-    settingsProvider.focus();
-  } finally {
-    setSettingsBusy(false);
-  }
-}
-
-function openSettings(): void {
-  settingsModal.hidden = false;
-  settingsForm.reset();
-  applySettings({
-    provider: "anthropic",
-    base_url: "",
-    model_id: "",
-    max_tokens: 64000,
-    effort: "",
-    api_key_configured: false,
-    api_key_source: "正在读取",
-    pricing: null,
-  });
-  void loadSettings();
-}
-
-function closeSettings(): void {
-  settingsModal.hidden = true;
-  promptInput.focus();
-}
-
-async function saveSettings(): Promise<void> {
-  const maxTokens = Number.parseInt(settingsMaxTokens.value, 10);
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-    setSettingsStatus("最大 token 必须是正整数。", "error");
-    settingsMaxTokens.focus();
-    return;
-  }
-  const apiKey = settingsApiKey.value.trim();
-  let savedModelId = "";
-  const payload: SettingsPayload = {
-    provider: settingsProvider.value,
-    base_url: settingsBaseUrl.value.trim(),
-    model_id: settingsModel.value.trim(),
-    max_tokens: maxTokens,
-    effort: settingsEffort.value,
-    api_key: apiKey || null,
-  };
-  setSettingsBusy(true);
-  setSettingsStatus("正在写入 config.ini 并校验…", "busy");
-  try {
-    const response = await fetch(`${API_BASE}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const snapshot = (await response.json()) as SettingsSnapshot;
-    applySettings(snapshot);
-    savedModelId = snapshot.model_id;
-    setSettingsStatus("已保存；下一次模型请求使用新配置。", "ok");
-    showToast("模型设置已保存，下一轮生效");
-  } catch (error) {
-    setSettingsStatus(
-      error instanceof Error ? error.message : String(error),
-      "error",
-    );
-  } finally {
-    setSettingsBusy(false);
-  }
-  if (savedModelId) {
-    await loadModelOptions(savedModelId, "配置已保存");
-  }
-}
 
 async function submitPrompt(rawPrompt: string): Promise<void> {
   const question = rawPrompt.trim();
-  const images = pendingImages;
+  const images = peekPendingImages();
   if (!question && !images.length) {
     return;
   }
@@ -1982,8 +1627,7 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
     showToast("带图输入只支持 queue 档；按 Alt+S 切回 queue");
     return;
   }
-  pendingImages = [];
-  renderPendingImages();
+  takePendingImages();
   promptInput.value = "";
   resizePrompt();
   closeCommandPalette();
@@ -2002,10 +1646,10 @@ async function submitPrompt(rawPrompt: string): Promise<void> {
   const assistant = createAssistantMessage();
   thread.messages.push(userMessage);
   thread.messages.push(assistant);
-  if (thread.title === "未命名运行") {
+  if (isAutoThreadTitle(thread.title)) {
     thread.title = threadTitleFor(question);
   }
-  thread.model = settingsModel.value.trim() || thread.model;
+  thread.model = selectedModelId() || thread.model;
   thread.updatedAt = Date.now();
   thread.usage = undefined;
   thread.runStartedAt = Date.now();
@@ -2025,7 +1669,7 @@ async function submitPlanningPrompt(task: string): Promise<void> {
     showToast("用法：/plan <任务>");
     return;
   }
-  if (pendingImages.length) {
+  if (hasPendingImages()) {
     showToast("plan mode 不能携带图片附件");
     return;
   }
@@ -2047,10 +1691,10 @@ async function submitPlanningPrompt(task: string): Promise<void> {
   const assistant = createAssistantMessage();
   thread.messages.push(userMessage);
   thread.messages.push(assistant);
-  if (thread.title === "未命名运行") {
+  if (isAutoThreadTitle(thread.title)) {
     thread.title = threadTitleFor(task);
   }
-  thread.model = settingsModel.value.trim() || thread.model;
+  thread.model = selectedModelId() || thread.model;
   thread.updatedAt = Date.now();
   thread.usage = undefined;
   thread.runStartedAt = Date.now();
@@ -2224,6 +1868,9 @@ async function runChatRequest(
         ...(retry ? { retry: true } : {}),
         ...(planMode ? { plan_mode: true } : {}),
         ...(planId ? { plan_id: planId } : {}),
+        // 只有用户改过目录的会话才带：不带 = 服务端保持原值，
+        // 不会每条消息都把 TUI / curl 改过的目录冲回默认。
+        ...(thread.workdir ? { workdir: thread.workdir } : {}),
       }),
       signal: controller.signal,
     });
@@ -2293,7 +1940,7 @@ async function runChatRequest(
     persistState();
     if (thread.id === state.activeThreadId) {
       renderEverything(true);
-      if (settingsModal.hidden && resumeModal.hidden && traceModal.hidden) {
+      if (settingsModal.hidden && !isResumeOpen() && traceModal.hidden) {
         promptInput.focus();
       }
     }
@@ -2395,7 +2042,7 @@ function newThread(): boolean {
   return true;
 }
 
-function switchThread(threadId: string): void {
+export function switchThread(threadId: string): void {
   if (!state.threads.some((thread) => thread.id === threadId)) {
     return;
   }
@@ -2413,824 +2060,9 @@ function switchThread(threadId: string): void {
   }
 }
 
-function findResumeThread(argument: string): Thread | null {
-  const query = argument.trim().toLowerCase();
-  if (!query) {
-    return null;
-  }
-  const exact = state.threads.filter(
-    (thread) =>
-      thread.id.toLowerCase() === query ||
-      thread.sessionId.toLowerCase() === query,
-  );
-  const candidates =
-    exact.length > 0
-      ? exact
-      : state.threads.filter(
-          (thread) =>
-            thread.id.toLowerCase().includes(query) ||
-            thread.sessionId.toLowerCase().includes(query) ||
-            thread.title.toLowerCase().includes(query) ||
-            thread.model.toLowerCase().includes(query) ||
-            thread.stopReason.toLowerCase().includes(query),
-        );
-  if (candidates.length === 1) {
-    return candidates[0];
-  }
-  showToast(
-    candidates.length > 1
-      ? "匹配到多个会话，请补充标题、id 或模型关键词"
-      : `没有 id / 标题 / 模型匹配 ${argument} 的会话`,
-  );
-  return null;
-}
-
-function filterResumeThreads(): void {
-  const query = resumeQuery.trim().toLowerCase();
-  const all = state.threads
-    .filter((thread) => thread.archived === resumeArchived)
-    .sort(
-      (a, b) =>
-        Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt,
-    );
-  const contentMatchIds = new Set(contentHits.keys());
-  resumeMatches = query
-    ? all.filter(
-        (thread) =>
-          thread.id.toLowerCase().includes(query) ||
-          thread.sessionId.toLowerCase().includes(query) ||
-          thread.title.toLowerCase().includes(query) ||
-          thread.model.toLowerCase().includes(query) ||
-            thread.stopReason.toLowerCase().includes(query) ||
-            contentMatchIds.has(thread.sessionId),
-      )
-    : all;
-  resumeSelection = Math.min(
-    resumeSelection,
-    Math.max(0, resumeMatches.length - 1),
-  );
-}
-
-function renderResumeList(): void {
-  const currentId = state.activeThreadId;
-  resumeSummary.textContent = `${resumeMatches.length} 个会话 · 正文命中 ${contentHits.size} · 当前 ${shortSession(
-    activeThread().sessionId,
-  )}`;
-  const selectedThread = resumeMatches[resumeSelection];
-  if (deleteThreadId && selectedThread?.id !== deleteThreadId) {
-    cancelResumeDelete();
-  }
-  if (forkThreadId && selectedThread?.id !== forkThreadId) {
-    cancelResumeFork();
-  }
-  resumeRenameButton.disabled = !selectedThread?.sessionId;
-  resumePinButton.disabled = !selectedThread?.sessionId;
-  resumePinButton.textContent = selectedThread?.pinned ? "取消置顶" : "置顶";
-  resumeArchiveButton.disabled = !selectedThread?.sessionId;
-  resumeArchiveButton.textContent = selectedThread?.archived
-    ? "取消归档"
-    : "归档";
-  resumeDeleteButton.disabled = !selectedThread?.sessionId;
-  resumeForkButton.disabled = !selectedThread?.sessionId;
-  resumeList.innerHTML = resumeMatches
-    .map((thread, index) => {
-      const turns =
-        thread.serverTurns ??
-        thread.messages.filter((message) => message.role === "user").length;
-      const current = thread.id === currentId;
-      return `
-        <button
-          class="resume-item${index === resumeSelection ? " is-selected" : ""}${current ? " is-current" : ""}"
-          type="button"
-          role="option"
-          aria-selected="${index === resumeSelection}"
-          data-resume-index="${index}"
-        >
-          <span class="resume-item-time">${relativeTime(thread.updatedAt)}</span>
-          <span class="resume-item-id">${escapeHtml(
-            thread.sessionId ? shortSession(thread.sessionId) : "待定",
-          )}</span>
-          <span class="resume-item-turns">${turns} 轮</span>
-          ${current ? '<span class="resume-current">当前</span>' : ""}
-          <strong>${escapeHtml(thread.title)}</strong>
-          <small>${thread.pinned ? "置顶 · " : ""}${escapeHtml(thread.model || "模型未知")} · ${escapeHtml(
-            thread.stopReason || "未完成一轮",
-          )}</small>
-          ${
-            contentHits.has(thread.sessionId)
-              ? `<em class="resume-content-hit">${escapeHtml(
-                  contentHits.get(thread.sessionId)?.snippet ?? "",
-                )}</em>`
-              : ""
-          }
-        </button>
-      `;
-    })
-    .join("");
-}
-
-async function openResume(): Promise<void> {
-  resumeArchived = false;
-  await fetchServerSessions(true);
-  resumeQuery = "";
-  contentHits.clear();
-  contentSearchSequence += 1;
-  resumeSearch.value = "";
-  filterResumeThreads();
-  const alternate = resumeMatches.findIndex(
-    (thread) => thread.id !== state.activeThreadId,
-  );
-  resumeSelection = alternate >= 0 ? alternate : 0;
-  cancelResumeRename();
-  renderResumeList();
-  renderResumeViewTabs();
-  resumeModal.hidden = false;
-  resumeSearch.focus();
-}
-
-function renderResumeViewTabs(): void {
-  resumeActiveViewButton.setAttribute(
-    "aria-pressed",
-    resumeArchived ? "false" : "true",
-  );
-  resumeArchiveViewButton.setAttribute(
-    "aria-pressed",
-    resumeArchived ? "true" : "false",
-  );
-}
-
-async function switchResumeView(archived: boolean): Promise<void> {
-  if (resumeArchived === archived) {
-    return;
-  }
-  resumeArchived = archived;
-  resumeQuery = "";
-  contentHits.clear();
-  contentSearchSequence += 1;
-  resumeSearch.value = "";
-  resumeSelection = 0;
-  renderResumeViewTabs();
-  filterResumeThreads();
-  renderResumeList();
-  await fetchServerSessions(true, archived);
-  resumeSelection = 0;
-  filterResumeThreads();
-  renderResumeList();
-}
-
-async function searchSessionContent(query: string): Promise<void> {
-  const sequence = ++contentSearchSequence;
-  contentHits = new Map();
-  filterResumeThreads();
-  renderResumeList();
-  const needle = query.trim();
-  if (!needle || resumeModal.hidden) {
-    return;
-  }
-  try {
-    const response = await fetch(
-      `${API_BASE}/sessions/search?q=${encodeURIComponent(needle)}`,
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const result = (await response.json()) as SessionSearchResponse;
-    if (sequence !== contentSearchSequence || resumeModal.hidden) {
-      return;
-    }
-    for (const hit of result.hits) {
-      if (!contentHits.has(hit.session_id)) {
-        contentHits.set(hit.session_id, hit);
-      }
-    }
-    filterResumeThreads();
-    renderResumeList();
-  } catch (error) {
-    if (sequence === contentSearchSequence) {
-      showToast(
-        `正文搜索失败：${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-}
-
-function startResumeRename(): void {
-  const thread = resumeMatches[resumeSelection];
-  if (!thread?.sessionId) {
-    showToast("当前会话还没有 server id，不能重命名");
-    return;
-  }
-  renameThreadId = thread.id;
-  resumeRenameInput.value = thread.title;
-  resumeRenameForm.hidden = false;
-  resumeRenameInput.focus();
-  resumeRenameInput.select();
-}
-
-function cancelResumeRename(): void {
-  renameThreadId = "";
-  resumeRenameForm.hidden = true;
-  resumeRenameInput.value = "";
-  resumeRenameButton.disabled = false;
-}
-
-async function saveResumeRename(): Promise<void> {
-  const thread = state.threads.find((item) => item.id === renameThreadId);
-  const title = resumeRenameInput.value.trim();
-  if (!thread?.sessionId) {
-    cancelResumeRename();
-    return;
-  }
-  if (!title) {
-    showToast("标题不能为空");
-    resumeRenameInput.focus();
-    return;
-  }
-  resumeRenameButton.disabled = true;
-  try {
-    const response = await fetch(
-      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title }),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const updated = (await response.json()) as ServerSession;
-    thread.title = updated.title || title;
-    persistState();
-    cancelResumeRename();
-    filterResumeThreads();
-    renderResumeList();
-    renderEverything();
-    showToast("会话已重命名");
-  } catch (error) {
-    showToast(
-      `重命名失败：${error instanceof Error ? error.message : String(error)}`,
-    );
-  } finally {
-    resumeRenameButton.disabled = false;
-  }
-}
-
-async function toggleResumePin(): Promise<void> {
-  const thread = resumeMatches[resumeSelection];
-  if (!thread?.sessionId) {
-    showToast("当前会话还没有 server id，不能 pin");
-    return;
-  }
-  resumePinButton.disabled = true;
-  try {
-    const response = await fetch(
-      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pinned: !thread.pinned }),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const updated = (await response.json()) as ServerSession;
-    thread.pinned = updated.pinned === true;
-    persistState();
-    filterResumeThreads();
-    resumeSelection = Math.max(
-      0,
-      resumeMatches.findIndex((item) => item.id === thread.id),
-    );
-    renderResumeList();
-    renderEverything();
-    showToast(thread.pinned ? "会话已 pin" : "会话已取消 pin");
-  } catch (error) {
-    showToast(
-      `pin 状态更新失败：${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  } finally {
-    resumePinButton.disabled = false;
-  }
-}
-
-async function toggleResumeArchive(): Promise<void> {
-  const thread = resumeMatches[resumeSelection];
-  if (!thread?.sessionId) {
-    showToast("当前会话还没有 server id，不能归档");
-    return;
-  }
-  resumeArchiveButton.disabled = true;
-  try {
-    const response = await fetch(
-      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ archived: !thread.archived }),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const updated = (await response.json()) as ServerSession;
-    thread.archived = updated.archived === true;
-    thread.pinned = updated.pinned === true;
-    persistState();
-    filterResumeThreads();
-    resumeSelection = Math.max(
-      0,
-      resumeMatches.findIndex((item) => item.id === thread.id),
-    );
-    renderResumeList();
-    renderEverything();
-    showToast(thread.archived ? "会话已归档" : "会话已恢复");
-  } catch (error) {
-    showToast(
-      `归档状态更新失败：${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  } finally {
-    resumeArchiveButton.disabled = false;
-  }
-}
-
-function cancelResumeDelete(): void {
-  deleteThreadId = "";
-  resumeDeleteConfirm.hidden = true;
-  resumeDeleteTitle.textContent = "";
-  resumeDeleteButton.disabled = false;
-}
-
-function requestResumeDelete(): void {
-  const thread = resumeMatches[resumeSelection];
-  if (!thread?.sessionId) {
-    showToast("当前会话还没有 server id，不能删除");
-    return;
-  }
-  deleteThreadId = thread.id;
-  resumeDeleteTitle.textContent = thread.title;
-  resumeDeleteConfirm.hidden = false;
-  resumeDeleteConfirmButton.focus();
-}
-
-async function confirmResumeDelete(): Promise<void> {
-  const thread = state.threads.find((item) => item.id === deleteThreadId);
-  if (!thread?.sessionId) {
-    cancelResumeDelete();
-    return;
-  }
-  resumeDeleteButton.disabled = true;
-  resumeDeleteConfirmButton.disabled = true;
-  try {
-    const response = await fetch(
-      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}`,
-      { method: "DELETE" },
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    state.threads = state.threads.filter((item) => item.id !== thread.id);
-    if (state.activeThreadId === thread.id) {
-      const nextThread = state.threads.find((item) => !item.archived);
-      if (nextThread) {
-        state.activeThreadId = nextThread.id;
-      } else {
-        const created = createThread();
-        state.threads.push(created);
-        state.activeThreadId = created.id;
-      }
-    }
-    cancelResumeDelete();
-    persistState();
-    filterResumeThreads();
-    resumeSelection = Math.min(
-      resumeSelection,
-      Math.max(0, resumeMatches.length - 1),
-    );
-    renderResumeList();
-    renderEverything();
-    showToast("会话已永久删除");
-  } catch (error) {
-    showToast(
-      `永久删除失败：${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  } finally {
-    resumeDeleteButton.disabled = false;
-    resumeDeleteConfirmButton.disabled = false;
-  }
-}
-
-function cancelResumeFork(): void {
-  forkThreadId = "";
-  forkMessages = [];
-  resumeForkForm.hidden = true;
-  resumeForkSource.textContent = "";
-  resumeForkMax.textContent = "";
-  resumeForkInput.value = "1";
-  resumeForkPreview.textContent = "";
-  resumeForkButton.disabled = false;
-}
-
-function messagePreview(message: ServerMessage): string {
-  const text = message.content
-    .filter((block) => block.type === "text")
-    .map((block) => (block.type === "text" ? block.text : ""))
-    .join(" ")
-    .trim();
-  return `${message.role === "user" ? "你" : "智能体"}: ${text || "[无文本块]"}`;
-}
-
-function updateResumeForkPreview(): void {
-  const through = Number(resumeForkInput.value);
-  const message = forkMessages[through - 1];
-  resumeForkPreview.textContent = message
-    ? `#${through} ${messagePreview(message)}`
-    : "选择的 N 超出消息范围";
-}
-
-async function startResumeFork(): Promise<void> {
-  const thread = resumeMatches[resumeSelection];
-  if (!thread?.sessionId) {
-    showToast("当前会话还没有 server id，不能 fork");
-    return;
-  }
-  resumeForkButton.disabled = true;
-  try {
-    const response = await fetch(
-      `${API_BASE}/sessions/${encodeURIComponent(thread.sessionId)}/messages`,
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const messages = (await response.json()) as ServerMessage[];
-    if (!messages.length) {
-      showToast("这个会话没有可复制的消息");
-      return;
-    }
-    forkThreadId = thread.id;
-    forkMessages = messages;
-    resumeForkSource.textContent = thread.title;
-    resumeForkInput.min = "1";
-    resumeForkInput.max = String(messages.length);
-    resumeForkInput.value = "1";
-    resumeForkMax.textContent = `共 ${messages.length} 条消息`;
-    resumeForkForm.hidden = false;
-    updateResumeForkPreview();
-    resumeForkInput.focus();
-    resumeForkInput.select();
-  } catch (error) {
-    showToast(
-      `读取 fork 源消息失败：${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  } finally {
-    resumeForkButton.disabled = false;
-  }
-}
-
-async function saveResumeFork(): Promise<void> {
-  const source = state.threads.find((item) => item.id === forkThreadId);
-  if (!source?.sessionId || !forkMessages.length) {
-    cancelResumeFork();
-    return;
-  }
-  const through = Number(resumeForkInput.value);
-  if (
-    !Number.isInteger(through) ||
-    through < 1 ||
-    through > forkMessages.length
-  ) {
-    showToast(`through 要在 1..${forkMessages.length} 之间`);
-    resumeForkInput.focus();
-    return;
-  }
-  resumeForkSubmitButton.disabled = true;
-  try {
-    const response = await fetch(
-      `${API_BASE}/sessions/${encodeURIComponent(source.sessionId)}/fork`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ through }),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const result = (await response.json()) as SessionForkResponse;
-    await fetchServerSessions(false);
-    let created = state.threads.find(
-      (thread) => thread.sessionId === result.session_id,
-    );
-    if (!created) {
-      created = createThread();
-      created.sessionId = result.session_id;
-      created.title = `${source.title}（分支）`;
-      created.model = source.model;
-      created.serverTurns = forkMessages
-        .slice(0, through)
-        .filter((message) => message.role === "user").length;
-      state.threads.push(created);
-    }
-    created.messagesLoaded = false;
-    cancelResumeFork();
-    persistState();
-    switchThread(created.id);
-    showToast(`已 fork 前 ${result.copied} 条消息`);
-  } catch (error) {
-    showToast(
-      `fork 失败：${error instanceof Error ? error.message : String(error)}`,
-    );
-  } finally {
-    resumeForkSubmitButton.disabled = false;
-  }
-}
-
-function closeResume(): void {
-  resumeModal.hidden = true;
-  cancelResumeRename();
-  cancelResumeDelete();
-  cancelResumeFork();
-}
-
-function moveResumeSelection(delta: number): void {
-  if (resumeModal.hidden || !resumeMatches.length) {
-    return;
-  }
-  resumeSelection =
-    (resumeSelection + delta + resumeMatches.length) % resumeMatches.length;
-  renderResumeList();
-  resumeList
-    .querySelector<HTMLButtonElement>(".resume-item.is-selected")
-    ?.focus();
-}
-
-async function selectResume(index: number): Promise<void> {
-  const thread = resumeMatches[index];
-  if (!thread) {
-    return;
-  }
-  await hydrateThread(thread, true);
-  switchThread(thread.id);
-  showToast(`已续接：${thread.title}`);
-}
-
-function resizePrompt(): void {
+export function resizePrompt(): void {
   promptInput.style.height = "auto";
   promptInput.style.height = `${Math.min(promptInput.scrollHeight, 160)}px`;
-}
-
-function showToast(message: string): void {
-  toast.textContent = message;
-  toast.classList.add("is-visible");
-  if (toastTimer !== undefined) {
-    window.clearTimeout(toastTimer);
-  }
-  toastTimer = window.setTimeout(() => {
-    toast.classList.remove("is-visible");
-  }, 3800);
-}
-
-function closeCommandPalette(): void {
-  fileCompletionSequence += 1;
-  if (fileCompletionTimer !== undefined) {
-    window.clearTimeout(fileCompletionTimer);
-    fileCompletionTimer = undefined;
-  }
-  commandPalette.hidden = true;
-  paletteMode = "command";
-  fileMatches = [];
-  fileSelection = 0;
-  commandPaletteTitle.textContent = "命令索引";
-  commandPaletteEnterAction.textContent = "Enter 执行";
-  commandPalette.ariaLabel = "命令面板";
-}
-
-function renderCommandPalette(): void {
-  commandPaletteTitle.textContent = "命令索引";
-  commandPaletteEnterAction.textContent = "Enter 执行";
-  commandPalette.ariaLabel = "命令面板";
-  let group = "";
-  commandList.innerHTML = commandMatches
-    .map(
-      (command, index) => {
-        const heading =
-          command.group !== group
-            ? `<div class="command-group">${escapeHtml(command.group)}</div>`
-            : "";
-        group = command.group;
-        return `${heading}
-          <button
-            class="command-option${index === commandSelection ? " is-selected" : ""}"
-            type="button"
-            role="option"
-            aria-selected="${index === commandSelection}"
-            data-command-index="${index}"
-          >
-            <code>${command.usage}</code>
-            <span>${command.description}</span>
-          </button>
-        `;
-      },
-    )
-    .join("");
-}
-
-function activeFileToken(
-  value: string,
-  caret: number,
-): { query: string; tokenStart: number } | null {
-  const match = value.slice(0, caret).match(/(?:^|\s)@([^\s]*)$/);
-  if (!match) {
-    return null;
-  }
-  return {
-    query: match[1],
-    tokenStart:
-      (match.index ?? 0) + match[0].length - match[1].length - 1,
-  };
-}
-
-function renderFilePalette(): void {
-  commandPaletteTitle.textContent = "文件路径";
-  commandPaletteEnterAction.textContent = "Enter 补全";
-  commandPalette.ariaLabel = "文件路径补全";
-  commandList.innerHTML = fileMatches.length
-    ? fileMatches
-        .map(
-          (path, index) => `
-          <button
-            class="command-option${index === fileSelection ? " is-selected" : ""}"
-            type="button"
-            role="option"
-            aria-selected="${index === fileSelection}"
-            data-file-index="${index}"
-          >
-            <code>${escapeHtml(path)}</code>
-            <span>文件路径</span>
-          </button>
-        `,
-        )
-        .join("")
-    : `<div class="command-group">没有匹配路径</div>`;
-}
-
-function scheduleFilePalette(token: { query: string; tokenStart: number }): void {
-  const sequence = ++fileCompletionSequence;
-  paletteMode = "file";
-  fileMatches = [];
-  fileSelection = 0;
-  renderFilePalette();
-  commandList.innerHTML = `<div class="command-group">正在读取路径…</div>`;
-  commandPalette.hidden = false;
-  if (fileCompletionTimer !== undefined) {
-    window.clearTimeout(fileCompletionTimer);
-  }
-  fileCompletionTimer = window.setTimeout(() => {
-    fileCompletionTimer = undefined;
-    void loadFilePalette(token, sequence);
-  }, 120);
-}
-
-async function loadFilePalette(
-  token: { query: string; tokenStart: number },
-  sequence: number,
-): Promise<void> {
-  try {
-    const response = await fetch(
-      `${API_BASE}/workspace/paths?q=${encodeURIComponent(token.query)}&limit=50`,
-    );
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const result = (await response.json()) as WorkspacePathsResponse;
-    const current = activeFileToken(
-      promptInput.value,
-      promptInput.selectionStart ?? promptInput.value.length,
-    );
-    if (
-      sequence !== fileCompletionSequence ||
-      paletteMode !== "file" ||
-      !current ||
-      current.tokenStart !== token.tokenStart
-    ) {
-      return;
-    }
-    fileMatches = result.paths;
-    fileSelection = 0;
-    renderFilePalette();
-  } catch {
-    if (sequence !== fileCompletionSequence || paletteMode !== "file") {
-      return;
-    }
-    fileMatches = [];
-    renderFilePalette();
-    commandList.innerHTML = `<div class="command-group">路径补全不可用</div>`;
-  }
-}
-
-function updateCommandPalette(): void {
-  const caret = promptInput.selectionStart ?? promptInput.value.length;
-  const fileToken = activeFileToken(promptInput.value, caret);
-  if (fileToken) {
-    scheduleFilePalette(fileToken);
-    return;
-  }
-  if (paletteMode === "file") {
-    closeCommandPalette();
-  }
-  const text = promptInput.value.trim();
-  if (!text.startsWith("/") || /\s/.test(text)) {
-    closeCommandPalette();
-    return;
-  }
-  const prefix = text.slice(1).toLowerCase();
-  // 按组连续排列：组内保持原表顺序，组间按首次出现排。
-  // 否则跨组的命令交替出现时，面板里会重复冒出同名分组头。
-  const groupRank = new Map<string, number>();
-  for (const command of SLASH_COMMANDS) {
-    if (!groupRank.has(command.group)) {
-      groupRank.set(command.group, groupRank.size);
-    }
-  }
-  commandMatches = SLASH_COMMANDS.filter((command) =>
-    [command.name, ...(command.aliases ?? [])].some((name) =>
-      name.startsWith(prefix),
-    ),
-  ).sort((a, b) => (groupRank.get(a.group) ?? 0) - (groupRank.get(b.group) ?? 0));
-  if (!commandMatches.length) {
-    closeCommandPalette();
-    return;
-  }
-  commandSelection = Math.min(commandSelection, commandMatches.length - 1);
-  renderCommandPalette();
-  commandPalette.hidden = false;
-}
-
-function moveCommandSelection(delta: number): void {
-  if (commandPalette.hidden) {
-    return;
-  }
-  if (paletteMode === "file") {
-    if (!fileMatches.length) {
-      return;
-    }
-    fileSelection =
-      (fileSelection + delta + fileMatches.length) % fileMatches.length;
-    renderFilePalette();
-    return;
-  }
-  if (commandMatches.length) {
-    commandSelection =
-      (commandSelection + delta + commandMatches.length) % commandMatches.length;
-    renderCommandPalette();
-  }
-}
-
-function completeSelectedCommand(): void {
-  const command = commandMatches[commandSelection];
-  if (!command) {
-    return;
-  }
-  promptInput.value = `/${command.name}${command.takesArgument ? " " : ""}`;
-  resizePrompt();
-  closeCommandPalette();
-  promptInput.focus();
-  promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
-}
-
-function completeSelectedFile(): void {
-  const path = fileMatches[fileSelection];
-  if (!path) {
-    return;
-  }
-  const caret = promptInput.selectionStart ?? promptInput.value.length;
-  const token = activeFileToken(promptInput.value, caret);
-  if (!token) {
-    closeCommandPalette();
-    return;
-  }
-  promptInput.value =
-    promptInput.value.slice(0, token.tokenStart) +
-    "@" +
-    path +
-    " " +
-    promptInput.value.slice(caret);
-  const nextCaret = token.tokenStart + path.length + 2;
-  promptInput.setSelectionRange(nextCaret, nextCaret);
-  resizePrompt();
-  closeCommandPalette();
-  promptInput.focus();
 }
 
 function parseSlashCommand(raw: string): {
@@ -3250,290 +2082,9 @@ function parseSlashCommand(raw: string): {
   };
 }
 
-async function quickSetModel(modelId: string): Promise<void> {
-  try {
-    const currentResponse = await fetch(`${API_BASE}/settings`);
-    if (!currentResponse.ok) {
-      throw new Error(await readError(currentResponse));
-    }
-    const current = (await currentResponse.json()) as SettingsSnapshot;
-    const payload: SettingsPayload = {
-      provider: current.provider,
-      base_url: current.base_url,
-      model_id: modelId,
-      max_tokens: current.max_tokens,
-      effort: current.effort,
-      api_key: null,
-    };
-    const response = await fetch(`${API_BASE}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const snapshot = (await response.json()) as SettingsSnapshot;
-    applySettings(snapshot);
-    showToast(`模型已切换：${snapshot.model_id}，下一轮生效`);
-  } catch (error) {
-    showToast(error instanceof Error ? error.message : String(error));
-  }
-}
 
-function openConversationFind(query = ""): void {
-  conversationFindInput.value = query;
-  filterConversationMatches(query);
-  renderConversationFindList();
-  conversationFindModal.hidden = false;
-  conversationFindInput.focus();
-  conversationFindInput.select();
-}
 
-function closeConversationFind(): void {
-  conversationFindModal.hidden = true;
-  promptInput.focus();
-}
 
-function moveConversationFindSelection(delta: number): void {
-  if (!conversationFindMatches.length) {
-    return;
-  }
-  conversationFindSelection =
-    (conversationFindSelection + delta + conversationFindMatches.length) %
-    conversationFindMatches.length;
-  renderConversationFindList();
-}
-
-function selectConversationFindMatch(index: number): boolean {
-  const match = conversationFindMatches[index];
-  if (!match) {
-    return false;
-  }
-  const target = conversation.querySelector<HTMLElement>(
-    `[data-message-id="${CSS.escape(match.messageId)}"]`,
-  );
-  if (!target) {
-    return false;
-  }
-  conversation
-    .querySelectorAll(".is-search-match")
-    .forEach((element) => element.classList.remove("is-search-match"));
-  target.classList.add("is-search-match");
-  conversationFindThreadId = activeThread().id;
-  conversationFindMessageId = match.messageId;
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
-  conversationFindModal.hidden = true;
-  return true;
-}
-
-function findConversationMatch(query: string): void {
-  filterConversationMatches(query);
-  if (!selectConversationFindMatch(0)) {
-    conversationFindThreadId = "";
-    conversationFindMessageId = "";
-    applyConversationFindHighlight();
-    showToast(query.trim() ? "当前会话没有匹配消息" : "当前会话还没有消息");
-  }
-}
-
-async function refreshEffort(): Promise<void> {
-  try {
-    const response = await fetch(`${API_BASE}/settings`);
-    if (!response.ok) {
-      return;
-    }
-    const snapshot = (await response.json()) as SettingsSnapshot;
-    currentEffort = snapshot.effort;
-    currentPricing = snapshot.pricing;
-    renderModelOptions(currentModelOptions, snapshot.model_id);
-    runEffort.textContent = effortLabel(currentEffort);
-    renderRunLedger();
-  } catch {
-    runEffort.textContent = "unavailable";
-  }
-}
-
-async function setEffort(effort: SettingsSnapshot["effort"]): Promise<void> {
-  try {
-    const currentResponse = await fetch(`${API_BASE}/settings`);
-    if (!currentResponse.ok) {
-      throw new Error(await readError(currentResponse));
-    }
-    const current = (await currentResponse.json()) as SettingsSnapshot;
-    const payload: SettingsPayload = {
-      provider: current.provider,
-      base_url: current.base_url,
-      model_id: current.model_id,
-      max_tokens: current.max_tokens,
-      effort,
-      api_key: null,
-    };
-    const response = await fetch(`${API_BASE}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    const snapshot = (await response.json()) as SettingsSnapshot;
-    applySettings(snapshot);
-    showToast(`思考等级：${effortLabel(snapshot.effort)} · 本轮不变，下一轮生效`);
-  } catch (error) {
-    showToast(error instanceof Error ? error.message : String(error));
-  }
-}
-
-async function cycleEffort(): Promise<void> {
-  const order: SettingsSnapshot["effort"][] = [
-    "",
-    "low",
-    "medium",
-    "high",
-    "max",
-  ];
-  const index = order.indexOf(currentEffort);
-  await setEffort(index < 0 ? "low" : order[(index + 1) % order.length]);
-}
-
-async function respondToApproval(
-  approvalId: string,
-  approved: boolean,
-  scope: ApprovalScope = "once",
-  reason = "",
-): Promise<void> {
-  const buttons = Array.from(
-    conversation.querySelectorAll<HTMLButtonElement>(
-      `[data-approval-id="${CSS.escape(approvalId)}"]`,
-    ),
-  );
-  for (const button of buttons) {
-    button.disabled = true;
-  }
-  const reasonInputs = Array.from(
-    conversation.querySelectorAll<HTMLInputElement>(
-      `input.approval-reason[data-approval-id="${CSS.escape(approvalId)}"]`,
-    ),
-  );
-  for (const input of reasonInputs) {
-    input.disabled = true;
-  }
-  try {
-    const response = await fetch(`${API_BASE}/approval`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        approval_id: approvalId,
-        approved,
-        scope,
-        reason,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(await readError(response));
-    }
-    showToast(
-      approved
-        ? scope === "session"
-          ? "本会话后续同名工具已免问"
-          : "已允许工具执行"
-        : "已拒绝工具执行",
-    );
-  } catch (error) {
-    for (const button of buttons) {
-      button.disabled = false;
-    }
-    for (const input of reasonInputs) {
-      input.disabled = false;
-    }
-    showToast(error instanceof Error ? error.message : String(error));
-  }
-}
-
-function markAutoApproved(thread: Thread, approvalIds: string[]): void {
-  if (!approvalIds.length) {
-    return;
-  }
-  const approved = new Set(approvalIds);
-  for (const approvalId of approved) {
-    autoApprovedApprovalIds.add(approvalId);
-  }
-  for (const message of thread.messages) {
-    for (const part of message.parts) {
-      if (
-        part.type === "tool" &&
-        part.tool.approvalId &&
-        approved.has(part.tool.approvalId)
-      ) {
-        part.tool.state = "running";
-        part.tool.approvalId = undefined;
-      }
-    }
-  }
-  thread.updatedAt = Date.now();
-  persistState();
-  if (thread.id === state.activeThreadId) {
-    renderConversation(false);
-    renderRunLedger();
-  }
-}
-
-function syncRuntimeApprovalMode(thread: Thread, mode: ApprovalMode): void {
-  const sessionId = thread.sessionId;
-  if (!sessionId) {
-    return;
-  }
-  approvalModeSync = approvalModeSync.then(async () => {
-    try {
-      const response = await fetch(`${API_BASE}/approval-mode`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, mode }),
-      });
-      if (!response.ok) {
-        throw new Error(await readError(response));
-      }
-      const result = (await response.json()) as ApprovalModeResponse;
-      markAutoApproved(thread, result.auto_approved);
-    } catch (error) {
-      showToast(
-        `实时切换执行等级失败：${
-          error instanceof Error ? error.message : String(error)
-        }；下一轮仍使用 ${approvalLabel(mode)}`,
-      );
-    }
-  });
-}
-
-function cycleApprovalMode(): void {
-  const modes: ApprovalMode[] = ["approve", "auto", "yolo"];
-  const thread = activeThread();
-  const index = modes.indexOf(thread.approvalMode);
-  setApprovalMode(modes[(index + 1) % modes.length]);
-}
-
-function setApprovalMode(mode: ApprovalMode): void {
-  const thread = activeThread();
-  thread.approvalMode = mode;
-  thread.updatedAt = Date.now();
-  persistState();
-  renderThreadList();
-  renderRunLedger();
-  const descriptions: Record<ApprovalMode, string> = {
-    approve: "每次工具调用都要人工接受",
-    auto: "只读工具自动放行，bash 需确认",
-    yolo: "全部工具直接执行",
-  };
-  showToast(
-    `执行等级：${approvalLabel(thread.approvalMode)} · ${
-      descriptions[thread.approvalMode]
-    }${isThreadRunning(thread) ? " · 后续工具立即生效" : " · 下一轮生效"}`,
-  );
-  if (isThreadRunning(thread)) {
-    syncRuntimeApprovalMode(thread, thread.approvalMode);
-  }
-}
 
 async function showCapabilities(): Promise<void> {
   const thread = activeThread();
@@ -3691,7 +2242,7 @@ async function showStatus(): Promise<void> {
     if (response.ok) {
       const snapshot = (await response.json()) as SettingsSnapshot;
       model = snapshot.model_id;
-      currentEffort = snapshot.effort;
+      setCurrentEffort(snapshot.effort);
       runEffort.textContent = effortLabel(currentEffort);
     }
   } catch {
@@ -3790,6 +2341,29 @@ async function exportCurrentSession(): Promise<void> {
   }
 }
 
+async function resendFailedSteering(
+  thread: Thread,
+  messageId: string,
+): Promise<void> {
+  const index = thread.messages.findIndex((message) => message.id === messageId);
+  const message = thread.messages[index];
+  if (!message || message.role !== "user") {
+    return;
+  }
+  if (message.images?.length) {
+    // 带图消息没法从历史里还原成待发送附件；保留卡片，提示手动重发，
+    // 免得图片悄悄丢了还以为发过。
+    showToast("这条插话带图片，请重新输入并附加原图");
+    return;
+  }
+  // 未送达的消息既没进模型也没进 JSONL：从时间线上摘掉，再走正常提交，
+  // 新一轮会重新落盘，不留一条永远失败的残影。
+  thread.messages.splice(index, 1);
+  renderConversation(false);
+  renderThreadList();
+  await submitPrompt(message.text);
+}
+
 async function retryFailedTurn(
   thread: Thread,
   assistantId?: string,
@@ -3856,7 +2430,7 @@ async function runSlashCommand(
   if (command.name === "help") {
     promptInput.value = "/";
     resizePrompt();
-    commandSelection = 0;
+    resetCommandSelection();
     updateCommandPalette();
     promptInput.focus();
     promptInput.setSelectionRange(1, 1);
@@ -4040,102 +2614,8 @@ newThreadButton.addEventListener("click", newThread);
 railCloseButton.addEventListener("click", closeThreadRail);
 railOpenButton.addEventListener("click", openThreadRail);
 scrim.addEventListener("click", closeThreadRail);
-settingsCloseButton.addEventListener("click", closeSettings);
-settingsCancelButton.addEventListener("click", closeSettings);
-settingsModal.addEventListener("click", (event) => {
-  const target = event.target as Element;
-  if (target.closest("[data-settings-close]")) {
-    closeSettings();
-  }
-});
-resumeCloseButton.addEventListener("click", closeResume);
-resumeRenameButton.addEventListener("click", startResumeRename);
-resumePinButton.addEventListener("click", () => {
-  void toggleResumePin();
-});
-resumeActiveViewButton.addEventListener("click", () => {
-  void switchResumeView(false);
-});
-resumeArchiveViewButton.addEventListener("click", () => {
-  void switchResumeView(true);
-});
-resumeArchiveButton.addEventListener("click", () => {
-  void toggleResumeArchive();
-});
-resumeDeleteButton.addEventListener("click", requestResumeDelete);
-resumeDeleteCancelButton.addEventListener("click", cancelResumeDelete);
-resumeDeleteConfirmButton.addEventListener("click", () => {
-  void confirmResumeDelete();
-});
-resumeForkButton.addEventListener("click", () => {
-  void startResumeFork();
-});
-resumeForkCancelButton.addEventListener("click", cancelResumeFork);
-resumeForkInput.addEventListener("input", updateResumeForkPreview);
-resumeForkForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void saveResumeFork();
-});
-resumeRenameCancel.addEventListener("click", cancelResumeRename);
-resumeRenameForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void saveResumeRename();
-});
-resumeSearch.addEventListener("input", () => {
-  resumeQuery = resumeSearch.value;
-  resumeSelection = 0;
-  void searchSessionContent(resumeQuery);
-  filterResumeThreads();
-  renderResumeList();
-});
-resumeModal.addEventListener("click", (event) => {
-  const target = event.target as Element;
-  if (target.closest("[data-resume-close]")) {
-    closeResume();
-  }
-});
-conversationFindCloseButton.addEventListener("click", closeConversationFind);
-conversationFindInput.addEventListener("input", () => {
-  filterConversationMatches(conversationFindInput.value);
-  renderConversationFindList();
-});
-conversationFindInput.addEventListener("keydown", (event) => {
-  if (event.key === "ArrowDown") {
-    event.preventDefault();
-    moveConversationFindSelection(1);
-    return;
-  }
-  if (event.key === "ArrowUp") {
-    event.preventDefault();
-    moveConversationFindSelection(-1);
-    return;
-  }
-  if (event.key === "Enter") {
-    event.preventDefault();
-    selectConversationFindMatch(conversationFindSelection);
-  }
-});
-conversationFindModal.addEventListener("click", (event) => {
-  const target = event.target as Element;
-  if (target.closest("[data-conversation-find-close]")) {
-    closeConversationFind();
-  }
-});
-conversationFindList.addEventListener("click", (event) => {
-  const button = (event.target as Element).closest<HTMLButtonElement>(
-    "[data-find-index]",
-  );
-  if (button?.dataset.findIndex === undefined) {
-    return;
-  }
-  selectConversationFindMatch(Number(button.dataset.findIndex));
-});
 stopButton.addEventListener("click", () => {
   void stopActiveTurn();
-});
-settingsForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  void saveSettings();
 });
 runRailToggle.addEventListener("click", () => {
   if (window.matchMedia("(max-width: 1180px)").matches) {
@@ -4244,27 +2724,21 @@ conversation.addEventListener("click", (event) => {
     void retryFailedTurn(activeThread(), retryButton.dataset.retryMessageId);
     return;
   }
+  const resendButton = (event.target as Element).closest<HTMLButtonElement>(
+    "[data-resend-message-id]",
+  );
+  if (resendButton?.dataset.resendMessageId) {
+    void resendFailedSteering(
+      activeThread(),
+      resendButton.dataset.resendMessageId,
+    );
+    return;
+  }
   const planButton = (event.target as Element).closest<HTMLButtonElement>(
     "[data-plan-id]",
   );
   if (planButton?.dataset.planId) {
     void handlePlanAction(planButton.dataset.planId, planButton.dataset.planAction ?? "");
-    return;
-  }
-  const approvalButton = (event.target as Element).closest<HTMLButtonElement>(
-    "[data-approval-id]",
-  );
-  if (approvalButton?.dataset.approvalId) {
-    const gate = approvalButton.closest(".tool-approval-gate");
-    const reasonInput = gate?.querySelector<HTMLInputElement>(
-      "input.approval-reason",
-    );
-    void respondToApproval(
-      approvalButton.dataset.approvalId,
-      approvalButton.dataset.approved === "true",
-      approvalButton.dataset.approvalScope === "session" ? "session" : "once",
-      reasonInput?.value.trim() ?? "",
-    );
     return;
   }
   const button = (event.target as Element).closest<HTMLButtonElement>(
@@ -4274,82 +2748,12 @@ conversation.addEventListener("click", (event) => {
     void submitPrompt(button.dataset.prompt);
   }
 });
-commandList.addEventListener("click", (event) => {
-  if (paletteMode === "file") {
-    const fileButton = (event.target as Element).closest<HTMLButtonElement>(
-      "[data-file-index]",
-    );
-    if (fileButton?.dataset.fileIndex === undefined) {
-      return;
-    }
-    fileSelection = Number(fileButton.dataset.fileIndex);
-    completeSelectedFile();
-    return;
-  }
-  const button = (event.target as Element).closest<HTMLButtonElement>(
-    "[data-command-index]",
-  );
-  if (button?.dataset.commandIndex === undefined) {
-    return;
-  }
-  commandSelection = Number(button.dataset.commandIndex);
-  completeSelectedCommand();
-});
-composerAttachments.addEventListener("click", (event) => {
-  const button = (event.target as Element).closest<HTMLButtonElement>(
-    "[data-remove-image]",
-  );
-  if (button?.dataset.removeImage === undefined) {
-    return;
-  }
-  const index = Number(button.dataset.removeImage);
-  if (!Number.isInteger(index) || index < 0 || index >= pendingImages.length) {
-    return;
-  }
-  pendingImages.splice(index, 1);
-  renderPendingImages();
-});
-composer.addEventListener("dragover", (event) => {
-  event.preventDefault();
-  composerShell.classList.add("is-dragover");
-});
-composer.addEventListener("dragleave", (event) => {
-  if (event.relatedTarget instanceof Node && composer.contains(event.relatedTarget)) {
-    return;
-  }
-  composerShell.classList.remove("is-dragover");
-});
-composer.addEventListener("drop", (event) => {
-  event.preventDefault();
-  composerShell.classList.remove("is-dragover");
-  void addImageFiles(event.dataTransfer?.files);
-});
-promptInput.addEventListener("paste", (event) => {
-  const files = Array.from(event.clipboardData?.items ?? [])
-    .filter((item) => item.kind === "file")
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => Boolean(file));
-  if (!files.length) {
-    return;
-  }
-  event.preventDefault();
-  void addImageFiles(files);
-});
-resumeList.addEventListener("click", (event) => {
-  const button = (event.target as Element).closest<HTMLButtonElement>(
-    "[data-resume-index]",
-  );
-  if (button?.dataset.resumeIndex === undefined) {
-    return;
-  }
-  void selectResume(Number(button.dataset.resumeIndex));
-});
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   void submitPrompt(promptInput.value);
 });
 promptInput.addEventListener("keydown", (event) => {
-  const paletteVisible = !commandPalette.hidden;
+  const paletteVisible = isCommandPaletteOpen();
   if (paletteVisible && event.key === "ArrowDown") {
     event.preventDefault();
     moveCommandSelection(1);
@@ -4362,7 +2766,7 @@ promptInput.addEventListener("keydown", (event) => {
   }
   if (paletteVisible && event.key === "Tab") {
     event.preventDefault();
-    if (paletteMode === "file") {
+    if (isFilePalette()) {
       completeSelectedFile();
     } else {
       completeSelectedCommand();
@@ -4379,7 +2783,7 @@ promptInput.addEventListener("keydown", (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (paletteVisible) {
-      if (paletteMode === "file") {
+      if (isFilePalette()) {
         completeSelectedFile();
         return;
       } else {
@@ -4399,7 +2803,7 @@ promptInput.addEventListener("input", () => {
 });
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
-  const conversationFindVisible = !conversationFindModal.hidden;
+  const conversationFindVisible = isConversationFindOpen();
   if (conversationFindVisible) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -4435,51 +2839,8 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
-  const resumeVisible = !resumeModal.hidden;
+  const resumeVisible = handleResumeKeydown(event);
   if (resumeVisible) {
-    if (!resumeForkForm.hidden) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        cancelResumeFork();
-        resumeSearch.focus();
-      }
-      return;
-    }
-    if (!resumeRenameForm.hidden) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        cancelResumeRename();
-        resumeSearch.focus();
-        return;
-      }
-      if (event.key === "Enter") {
-        event.preventDefault();
-        void saveResumeRename();
-        return;
-      }
-      return;
-    }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      moveResumeSelection(1);
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      moveResumeSelection(-1);
-      return;
-    }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void selectResume(resumeSelection);
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeResume();
-      promptInput.focus();
-      return;
-    }
     return;
   }
   const settingsVisible = !settingsModal.hidden;
@@ -4530,13 +2891,17 @@ document.addEventListener("keydown", (event) => {
 window.setInterval(() => {
   const thread = activeThread();
   if (isThreadRunning(thread) && thread.runStartedAt) {
-    runElapsed.textContent = `${Date.now() - thread.runStartedAt}ms`;
+    runElapsed.textContent = formatDuration(Date.now() - thread.runStartedAt);
   }
 }, 100);
 
 renderEverything();
 resizePrompt();
 void refreshEffort();
+// 启动时跟服务端对一次账：标题、轮数、归档状态都以后端为准。
+// 以前只有打开「恢复会话」才合并，侧栏一直顶着 localStorage 里的旧标题
+// （一排「未命名运行」就是这么来的）。失败静默——本地缓存照常能用。
+void fetchServerSessions(false);
 if (window.matchMedia("(max-width: 1180px)").matches) {
   runRailToggle.setAttribute("aria-pressed", "false");
 }

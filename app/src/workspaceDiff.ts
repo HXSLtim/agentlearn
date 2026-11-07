@@ -2,6 +2,7 @@
 import { API_BASE, readError } from "./api";
 import { escapeHtml } from "./format";
 import { promptInput, requireElement } from "./dom";
+import { activeThread } from "./main";
 import type { WorkspaceDiffResponse } from "./types";
 
 const DIFF_STATUS_LABELS: Record<string, string> = {
@@ -78,8 +79,12 @@ export async function loadWorkspaceDiff(): Promise<void> {
   workspaceDiffSummary.innerHTML = "<span>正在读取 git status…</span>";
   workspaceDiffList.innerHTML = `<div class="workspace-diff-empty">正在读取工作区</div>`;
   try {
+    // diff 跟会话的工作目录走（D35）：会话在哪个项目里干活就看那个项目。
+    const sessionId = activeThread().sessionId;
     const response = await fetch(
-      `${API_BASE}/workspace/diff?include_untracked=true`,
+      `${API_BASE}/workspace/diff?include_untracked=true${
+        sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""
+      }`,
     );
     if (!response.ok) {
       throw new Error(await readError(response));

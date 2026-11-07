@@ -100,6 +100,9 @@ export interface Thread {
   model: string;
   pinned: boolean;
   archived: boolean;
+  // 会话工作目录（D35）：空字符串 = 默认 data/sandbox。跟会话走，
+  // 不是某一轮的参数；服务端 sessions.workdir 是真值来源。
+  workdir: string;
   usage?: TurnUsage;
   contextWarning?: ContextWarning;
   serverTurns?: number;
@@ -234,6 +237,7 @@ export interface ServerSession {
   stop_reason: string;
   pinned: boolean;
   archived: boolean;
+  workdir: string;
 }
 
 export interface SessionForkResponse {

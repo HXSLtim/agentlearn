@@ -144,6 +144,12 @@
           <div class="composer-shell" id="composer-shell">
             <div class="composer-heading">
               <span id="composer-status">Enter 发送 · Shift+Enter 换行</span>
+              <button
+                class="workdir-button"
+                id="workdir-button"
+                type="button"
+                title="会话工作目录"
+              >目录 sandbox</button>
             </div>
             <div class="composer-attachments" id="composer-attachments" hidden></div>
             <label class="sr-only" for="prompt">向 agent 发消息</label>
@@ -239,7 +245,7 @@
           </div>
           <div class="run-metric-wide">
             <dt>缓存命中</dt>
-            <dd id="run-cache-hit">0‰</dd>
+            <dd id="run-cache-hit">—</dd>
           </div>
           <div class="run-metric-wide">
             <dt>成本</dt>
@@ -662,6 +668,56 @@
           <span>↑↓ 选择</span><span>Enter 定位</span><span>Esc 关闭</span>
           <span id="conversation-find-count">0 条匹配</span>
         </footer>
+      </section>
+    </div>
+
+    <div class="workdir-modal" id="workdir-modal" hidden>
+      <div class="workdir-backdrop" data-workdir-close></div>
+      <section
+        class="workdir-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workdir-title"
+      >
+        <header class="workdir-header">
+          <div>
+            <span class="eyebrow">会话设置</span>
+            <h2 id="workdir-title">工作目录</h2>
+          </div>
+          <button
+            class="icon-button workdir-close"
+            id="workdir-close"
+            type="button"
+            aria-label="关闭"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m4 4 12 12M16 4 4 16" />
+            </svg>
+          </button>
+        </header>
+        <form class="workdir-form" id="workdir-form">
+          <p class="workdir-intro">
+            bash 和后台任务从这里起跑，「变更」和 <code>@file</code> 也看这个目录的 git。
+            整个会话生效，不是某一条命令的参数。跨会话记忆仍留在
+            <code>data/sandbox/memory.md</code>，不跟目录走。
+          </p>
+          <label class="workdir-field">
+            <span>目录绝对路径</span>
+            <input
+              id="workdir-input"
+              name="workdir"
+              type="text"
+              placeholder="/Users/you/Documents/某项目"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <small id="workdir-status" aria-live="polite"></small>
+          </label>
+          <footer class="workdir-actions">
+            <button type="button" id="workdir-reset">恢复默认</button>
+            <button type="submit">保存</button>
+          </footer>
+        </form>
       </section>
     </div>
 
