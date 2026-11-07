@@ -37,123 +37,130 @@ COMMANDS = (
         "resume",
         "/resume [id]",
         "选择并续接历史会话",
-        "SESSION",
+        "会话",
         takes_argument=True,
     ),
     SlashCommand(
         "plan",
         "/plan <任务>",
         "只读探索后产出计划，确认后才执行",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
-    SlashCommand("stop", "/stop", "在下一个检查点停止当前轮", "RUNTIME"),
-    SlashCommand("retry", "/retry", "重跑上一条失败请求，不重复用户卡片", "RUNTIME"),
+    SlashCommand("stop", "/stop", "在下一个检查点停止当前轮", "运行"),
+    SlashCommand("retry", "/retry", "重跑上一条失败请求，不重复用户卡片", "运行"),
     SlashCommand(
         "attach",
         "/attach <path>",
         "给下一条用户消息附一张图片",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
     SlashCommand(
         "steering",
         "/steering <mode>",
         "切换 queue / cooperative / preemptive",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
     SlashCommand(
         "effort",
         "/effort [level]",
         "切换思考等级；不带参数循环",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
     SlashCommand(
         "approval",
         "/approval [mode]",
         "切换 approve / auto / yolo",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
     SlashCommand(
         "rounds",
         "/rounds [N]",
         "查看/调整本会话工具轮数上限",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
-    SlashCommand("clear", "/clear", "清空当前上下文并开新会话", "SESSION"),
-    SlashCommand("new", "/new", "新开一个空会话", "SESSION"),
+    SlashCommand("clear", "/clear", "清空当前上下文并开新会话", "会话"),
+    SlashCommand("new", "/new", "新开一个空会话", "会话"),
     SlashCommand(
         "memory",
         "/memory [内容]",
         "往跨会话记忆记一条；不带参数查看",
-        "SESSION",
+        "会话",
         takes_argument=True,
     ),
     SlashCommand(
         "find",
         "/find [关键词]",
         "定位当前会话里的一条已渲染消息",
-        "SESSION",
+        "会话",
         takes_argument=True,
     ),
     SlashCommand(
         "transcript",
         "/transcript [mode]",
         "切换 normal / thinking / verbose 三档正文视图",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
-    SlashCommand("status", "/status", "查看当前会话与运行状态", "RUNTIME"),
+    SlashCommand("status", "/status", "查看当前会话与运行状态", "运行"),
+    SlashCommand(
+        "workdir",
+        "/workdir [路径]",
+        "设置会话工作目录；reset 恢复 sandbox",
+        "运行",
+        takes_argument=True,
+    ),
     SlashCommand(
         "context",
         "/context",
         "查看上下文构成：估算 / 实数 / 预算",
-        "RUNTIME",
+        "运行",
     ),
     SlashCommand(
         "compact",
         "/compact",
         "手动压缩上下文（花一次模型请求）",
-        "RUNTIME",
+        "运行",
     ),
-    SlashCommand("trace", "/trace", "查看当前会话的 span 轨迹", "RUNTIME"),
-    SlashCommand("diff", "/diff", "查看当前 Git 工作区差异", "RUNTIME"),
-    SlashCommand("copy", "/copy", "复制最近一条完整回答", "SYSTEM"),
+    SlashCommand("trace", "/trace", "查看当前会话的 span 轨迹", "运行"),
+    SlashCommand("diff", "/diff", "查看当前 Git 工作区差异", "运行"),
+    SlashCommand("copy", "/copy", "复制最近一条完整回答", "系统"),
     SlashCommand(
         "export",
         "/export [path]",
         "把当前会话导出为 Markdown",
-        "SYSTEM",
+        "系统",
         takes_argument=True,
     ),
     SlashCommand(
         "model",
         "/model <id>",
         "切换运行模型；不带参数打开设置",
-        "RUNTIME",
+        "运行",
         takes_argument=True,
     ),
     SlashCommand(
         "config",
         "/config",
         "打开 config.ini 模型设置",
-        "RUNTIME",
+        "运行",
         ("settings",),
     ),
-    SlashCommand("now", "/now", "触发 now_time 示例", "TASK"),
-    SlashCommand("files", "/files", "查看 sandbox 目录", "TASK"),
+    SlashCommand("now", "/now", "触发 now_time 示例", "任务"),
+    SlashCommand("files", "/files", "查看 sandbox 目录", "任务"),
     SlashCommand(
         "boundary",
         "/boundary",
         "触发 reason / act / report 示例",
-        "TASK",
+        "任务",
     ),
-    SlashCommand("help", "/help", "显示全部命令", "SYSTEM"),
-    SlashCommand("quit", "/quit", "退出终端工作台", "SYSTEM"),
+    SlashCommand("help", "/help", "显示全部命令", "系统"),
+    SlashCommand("quit", "/quit", "退出终端工作台", "系统"),
 )
 
 
@@ -220,8 +227,8 @@ class CommandPalette(Static):
 
     def _paint(self) -> Text:
         text = Text.assemble(
-            ("COMMAND INDEX", f"bold {SIGNAL}"),
-            ("  /  SESSION COMMANDS FIRST\n", DIM),
+            ("命令索引", f"bold {SIGNAL}"),
+            ("  /  会话命令在前\n", DIM),
         )
         group = ""
         for index, command in enumerate(self._matches):
@@ -234,7 +241,7 @@ class CommandPalette(Static):
             text.append("  ▶ " if selected else "    ", style=SIGNAL)
             text.append(f"{command.usage:<22}", style=row_style)
             text.append(command.description + "\n", style=detail_style)
-        text.append("↑↓ SELECT · TAB COMPLETE · ENTER RUN · ESC CLOSE", style=DIM)
+        text.append("↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭", style=DIM)
         return text
 
 
@@ -251,7 +258,7 @@ class CommandResult(Static):
     ) -> None:
         tone = ERROR if error else WARN if warning else TOOL
         text = Text.assemble(
-            ("WARNING  /  " if warning else "COMMAND  /  ", f"bold {tone}"),
+            ("提醒  ·  " if warning else "命令  ·  ", f"bold {tone}"),
             (title, f"bold {PAPER}"),
             ("\n", DIM),
             (body, ERROR if error else WARN if warning else MUTED),

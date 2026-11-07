@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from typing import Callable
 
 from rich.text import Text
@@ -25,6 +23,11 @@ from textual.widgets import (
 
 from ..trace import SpanDetail, answers_for_requests
 
+from ..formatting import (
+    diff_status_label,
+    format_duration,
+    span_status_label,
+)
 from ..theme import (
     DIM,
     ERROR,
@@ -129,20 +132,20 @@ class TraceScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="trace-modal-dialog"):
             yield Static(
-                f"TRACE  /  SESSION {self.session_id[:8]}",
+                f"轨迹  ·  会话 {self.session_id[:8]}",
                 id="trace-modal-title",
             )
             yield Static(self._summary(), id="trace-modal-summary")
             with Horizontal(id="trace-modal-workspace"):
                 with Vertical(id="trace-modal-tree-panel"):
-                    yield Static("SPAN TREE", classes="ledger-kicker")
-                    yield Tree("session", id="trace-modal-tree")
+                    yield Static("Span 树", classes="ledger-kicker")
+                    yield Tree("会话", id="trace-modal-tree")
                 with Vertical(id="trace-modal-detail-panel"):
-                    yield Static("SPAN DETAIL", classes="ledger-kicker")
+                    yield Static("Span 详情", classes="ledger-kicker")
                     with VerticalScroll(id="trace-modal-detail-scroll"):
                         yield SpanDetail()
             yield Static(
-                "↑↓ SELECT · ENTER EXPAND · R RELOAD · ESC CLOSE",
+                "↑↓ 选择 · Enter 展开 · R 刷新 · Esc 关闭",
                 id="trace-modal-footer",
             )
 
@@ -172,7 +175,10 @@ class TraceScreen(ModalScreen[None]):
         nodes_by_id: dict[str, object] = {}
         for span in self.spans:
             color = self._status_color(span["status"])
-            label = f"● {span['name']}  {span['status']}  {self._detail(span)}"
+            label = (
+                f"● {span['name']}  {span_status_label(span['status'])}"
+                f"  {self._detail(span)}"
+            )
             row = Text(label, style=color)
             if span["parent_id"] and span["parent_id"] in nodes_by_id:
                 node = nodes_by_id[span["parent_id"]].add(
@@ -184,11 +190,19 @@ class TraceScreen(ModalScreen[None]):
             node.expand()
 
     def _detail(self, span) -> str:
-        data = json.loads(span["data"] or "{}")
+        # spans 来自 span_payloads：data 已解析成 dict（老代码自己 json.loads，
+        # 那是还吃 sqlite3.Row 的年代）。
+        data = span["data"] or {}
         duration = self.store.span_duration_ms(span["span_id"])
-        cost = f"{duration}ms" if duration is not None else "未结束"
+        cost = (
+            format_duration(duration)
+            if duration is not None
+            else ("进行中" if span["status"] == "running" else "—")
+        )
         if span["name"] == "llm_request":
-            return f"{cost}  ttft={data.get('ttft_ms', '—')}ms"
+            ttft = data.get("ttft_ms")
+            suffix = f"  首字={format_duration(ttft)}" if ttft is not None else ""
+            return f"{cost}{suffix}"
         if span["name"] == "tool_call":
             return f"{cost}  {data.get('tool', '?')}"
         return cost
@@ -251,7 +265,7 @@ class TraceScreen(ModalScreen[None]):
 
     def action_reload(self) -> None:
         self._load()
-        self.notify("trace reloaded")
+        self.notify("轨迹已刷新")
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -262,8 +276,8 @@ class TraceScreen(ModalScreen[None]):
         cancelled = sum(1 for span in self.spans if span["status"] == "cancelled")
         running = sum(1 for span in self.spans if span["status"] == "running")
         return (
-            f"SPANS {len(self.spans)} · TURNS {turns} · "
-            f"ERRORS {errors} · CANCELLED {cancelled} · RUNNING {running}"
+            f"span {len(self.spans)} · 轮次 {turns} · "
+            f"错误 {errors} · 已取消 {cancelled} · 运行中 {running}"
         )
 
 
@@ -335,12 +349,12 @@ class WorkspaceDiffScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="diff-dialog"):
-            yield Static("DIFF  /  GIT WORKSPACE", id="diff-title")
-            yield Static("READING GIT STATUS…", id="diff-summary")
+            yield Static("变更  ·  Git 工作区", id="diff-title")
+            yield Static("正在读取 git status…", id="diff-summary")
             with VerticalScroll(id="diff-scroll"):
-                yield Static("READING WORKSPACE…", id="diff-body")
+                yield Static("正在读取工作区…", id="diff-body")
             yield Static(
-                "↑↓/PAGE↑↓ SCROLL · HOME/END JUMP · R RELOAD · ESC CLOSE",
+                "↑↓/Page↑↓ 滚动 · Home/End 跳转 · R 刷新 · Esc 关闭",
                 id="diff-footer",
             )
 
@@ -352,10 +366,10 @@ class WorkspaceDiffScreen(ModalScreen[None]):
             snapshot = self.loader()
         except Exception as exc:
             self.query_one("#diff-summary", Static).update(
-                f"WORKSPACE UNAVAILABLE · {exc}"
+                f"工作区不可用 · {exc}"
             )
             self.query_one("#diff-body", Static).update(
-                Text(f"WORKSPACE READ FAILED\n{exc}", style=ERROR)
+                Text(f"工作区读取失败\n{exc}", style=ERROR)
             )
             self.query_one("#diff-scroll", VerticalScroll).focus()
             return
@@ -370,8 +384,8 @@ class WorkspaceDiffScreen(ModalScreen[None]):
             1 for file in snapshot["files"] if file["status"] != "untracked"
         )
         return (
-            f"ROOT {snapshot['root']} · TRACKED {tracked} · "
-            f"UNTRACKED {snapshot['untracked_count']}"
+            f"{snapshot['root']} · 已跟踪 {tracked} · "
+            f"未跟踪 {snapshot['untracked_count']}（已计入）"
         )
 
     def _diff_text(self, snapshot: dict) -> Text:
@@ -381,14 +395,17 @@ class WorkspaceDiffScreen(ModalScreen[None]):
             return text
         for file in snapshot["files"]:
             status_style = ERROR if file["status"] in ("deleted", "conflicted") else TOOL
-            text.append(f"● {file['status'].upper()}  ", style=f"bold {status_style}")
+            text.append(
+                f"● {diff_status_label(file['status'])}  ",
+                style=f"bold {status_style}",
+            )
             if file["old_path"]:
                 text.append(f"{file['old_path']} → ", style=DIM)
             text.append(f"{file['path']}\n", style=PAPER)
             text.append(
                 f"  +{file['additions']} −{file['deletions']}"
-                + ("  BINARY" if file["binary"] else "")
-                + ("  PATCH TRUNCATED" if file["truncated"] else "")
+                + ("  二进制" if file["binary"] else "")
+                + ("  补丁已截断" if file["truncated"] else "")
                 + "\n",
                 style=MUTED,
             )
@@ -415,7 +432,7 @@ class WorkspaceDiffScreen(ModalScreen[None]):
 
     def action_reload(self) -> None:
         self._load()
-        self.notify("workspace diff reloaded")
+        self.notify("工作区变更已刷新")
 
     def action_scroll_up(self) -> None:
         self.query_one("#diff-scroll", VerticalScroll).scroll_up(animate=False)

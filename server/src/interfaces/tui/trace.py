@@ -11,7 +11,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from application.traceView import answer_texts, answers_for_requests
+from .formatting import (
+    cache_hit_percent,
+    format_duration,
+    span_status_label,
+)
+from application.traceView import (
+    answer_texts,
+    answers_for_requests,
+    span_payloads,
+)
 from rich.text import Text
 from textual import events, on
 from textual.app import App, ComposeResult
@@ -45,7 +54,7 @@ class SpanDetail(Static):
     def clear_detail(self) -> None:
         self.update(
             Text.assemble(
-                ("SELECT A SPAN\n\n", f"bold {SIGNAL}"),
+                ("选择一个 span\n\n", f"bold {SIGNAL}"),
                 ("用 ↑ / ↓ 在左侧树中选择一步。\nspans 说明“怎么走的”，回答正文来自 JSONL。", MUTED),
             )
         )
@@ -56,53 +65,60 @@ class SpanDetail(Static):
         duration_ms: int | None,
         answer: str,
     ) -> None:
-        data = json.loads(span["data"] or "{}")
+        data = span["data"] or {}
         status = span["status"]
         status_color = TOOL if status == "ok" else (ERROR if status == "error" else MUTED if status == "cancelled" else WARN)
-        duration = f"{duration_ms}ms" if duration_ms is not None else "未结束"
+        # 只有还在跑的才说「未结束」；被清扫的孤儿 span 没有真实结束
+        # 时间，显示「—」而不是假装它跑到了现在。
+        duration = (
+            format_duration(duration_ms)
+            if duration_ms is not None
+            else ("进行中" if status == "running" else "—")
+        )
+        status_text = span_status_label(status)
         text = Text.assemble(
             (span["name"].upper(), f"bold {PAPER}"),
             ("  /  ", DIM),
-            (status.upper(), f"bold {status_color}"),
+            (status_text, f"bold {status_color}"),
             ("  /  ", DIM),
             (duration, SIGNAL),
             ("\n", DIM),
             (f"span_id  {span['span_id']}\n", DIM),
-            (f"start    {_local_time(span['start_time'])}\n", MUTED),
-            (f"end      {_local_time(span['end_time']) if span['end_time'] else '—'}\n", MUTED),
+            (f"开始     {_local_time(span['start_time'])}\n", MUTED),
+            (f"结束     {_local_time(span['end_time']) if span['end_time'] else '—'}\n", MUTED),
         )
 
         if span["name"] == "llm_request":
-            text.append("\nMODEL REQUEST\n", style=f"bold {SIGNAL}")
+            text.append("\n模型请求\n", style=f"bold {SIGNAL}")
             text.append(
-                f"model       {data.get('model', '—')}\n"
-                f"messages    {data.get('messages', '—')}\n"
-                f"ttft        {_ms(data.get('ttft_ms'))}\n"
-                f"stop        {data.get('stop_reason', '—')}\n"
-                f"effort      {data.get('effort', '—')}\n"
-                f"tokens      in {data.get('input_tokens', '—')} / "
-                f"out {data.get('output_tokens', '—')}\n"
-                f"cache       read {data.get('cache_read_tokens', '—')} / "
-                f"write {data.get('cache_write_tokens', '—')} / "
-                f"hit {data.get('cache_hit_ratio', '—')}‰\n",
+                f"模型        {data.get('model', '—')}\n"
+                f"消息        {data.get('messages', '—')}\n"
+                f"首字        {format_duration(data.get('ttft_ms'))}\n"
+                f"结束原因    {data.get('stop_reason', '—')}\n"
+                f"思考强度    {data.get('effort', '—')}\n"
+                f"token       输入 {data.get('input_tokens', '—')} / "
+                f"输出 {data.get('output_tokens', '—')}\n"
+                f"缓存        读 {data.get('cache_read_tokens', '—')} / "
+                f"写 {data.get('cache_write_tokens', '—')} / "
+                f"命中 {cache_hit_percent(data.get('cache_hit_ratio'))}\n",
                 style=MUTED,
             )
             if answer:
-                text.append("\nANSWER\n", style=f"bold {TOOL}")
+                text.append("\n回答\n", style=f"bold {TOOL}")
                 text.append(answer, style=PAPER)
         elif span["name"] == "tool_call":
-            text.append("\nTOOL CALL\n", style=f"bold {SIGNAL}")
-            text.append(f"tool        {data.get('tool', '—')}\n", style=MUTED)
-            text.append("\nINPUT\n", style=f"bold {TOOL}")
+            text.append("\n工具调用\n", style=f"bold {SIGNAL}")
+            text.append(f"工具        {data.get('tool', '—')}\n", style=MUTED)
+            text.append("\n输入\n", style=f"bold {TOOL}")
             text.append(_pretty(data.get("input", {})), style=PAPER)
-            text.append("\n\nOUTPUT\n", style=f"bold {TOOL}")
+            text.append("\n\n输出\n", style=f"bold {TOOL}")
             text.append(str(data.get("output", "—")), style=ERROR if status == "error" else PAPER)
         elif data:
-            text.append("\nDATA\n", style=f"bold {TOOL}")
+            text.append("\n数据\n", style=f"bold {TOOL}")
             text.append(_pretty(data), style=PAPER)
 
         if data.get("message"):
-            text.append("\n\nERROR MESSAGE\n", style=f"bold {ERROR}")
+            text.append("\n\n错误信息\n", style=f"bold {ERROR}")
             text.append(str(data["message"]), style=ERROR)
         self.update(text)
 
@@ -272,19 +288,19 @@ class TraceInspector(App):
                 ),
                 id="trace-brand",
             )
-            yield Static(f"SESSION {self.session_id}", id="trace-meta")
-            yield Static("● READ ONLY", id="trace-state")
+            yield Static(f"会话 {self.session_id}", id="trace-meta")
+            yield Static("● 只读", id="trace-state")
         yield Static(self._summary(), id="trace-summary")
         with Horizontal(id="trace-workspace"):
             with Vertical(id="tree-panel"):
-                yield Static("SPAN TREE", classes="panel-title")
-                yield Tree("session", id="trace-tree")
+                yield Static("Span 树", classes="panel-title")
+                yield Tree("会话", id="trace-tree")
             with Vertical(id="detail-panel"):
-                yield Static("SPAN DETAIL", classes="panel-title")
+                yield Static("Span 详情", classes="panel-title")
                 with VerticalScroll(id="detail-scroll"):
                     yield SpanDetail()
         yield Static(
-            "↑↓ select  ·  ENTER expand  ·  R reload  ·  CTRL+Q quit",
+            "↑↓ 选择 · Enter 展开 · R 刷新 · Ctrl+Q 退出",
             id="trace-footer",
         )
 
@@ -346,18 +362,22 @@ class TraceInspector(App):
             self._show_span_id(first["span_id"])
 
     def _span_label(self, span) -> tuple[str, str]:
-        data = json.loads(span["data"] or "{}")
+        data = span["data"] or {}
         duration = self.store.span_duration_ms(span["span_id"])
-        cost = f"{duration}ms" if duration is not None else "未结束"
         status = span["status"]
+        cost = (
+            format_duration(duration)
+            if duration is not None
+            else ("进行中" if status == "running" else "—")
+        )
         color = TOOL if status == "ok" else (ERROR if status == "error" else MUTED if status == "cancelled" else WARN)
         name = span["name"]
         detail = ""
         if name == "llm_request":
-            detail = f"  ttft={_ms(data.get('ttft_ms'))}"
+            detail = f"  首字={format_duration(data.get('ttft_ms'))}"
         elif name == "tool_call":
             detail = f"  {data.get('tool', '?')}"
-        return f"● {name}  {status}  {cost}{detail}", color
+        return f"● {name}  {span_status_label(status)}  {cost}{detail}", color
 
     @on(Tree.NodeHighlighted)
     def _node_highlighted(self, event: Tree.NodeHighlighted) -> None:
@@ -407,16 +427,13 @@ class TraceInspector(App):
         )
         return (
             f"SPANS {len(self.spans)}   ·   TURNS {turns}   ·   "
-            f"ERRORS {errors}   ·   RUNNING {running}   ·   WALL {duration}ms"
+            f"错误 {errors}   ·   运行中 {running}   ·   总时长 {duration}ms"
         )
 
 
 def _pretty(value) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
-
-def _ms(value) -> str:
-    return f"{value}ms" if value is not None else "—"
 
 
 def _local_time(value: str) -> str:
@@ -437,13 +454,13 @@ def run_trace(session_id: str) -> None:
     transcript = Transcript(DATA / "sessions")
     messages = transcript.read(session_id)
     store = Store(DATA / "agent.db")
-    spans = store.spans_for(session_id)
+    spans = span_payloads(store, session_id)
     if not spans:
         raise SystemExit("这个会话没有 trace 记录。")
 
     def load() -> tuple[list, list[str]]:
         fresh_messages = transcript.read(session_id)
-        return store.spans_for(session_id), _answer_texts(fresh_messages)
+        return span_payloads(store, session_id), _answer_texts(fresh_messages)
 
     TraceInspector(
         session_id,

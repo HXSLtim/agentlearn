@@ -21,6 +21,7 @@ from textual.widgets import (
 
 from domain.message import Message as DomainMessage
 
+from ..formatting import format_duration
 from ..theme import (
     DIM,
     ERROR,
@@ -49,19 +50,28 @@ class UserMessage(Static):
 
 
 class AssistantMessage(Vertical):
-    def __init__(self, *, restored: bool = False) -> None:
+    def __init__(self, *, restored: bool = False, show_kicker: bool = True) -> None:
         super().__init__(classes="assistant-message")
         self.body = Markdown("", classes="assistant-body")
         self._restored = restored
+        # 连续的助手消息不重复抬头（与 WebUI 的 is-continuation 同规则）：
+        # 一轮里第二段正文、工具轮之后的正文，都跟着前一条走。
+        self._show_kicker = show_kicker
         self._kicker = Static(self._kicker_text(), classes="message-kicker")
+        self._tick = Static("", classes="span-tick")
         self._text = ""
+        # 本条消息对应的 turn 耗时（毫秒）。None = 还没有真实数据，
+        # 没数据就不画 tick——账本不造假。
+        self.duration_ms: float | None = None
 
     def compose(self) -> ComposeResult:
-        yield self._kicker
+        if self._show_kicker:
+            yield self._kicker
         yield self.body
+        yield self._tick
 
     def _kicker_text(self) -> str:
-        return "AGENT  /  " + ("RESTORED RESPONSE" if self._restored else "LIVE RESPONSE")
+        return "智能体 · 历史回复" if self._restored else "智能体 · 实时回复"
 
     @property
     def search_text(self) -> str:
@@ -71,11 +81,32 @@ class AssistantMessage(Vertical):
         self._text += fragment
         self.body.update(self._text)
 
+    def set_tick(self, duration_ms: float, max_ms: float) -> None:
+        """画本轮耗时的小刻度条（WebUI 的 span-tick 签名元素，终端版）。
+
+        12 格条按「本轮 / 全会话最长轮」比例填充，后面跟人话时长。
+        max_ms <= 0 时只画一格——有数但没基准，一格至少说明「这一轮存在」。
+        """
+        self.duration_ms = duration_ms
+        cells = 12
+        filled = 1 if duration_ms is not None and duration_ms >= 0 else 0
+        if max_ms and max_ms > 0 and duration_ms is not None and duration_ms >= 0:
+            filled = max(1, min(cells, round(duration_ms / max_ms * cells)))
+        bar = "█" * filled + "·" * (cells - filled)
+        self._tick.update(
+            Text.assemble(
+                (bar[:filled], SIGNAL),
+                (bar[filled:], DIM),
+                (f"  {format_duration(duration_ms)}", MUTED),
+            )
+        )
+        self._tick.add_class("-on")
+
     def finish(self) -> None:
         if not self._text:
             self.add_class("-empty")
-        elif not self._restored:
-            self._kicker.update("AGENT  /  RESPONSE")
+        elif not self._restored and self._show_kicker:
+            self._kicker.update("智能体 · 回复")
 
 
 class ReasoningPanel(Collapsible):
@@ -93,8 +124,8 @@ class ReasoningPanel(Collapsible):
         self._label.update(text)
 
     def _display_title(self) -> str:
-        status = "STORED" if self._restored else ("LIVE" if self._live else "DONE")
-        return f"THINKING  /  {status}  ·  {len(self._text)} chars  ·  {self._snippet()}"
+        status = "已存" if self._restored else ("实时" if self._live else "完成")
+        return f"思考  ·  {status}  ·  {len(self._text)} 字  ·  {self._snippet()}"
 
     def _snippet(self) -> str:
         compact = " ".join(self._text.split())
@@ -135,13 +166,17 @@ class ToolCard(Static):
         call = f"{self.tool_name}({args})"
         if self._output is None:
             text = Text.assemble(
-                ("RUNNING  ", f"bold {WARN}"),
+                ("运行中  ", f"bold {WARN}"),
                 (call, f"bold {PAPER}"),
-                ("\nwaiting for tool result", DIM),
+                ("\n等待工具结果", DIM),
             )
         else:
-            mark = "ERROR" if self._is_error else "RESULT"
-            elapsed = f"  {self._elapsed_ms}ms" if self._elapsed_ms is not None else ""
+            mark = "出错" if self._is_error else "结果"
+            elapsed = (
+                f"  {format_duration(self._elapsed_ms)}"
+                if self._elapsed_ms is not None
+                else ""
+            )
             text = Text.assemble(
                 (f"{mark}  ", f"bold {ERROR if self._is_error else TOOL}"),
                 (call, f"bold {PAPER}"),
@@ -151,7 +186,7 @@ class ToolCard(Static):
         self.update(text)
 
     def set_result(self, output: str, is_error: bool, elapsed_ms: int | None) -> None:
-        self._output = output.strip() or "(no output)"
+        self._output = output.strip() or "（无输出）"
         self._is_error = is_error
         self._elapsed_ms = elapsed_ms
         self._paint()
@@ -173,7 +208,7 @@ class RetryErrorCard(Vertical):
     def compose(self) -> ComposeResult:
         yield Static(
             Text.assemble(
-                ("ERROR  /  ", f"bold {ERROR}"),
+                ("出错  ·  ", f"bold {ERROR}"),
                 (self.error_message, PAPER),
             ),
             classes="retry-message",
@@ -182,7 +217,7 @@ class RetryErrorCard(Vertical):
             "已完成的结果仍保留；重试会作为新请求执行。",
             classes="retry-note",
         )
-        yield Button("RETRY  ↻", classes="retry-button")
+        yield Button("重试  ↻", classes="retry-button")
 
     @on(Button.Pressed, ".retry-button")
     def _retry(self) -> None:
@@ -196,11 +231,11 @@ class EmptyState(Vertical):
             super().__init__()
 
     def compose(self) -> ComposeResult:
-        yield Static("SESSION 00  /  LOCAL RUNTIME", classes="empty-boot")
+        yield Static("新会话  ·  本地运行时", classes="empty-boot")
         yield Static(
             Text.assemble(
                 ("$ ", f"bold {SIGNAL}"),
-                ("awaiting input", f"bold {PAPER}"),
+                ("等待输入", f"bold {PAPER}"),
                 ("_", SIGNAL),
             ),
             classes="empty-console",
@@ -226,7 +261,7 @@ class EmptyState(Vertical):
                 classes="prompt-chip",
             )
         yield Static(
-            "ENTER / RUN   ·   SHIFT+ENTER / NEWLINE   ·   JSONL + SQLITE / LOCAL",
+            "ENTER 发送   ·   SHIFT+ENTER 换行   ·   JSONL + SQLITE 本地留存",
             classes="empty-meta",
         )
 

@@ -36,6 +36,7 @@ from textual.widgets.option_list import Option
 
 from infrastructure.config import SettingsSnapshot, SettingsValues
 
+from .labels import approval_label
 from ..theme import (
     DIM,
     ERROR,
@@ -140,14 +141,14 @@ class HistorySearchScreen(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="history-search-dialog"):
-            yield Static("HISTORY  /  REVERSE SEARCH", id="history-search-title")
+            yield Static("历史输入  ·  反向搜索", id="history-search-title")
             yield Input(
                 placeholder="输入内容过滤本会话历史…",
                 id="history-search-input",
             )
             yield OptionList(id="history-search-list")
             yield Static(
-                "↑↓ SELECT · ENTER RESTORE · ESC CLOSE",
+                "↑↓ 选择 · Enter 恢复 · Esc 关闭",
                 id="history-search-footer",
             )
 
@@ -323,7 +324,7 @@ class ResumeScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="resume-dialog"):
             with Horizontal(id="resume-header"):
-                yield Static("RESUME  /  STORED SESSIONS", id="resume-title")
+                yield Static("恢复会话  ·  已落盘会话", id="resume-title")
                 yield Button("×", id="resume-close")
             yield Static(
                 f"当前 {self.current_session_id[:8]}  ·  "
@@ -336,7 +337,7 @@ class ResumeScreen(ModalScreen[str | None]):
             )
             yield OptionList(id="resume-list")
             yield Static(
-                "TYPE FILTER  ·  ↑↓ SELECT  ·  ENTER RESUME  ·  ESC CLOSE",
+                "输入过滤 · ↑↓ 选择 · Enter 续接 · Esc 关闭",
                 id="resume-footer",
             )
 
@@ -386,11 +387,11 @@ class ResumeScreen(ModalScreen[str | None]):
         text = Text()
         text.append(_format_session_time(session.created_at), style=DIM)
         text.append(f"  {session.session_id[:8]}", style=f"bold {SIGNAL}")
-        text.append(f"  {session.turns} TURNS", style=MUTED)
+        text.append(f"  {session.turns} 轮", style=MUTED)
         if current:
-            text.append("  CURRENT", style=f"bold {WARN}")
+            text.append("  当前会话", style=f"bold {WARN}")
         text.append(f"\n  {session.title}", style=PAPER)
-        text.append(f"  · {session.model or 'model unknown'}", style=DIM)
+        text.append(f"  · {session.model or '未知模型'}", style=DIM)
         return text
 
     def action_cancel(self) -> None:
@@ -511,11 +512,11 @@ class ApprovalScreen(ModalScreen[ApprovalChoice]):
     def compose(self) -> ComposeResult:
         with Vertical(id="approval-dialog"):
             with Horizontal(id="approval-header"):
-                yield Static("TOOL APPROVAL  /  EXECUTION GATE", id="approval-title")
-                yield Static(f"MODE {self.mode.upper()}", id="approval-mode")
+                yield Static("工具审批  ·  执行闸门", id="approval-title")
+                yield Static(f"档位 {approval_label(self.mode)}", id="approval-mode")
             yield Static(
-                f"{self.tool_name} 请求在宿主机执行。ACCEPT ONCE 只放行这一次；"
-                "ACCEPT SESSION 本会话后续同名工具免问。",
+                f"{self.tool_name} 请求在宿主机执行。通过一次 只放行这一次；"
+                "本会话允许 后续同名工具免问。",
                 id="approval-copy",
             )
             yield Static(
@@ -523,13 +524,13 @@ class ApprovalScreen(ModalScreen[ApprovalChoice]):
                 id="approval-arguments",
             )
             yield Input(
-                placeholder="DENIAL REASON (OPTIONAL)",
+                placeholder="拒绝理由（可选）",
                 id="approval-reason",
             )
             with Horizontal(id="approval-actions"):
-                yield Button("DENY", id="approval-deny")
-                yield Button("ACCEPT ONCE", id="approval-accept")
-                yield Button("ACCEPT SESSION", id="approval-accept-session")
+                yield Button("拒绝", id="approval-deny")
+                yield Button("通过一次", id="approval-accept")
+                yield Button("本会话允许", id="approval-accept-session")
 
     def on_mount(self) -> None:
         self.query_one("#approval-accept", Button).focus()
@@ -622,11 +623,11 @@ class PlanScreen(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="plan-dialog"):
-            yield Static("PLAN MODE  /  HUMAN CONFIRMATION", id="plan-title")
+            yield Static("计划模式  ·  人工确认", id="plan-title")
             yield Static(self.text, id="plan-text")
             with Horizontal(id="plan-actions"):
-                yield Button("DISCARD PLAN", id="plan-discard")
-                yield Button("CONFIRM & EXECUTE", id="plan-confirm")
+                yield Button("放弃计划", id="plan-discard")
+                yield Button("确认并执行", id="plan-confirm")
 
     def on_mount(self) -> None:
         self.query_one("#plan-confirm", Button).focus()
@@ -648,7 +649,7 @@ def _format_session_time(value: str) -> str:
     try:
         return datetime.fromisoformat(value).astimezone().strftime("%m-%d %H:%M")
     except (TypeError, ValueError):
-        return "unknown time"
+        return "未知时间"
 
 
 class ConversationSearchScreen(ModalScreen[UserMessage | AssistantMessage | None]):
@@ -730,14 +731,14 @@ class ConversationSearchScreen(ModalScreen[UserMessage | AssistantMessage | None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="conversation-search-dialog"):
-            yield Static("SESSION  /  RENDERED MESSAGE SEARCH", id="conversation-search-title")
+            yield Static("会话内查找  ·  已渲染消息", id="conversation-search-title")
             yield Input(
                 placeholder="输入内容过滤当前会话…",
                 id="conversation-search-input",
             )
             yield OptionList(id="conversation-search-list")
             yield Static(
-                "↑↓ SELECT · ENTER LOCATE · ESC CLOSE",
+                "↑↓ 选择 · Enter 定位 · Esc 关闭",
                 id="conversation-search-footer",
             )
 
@@ -951,39 +952,39 @@ class SettingsScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
             with Horizontal(id="settings-header"):
-                yield Static("SETTINGS  /  MODEL RUNTIME", id="settings-title")
+                yield Static("设置  ·  模型运行时", id="settings-title")
                 yield Button("×", id="settings-close")
             with VerticalScroll(id="settings-body"):
-                yield Static("PROVIDER", classes="settings-label")
+                yield Static("提供方", classes="settings-label")
                 yield Select(
                     [("Anthropic", "anthropic"), ("OpenAI", "openai")],
                     allow_blank=False,
                     id="settings-provider",
                 )
 
-                yield Static("MODEL ID", classes="settings-label")
+                yield Static("模型 ID", classes="settings-label")
                 yield Select(
                     [(self.current.model_id, self.current.model_id)],
                     allow_blank=False,
                     id="settings-model",
                 )
                 yield Static(
-                    "READING MODELS…",
+                    "正在读取模型列表…",
                     id="settings-model-status",
                     classes="settings-hint",
                 )
 
-                yield Static("BASE URL", classes="settings-label")
+                yield Static("接口地址", classes="settings-label")
                 yield Input(value=self.current.base_url, id="settings-base-url")
 
-                yield Static("MAX TOKENS", classes="settings-label")
+                yield Static("最大 token", classes="settings-label")
                 yield Input(
                     value=str(self.current.max_tokens),
                     type="integer",
                     id="settings-max-tokens",
                 )
 
-                yield Static("THINKING EFFORT", classes="settings-label")
+                yield Static("思考强度", classes="settings-label")
                 yield Select(
                     [
                         ("默认（不发送）", "omit"),
@@ -997,7 +998,7 @@ class SettingsScreen(ModalScreen[bool]):
                     id="settings-effort",
                 )
 
-                yield Static("API KEY", classes="settings-label")
+                yield Static("API 密钥", classes="settings-label")
                 yield Static(
                     f"当前来源：{self.current.api_key_source}。留空保持原值。",
                     classes="settings-hint",
@@ -1009,8 +1010,8 @@ class SettingsScreen(ModalScreen[bool]):
                 )
             yield Static("", id="settings-status")
             with Horizontal(id="settings-actions"):
-                yield Button("CANCEL", id="settings-cancel")
-                yield Button("SAVE", id="settings-save")
+                yield Button("取消", id="settings-cancel")
+                yield Button("保存并应用", id="settings-save")
 
     async def on_mount(self) -> None:
         # Select 在构造时设值会早于 SelectCurrent 挂载，显示会是空白。

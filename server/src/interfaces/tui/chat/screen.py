@@ -68,6 +68,8 @@ from domain.message import ImageBlock
 from domain.message import Message as DomainMessage
 
 from ..trace import answer_texts
+from application.traceView import span_payloads
+from application.sandbox import SANDBOX, normalize_workdir
 
 from ..theme import (
     DIM,
@@ -83,6 +85,14 @@ from ..theme import (
     apply_agentlearn_theme,
 )
 
+from .labels import (
+    approval_label,
+    receipt_label,
+    run_state_label,
+    steering_label,
+    stop_reason_label,
+)
+from ..formatting import cache_hit_percent, format_duration
 from .cards import (
     UserMessage,
     AssistantMessage,
@@ -186,6 +196,9 @@ class AgentLearnTUI(App[str | None]):
         background: {PANEL};
         border-left: solid {LINE};
         padding: 1 1;
+        scrollbar-size-vertical: 1;
+        scrollbar-color: {SIGNAL};
+        scrollbar-background: {PANEL};
     }}
 
     .ledger-kicker {{
@@ -197,16 +210,29 @@ class AgentLearnTUI(App[str | None]):
     .ledger-rule {{
         height: 1;
         border-top: solid {LINE};
-        margin: 1 0;
+        /* 上下 margin 各 1 会把每条分隔线撑到 3 行；36 行屏的侧栏放不下，只留下边距。 */
+        margin: 0 0 1 0;
+    }}
+
+    .ledger-row {{
+        height: 1;
     }}
 
     .ledger-label {{
+        width: 11;
         color: {DIM};
-        margin-top: 1;
     }}
 
     .ledger-value {{
+        width: 1fr;
+        height: 1;
         color: {PAPER};
+        text-align: right;
+        overflow: hidden;
+    }}
+
+    #ledger-footer {{
+        color: {DIM};
     }}
 
     #ledger-state {{
@@ -216,11 +242,6 @@ class AgentLearnTUI(App[str | None]):
 
     #ledger-session {{
         color: {MUTED};
-    }}
-
-    #key-help {{
-        color: {DIM};
-        margin-top: 2;
     }}
 
     #empty {{
@@ -301,6 +322,18 @@ class AgentLearnTUI(App[str | None]):
 
     .assistant-message.-empty {{
         display: none;
+    }}
+
+    /* 签名元素 span-tick 的终端版：消息底部一条 12 格耗时刻度。
+       默认不占行（没数据的轮不画），set_tick 挂上 -on 才显示。 */
+    .span-tick {{
+        display: none;
+        height: 1;
+        margin-top: 1;
+    }}
+
+    .span-tick.-on {{
+        display: block;
     }}
 
     .user-message.search-highlight,
@@ -452,9 +485,19 @@ class AgentLearnTUI(App[str | None]):
         padding: 1 2 1 2;
     }}
 
-    #composer-label {{
+    #composer-heading {{
         height: 1;
+    }}
+
+    #composer-status {{
+        width: 1fr;
         color: {SIGNAL};
+        text-style: bold;
+    }}
+
+    #composer-workdir {{
+        width: auto;
+        color: {TOOL};
         text-style: bold;
     }}
 
@@ -643,95 +686,115 @@ class AgentLearnTUI(App[str | None]):
         self._tool_cards: dict[str, ToolCard] = {}
         self._suppress_palette: str | None = None
         self.transcript_mode = "normal"
+        # 抬头规则（WebUI showAuthorFor 同款）：一条用户消息之后的第
+        # 一条助手消息带「智能体」抬头，轮内后续的连续助手消息不带。
+        self._expect_kicker = True
+        # 本轮挂出来的助手消息（stamp tick 用最后一条）；tick 登记簿存
+        # 全会话 (消息, 时长)，最长轮变化时整批按新基准重画。
+        self._turn_assistants: list[AssistantMessage] = []
+        self._tick_registry: list[tuple[AssistantMessage, float]] = []
+        self._max_turn_ms = 0.0
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
             yield Static(
                 Text.assemble(
                     (" AGENTLEARN ", f"bold {INK} on {SIGNAL}"),
-                    ("  LOCAL RUNTIME", DIM),
+                    ("  本地运行时", DIM),
                 ),
                 id="brand",
             )
             yield Static(self._session_line(), id="top-session")
-            yield Static("● READY", id="top-state")
+            yield Static("● 就绪", id="top-state")
 
         with Horizontal(id="workspace"):
             with VerticalScroll(id="timeline"):
                 yield EmptyState(id="empty") if not self.history else Static(
-                    "RESTORED THREAD", classes="message-kicker"
+                    "历史会话", classes="message-kicker"
                 )
-            with Vertical(id="ledger"):
-                yield Static("RUN LOG", classes="ledger-kicker")
-                yield Static("STATE", classes="ledger-label")
-                yield Static("READY", id="ledger-state")
-                yield Static("SESSION", classes="ledger-label")
-                yield Static(self._short_session(), id="ledger-session")
-                yield Static("MODEL", classes="ledger-label")
-                yield Static(self.conversation.chat.model, id="ledger-model", classes="ledger-value")
-                yield Static("THINKING", classes="ledger-label")
-                yield Static(self.effort, id="ledger-effort", classes="ledger-value")
-                yield Static("APPROVAL", classes="ledger-label")
-                yield Static(
-                    self.approval_mode.upper(),
-                    id="ledger-approval",
-                    classes="ledger-value",
-                )
-                yield Static("STEERING", classes="ledger-label")
-                yield Static(
-                    self.steering_mode.upper(),
-                    id="ledger-steering",
-                    classes="ledger-value",
-                )
-                yield Static("QUEUED", classes="ledger-label")
-                yield Static("0", id="ledger-queued", classes="ledger-value")
+            # VerticalScroll：内容是 22 行起步的固定清单，比这矮的终端
+            # （比如 30 行的分屏）靠滚轮也能看全，不硬裁。
+            with VerticalScroll(id="ledger"):
+                yield Static("运行日志", classes="ledger-kicker")
+                # 台账与 WebUI 右栏（index.html 的 run-metrics）同一套指标和行序。
+                # 「标签上、值下」的两行制在 36 行的终端里放不下 13 行指标，
+                # 这里压成一行两列：标签左、值右，一格一行，信息密度对齐。
+                with Horizontal(classes="ledger-row"):
+                    yield Static("状态", classes="ledger-label")
+                    yield Static("就绪", id="ledger-state", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("会话", classes="ledger-label")
+                    yield Static(self._short_session(), id="ledger-session", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("轮次", classes="ledger-label")
+                    yield Static(str(self.turn_count), id="ledger-turns", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("工具调用", classes="ledger-label")
+                    yield Static(str(self.tool_count), id="ledger-tools", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("用时", classes="ledger-label")
+                    yield Static("—", id="ledger-elapsed", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("输入 token", classes="ledger-label")
+                    yield Static("0", id="ledger-input", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("输出 token", classes="ledger-label")
+                    yield Static("0", id="ledger-output", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("缓存读", classes="ledger-label")
+                    yield Static("0", id="ledger-cache-read", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("缓存写", classes="ledger-label")
+                    yield Static("0", id="ledger-cache-write", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("缓存命中", classes="ledger-label")
+                    yield Static("—", id="ledger-cache-hit", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("成本", classes="ledger-label")
+                    yield Static(
+                        self._format_cost(),
+                        id="ledger-cost",
+                        classes="ledger-value",
+                    )
+                with Horizontal(classes="ledger-row"):
+                    yield Static("思考强度", classes="ledger-label")
+                    yield Static(self.effort, id="ledger-effort", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("执行审批", classes="ledger-label")
+                    yield Static(
+                        approval_label(self.approval_mode),
+                        id="ledger-approval",
+                        classes="ledger-value",
+                    )
+                with Horizontal(classes="ledger-row"):
+                    yield Static("消息插话", classes="ledger-label")
+                    yield Static(
+                        steering_label(self.steering_mode),
+                        id="ledger-steering",
+                        classes="ledger-value",
+                    )
+                # 下面两行是 TUI 补充的实时位：模型名和排队中的插话数。
+                # WebUI 不在右栏放这两项（模型在设置里，插话有自己的浮层）。
+                with Horizontal(classes="ledger-row"):
+                    yield Static("模型", classes="ledger-label")
+                    yield Static(self.conversation.chat.model, id="ledger-model", classes="ledger-value")
+                with Horizontal(classes="ledger-row"):
+                    yield Static("排队中", classes="ledger-label")
+                    yield Static("0", id="ledger-queued", classes="ledger-value")
                 yield Static("", classes="ledger-rule")
-                yield Static("TURNS", classes="ledger-label")
-                yield Static(str(self.turn_count), id="ledger-turns", classes="ledger-value")
-                yield Static("TOOL CALLS", classes="ledger-label")
-                yield Static(str(self.tool_count), id="ledger-tools", classes="ledger-value")
-                yield Static("ELAPSED", classes="ledger-label")
-                yield Static("—", id="ledger-elapsed", classes="ledger-value")
-                yield Static("INPUT TOKENS", classes="ledger-label")
-                yield Static("0", id="ledger-input", classes="ledger-value")
-                yield Static("OUTPUT TOKENS", classes="ledger-label")
-                yield Static("0", id="ledger-output", classes="ledger-value")
-                yield Static("CACHE READ", classes="ledger-label")
-                yield Static("0", id="ledger-cache-read", classes="ledger-value")
-                yield Static("CACHE WRITE", classes="ledger-label")
-                yield Static("0", id="ledger-cache-write", classes="ledger-value")
-                yield Static("CACHE HIT", classes="ledger-label")
-                yield Static("0‰", id="ledger-cache-hit", classes="ledger-value")
-                yield Static("COST", classes="ledger-label")
-                yield Static(
-                    self._format_cost(),
-                    id="ledger-cost",
-                    classes="ledger-value",
-                )
-                yield Static("STOP REASON", classes="ledger-label")
-                yield Static("—", id="ledger-stop", classes="ledger-value")
-                yield Static("", classes="ledger-rule")
-                yield Static(
-                    "ENTER       send\n"
-                    "SHIFT+ENTER newline\n"
-                    "CTRL+J      newline\n"
-                    "CTRL+N      focus input\n"
-                    "CTRL+R      input history\n"
-                    "CTRL+G      external editor\n"
-                    "CTRL+O      copy last answer\n"
-                    "CTRL+,      /config\n"
-                    "ALT+T       thinking effort\n"
-                    "SHIFT+TAB   approval mode\n"
-                    "ALT+S       steering mode\n"
-                    "ESC         stop active turn\n"
-                    "/           commands\n"
-                    "CTRL+Q      quit",
-                    id="key-help",
-                )
+                with Horizontal(classes="ledger-row"):
+                    yield Static("停止原因", classes="ledger-label")
+                    yield Static("—", id="ledger-stop", classes="ledger-value")
+                yield Static("JSONL · SQLite · 仅本地", id="ledger-footer")
 
         with Vertical(id="composer-shell"):
             yield CommandPalette()
-            yield Static("COMPOSE  /  ENTER RUN", id="composer-label")
+            with Horizontal(id="composer-heading"):
+                yield Static(
+                    "Enter 发送 · Shift+Enter 换行 · Esc 停止本轮",
+                    id="composer-status",
+                )
+                yield Static("", id="composer-workdir")
             with Horizontal(id="composer-row"):
                 yield PromptComposer(
                     placeholder="输入任务或命令…",
@@ -739,15 +802,17 @@ class AgentLearnTUI(App[str | None]):
                     soft_wrap=True,
                     compact=True,
                 )
-                yield Button("RUN  ↵", id="send")
+                yield Button("发送 ↵", id="send")
             yield Static(
-                "/resume SESSIONS · /find CURRENT · /transcript VIEW · /trace SPANS · / ALL COMMANDS",
+                "CTRL+R 历史 · CTRL+G 编辑器 · CTRL+O 复制回答 · CTRL+, 设置"
+                " · ALT+T 思考 · SHIFT+TAB 审批 · ALT+S 插话 · / 命令面板",
                 id="composer-help",
             )
 
     async def on_mount(self) -> None:
         if self.history:
             await self._mount_history()
+        self._refresh_workdir_ui()
         composer = self.query_one("#composer", PromptComposer)
         composer.command_key_handler = self._command_key
         composer.history_key_handler = self._history_key
@@ -784,8 +849,21 @@ class AgentLearnTUI(App[str | None]):
             self.notify(f"Transcript：{mode.upper()} · {descriptions[mode]}")
 
     def _session_line(self) -> str:
-        count = len(self.history)
-        return f"SESSION {self._short_session()}  ·  {count} MESSAGES"
+        # 顶栏只挂会话标题（与 WebUI 头部一致）；没有标题的新会话退回短 id。
+        # 消息数不放在这：history 是启动快照，轮次进行中会滞后说谎。
+        return self._session_title()
+
+    def _session_title(self) -> str:
+        store = getattr(self.conversation, "store", None)
+        if store is not None:
+            try:
+                for row in store.list_sessions(limit=200, include_archived=True):
+                    if row["id"] == self.session_id and row["title"]:
+                        return row["title"]
+            except Exception:
+                # 标题只是展示位，读不到就退回短 id，不该把顶栏搞挂。
+                pass
+        return f"会话 {self._short_session()}"
 
     def _short_session(self) -> str:
         return self.session_id[:8]
@@ -793,8 +871,21 @@ class AgentLearnTUI(App[str | None]):
     async def _mount_history(self) -> None:
         timeline = self.query_one("#timeline", VerticalScroll)
         by_tool_id: dict[str, ToolCard] = {}
+        # 按用户消息切轮，收 tick 时长用（与 WebUI hydrateTurnDurations
+        # 同一套对应：第 k 组 ↔ 第 k 个 turn span）。
+        turn_groups: list[list[AssistantMessage]] = []
         for message in self.history:
             if message.role == "user":
+                # 切组只认真正带文本的用户消息：tool_result 也住在 user
+                # 消息里，但它是上一轮的回执，不开新轮（WebUI 同规则，
+                # 否则组和 turn span 错位，tick 配错轮）。
+                has_prompt = any(
+                    block.type == "text" and block.text
+                    for block in message.content
+                )
+                if has_prompt:
+                    self._expect_kicker = True
+                    turn_groups.append([])
                 for block in message.content:
                     if block.type == "text" and block.text:
                         await timeline.mount(UserMessage(block.text))
@@ -813,14 +904,64 @@ class AgentLearnTUI(App[str | None]):
                 if block.type == "thinking" and block.thinking:
                     await timeline.mount(ReasoningPanel(block.thinking, restored=True))
                 elif block.type == "text" and block.text:
-                    assistant = AssistantMessage(restored=True)
+                    assistant = AssistantMessage(
+                        restored=True, show_kicker=self._expect_kicker
+                    )
+                    self._expect_kicker = False
                     await timeline.mount(assistant)
                     assistant.append_text(block.text)
+                    if turn_groups:
+                        turn_groups[-1].append(assistant)
                 elif block.type == "tool_use":
                     card = ToolCard(block.id, block.name, block.input)
                     by_tool_id[block.id] = card
                     await timeline.mount(card)
+        self._hydrate_turn_ticks(turn_groups)
         timeline.scroll_end(animate=False)
+
+    def _hydrate_turn_ticks(self, turn_groups: list[list[AssistantMessage]]) -> None:
+        """恢复会话时给每轮收尾的助手消息补 turn 时长（span-tick 数据源）。
+
+        拉不到 trace 就静默：tick 只在真有数据时出现，账本不造假。
+        超过 24h 的时长按脏数据丢——历史清扫曾把孤儿 span 的 end_time
+        写成重启时刻，几天长的「轮次」都是假的。
+        """
+        store = getattr(self.conversation, "store", None)
+        if store is None or not turn_groups:
+            return
+        try:
+            spans = span_payloads(store, self.session_id)
+        except Exception:
+            return
+        turn_spans = [span for span in spans if span["name"] == "turn"]
+        for group, span in zip(turn_groups, turn_spans):
+            if not group:
+                continue
+            duration = span.get("duration_ms")
+            if (
+                not isinstance(duration, (int, float))
+                or duration < 0
+                or duration >= 24 * 3_600_000
+            ):
+                continue
+            self._tick_registry.append((group[-1], float(duration)))
+        self._refresh_span_ticks()
+
+    def _stamp_turn_tick(self) -> None:
+        """本轮收线：把实际耗时记到最后一条助手消息上，并整批重画。"""
+        if not self._turn_assistants or not self.turn_started:
+            return
+        elapsed = (time.monotonic() - self.turn_started) * 1000
+        self._tick_registry.append((self._turn_assistants[-1], elapsed))
+        self._refresh_span_ticks()
+
+    def _refresh_span_ticks(self) -> None:
+        """最长轮是所有 tick 的比例基准，基准变了旧的也要跟着重画。"""
+        self._max_turn_ms = max(
+            (duration for _, duration in self._tick_registry), default=0.0
+        )
+        for widget, duration in self._tick_registry:
+            widget.set_tick(duration, self._max_turn_ms)
 
     def _scroll_timeline_end(self) -> None:
         """把续接会话定位到最后一轮，而不是停在历史开头。"""
@@ -862,9 +1003,11 @@ class AgentLearnTUI(App[str | None]):
         if show_user:
             turn_images = list(images or []) if append_user else []
             await timeline.mount(UserMessage(question, len(turn_images)))
+            self._expect_kicker = True
         self._assistant = None
         self._reasoning = None
         self._tool_cards = {}
+        self._turn_assistants = []
 
         self.streaming = True
         self.turn_started = time.monotonic()
@@ -1013,7 +1156,9 @@ class AgentLearnTUI(App[str | None]):
                 self._reasoning.finish()
                 self._reasoning = None
             if self._assistant is None:
-                self._assistant = AssistantMessage()
+                self._assistant = AssistantMessage(show_kicker=self._expect_kicker)
+                self._expect_kicker = False
+                self._turn_assistants.append(self._assistant)
                 await self.query_one("#timeline", VerticalScroll).mount(self._assistant)
             self._assistant.append_text(fragment)
             self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
@@ -1039,6 +1184,7 @@ class AgentLearnTUI(App[str | None]):
             self._finish_live_blocks()
             timeline = self.query_one("#timeline", VerticalScroll)
             await timeline.mount(UserMessage(event["text"]))
+            self._expect_kicker = True
             timeline.scroll_end(animate=False)
             return
         if kind == "tool_use":
@@ -1122,6 +1268,7 @@ class AgentLearnTUI(App[str | None]):
         self.streaming = False
         self.steering_turn = None
         self.stop_reason = stop_reason
+        self._stamp_turn_tick()
         if self._confirmed_plan_id is not None:
             plan_id = self._confirmed_plan_id
             self._confirmed_plan_id = None
@@ -1131,7 +1278,7 @@ class AgentLearnTUI(App[str | None]):
             return
         self._set_running_state("COMPLETE")
         self._update_ledger()
-        self._send_button(disabled=False, label="RUN  ↵")
+        self._send_button(disabled=False, label="发送 ↵")
         self.query_one("#composer", PromptComposer).focus()
 
     async def _execute_plan(self, plan_id: str) -> None:
@@ -1156,6 +1303,7 @@ class AgentLearnTUI(App[str | None]):
         self.streaming = False
         self.steering_turn = None
         self.stop_reason = "cancelled"
+        self._stamp_turn_tick()
         await self._show_command_result(
             "STOPPED",
             "当前轮已在检查点停止；半截回答未落盘，已完成的结果保留。",
@@ -1164,7 +1312,7 @@ class AgentLearnTUI(App[str | None]):
             return
         self._set_running_state("READY")
         self._update_ledger()
-        self._send_button(disabled=False, label="RUN  ↵")
+        self._send_button(disabled=False, label="发送 ↵")
         self.query_one("#composer", PromptComposer).focus()
 
     async def _finish_error(self, message: str, question: str) -> None:
@@ -1173,6 +1321,7 @@ class AgentLearnTUI(App[str | None]):
         self.steering_turn = None
         self._last_failed_question = question
         self.stop_reason = "error"
+        self._stamp_turn_tick()
         timeline = self.query_one("#timeline", VerticalScroll)
         await timeline.mount(RetryErrorCard(message, question))
         timeline.scroll_end(animate=False)
@@ -1180,7 +1329,7 @@ class AgentLearnTUI(App[str | None]):
         self._update_ledger()
         if await self._start_queued_turn():
             return
-        self._send_button(disabled=False, label="RUN  ↵")
+        self._send_button(disabled=False, label="发送 ↵")
         self.query_one("#composer", PromptComposer).focus()
 
     async def _start_queued_turn(self) -> bool:
@@ -1193,28 +1342,35 @@ class AgentLearnTUI(App[str | None]):
     def _update_attachment_status(self) -> None:
         count = len(self.pending_images)
         self.query_one("#composer", PromptComposer).allow_empty_submit = count > 0
-        self.query_one("#composer-label", Static).update(
-            f"COMPOSE  /  ENTER RUN  ·  ATTACHED IMAGES {count}"
+        # 与 WebUI 的 composer-status 同位：默认显示键位提示，挂了图片时
+        # 前置图片计数（图片挂载状态是此刻更要紧的信息）。
+        self.query_one("#composer-status", Static).update(
+            f"图片 {count} 张 · Enter 发送"
             if count
-            else "COMPOSE  /  ENTER RUN"
+            else "Enter 发送 · Shift+Enter 换行 · Esc 停止本轮"
         )
 
     def _set_running_state(self, state: str) -> None:
         color = TOOL if state in ("READY", "COMPLETE") else (
             ERROR if state == "ERROR" else WARN
         )
+        label = run_state_label(state)
         self.query_one("#top-state", Static).update(
-            Text.assemble(("● ", color), (state, f"bold {color}"))
+            Text.assemble(("● ", color), (label, f"bold {color}"))
         )
         ledger = self.query_one("#ledger-state", Static)
-        ledger.update(state)
+        ledger.update(label)
         ledger.styles.color = color
 
     def _update_ledger(self) -> None:
+        # 顶栏标题跟着刷：第一条用户消息落库后 set_title_if_empty 会补标题。
+        self.query_one("#top-session", Static).update(self._session_line())
         self.query_one("#ledger-turns", Static).update(str(self.turn_count))
         self.query_one("#ledger-tools", Static).update(str(self.tool_count))
         self.query_one("#ledger-queued", Static).update(str(len(self.queued_prompts)))
-        self.query_one("#ledger-stop", Static).update(self.stop_reason)
+        self.query_one("#ledger-stop", Static).update(
+            stop_reason_label(self.stop_reason) if self.stop_reason else "—"
+        )
         self.query_one("#ledger-input", Static).update(
             str(self.turn_usage.get("input_tokens", 0))
         )
@@ -1228,12 +1384,12 @@ class AgentLearnTUI(App[str | None]):
             str(self.turn_usage.get("cache_write_tokens", 0))
         )
         self.query_one("#ledger-cache-hit", Static).update(
-            f"{self.turn_usage.get('cache_hit_ratio', 0)}‰"
+            cache_hit_percent(self.turn_usage.get("cache_hit_ratio", 0))
         )
         self.query_one("#ledger-cost", Static).update(self._format_cost())
         if not self.streaming:
             self.query_one("#ledger-elapsed", Static).update(
-                f"{round((time.monotonic() - self.turn_started) * 1000)}ms"
+                format_duration((time.monotonic() - self.turn_started) * 1000)
                 if self.turn_started else "—"
             )
 
@@ -1258,8 +1414,8 @@ class AgentLearnTUI(App[str | None]):
 
     def _tick_elapsed(self) -> None:
         if self.streaming:
-            elapsed = round((time.monotonic() - self.turn_started) * 1000)
-            self.query_one("#ledger-elapsed", Static).update(f"{elapsed}ms")
+            elapsed = (time.monotonic() - self.turn_started) * 1000
+            self.query_one("#ledger-elapsed", Static).update(format_duration(elapsed))
 
     def _send_button(self, *, disabled: bool, label: str) -> None:
         button = self.query_one("#send", Button)
@@ -1387,6 +1543,12 @@ class AgentLearnTUI(App[str | None]):
         # append_user=False：失败轮的 user 消息已在 JSONL，重跑不重复落盘。
         await self._start_turn(event.question, show_user=False, append_user=False)
 
+    @on(events.Click, "#composer-workdir")
+    def _workdir_clicked(self) -> None:
+        # 终端 Static 没有 hover title（WebUI 靠它解释这个按钮），点一下
+        # 弹用法，指到 /workdir 命令上。
+        self.notify("/workdir <绝对路径> 设置 · /workdir reset 恢复 · 下一轮起生效")
+
     @on(Button.Pressed, "#send")
     async def _send_pressed(self) -> None:
         composer = self.query_one("#composer", PromptComposer)
@@ -1483,6 +1645,9 @@ class AgentLearnTUI(App[str | None]):
             return
         if command.name == "status":
             await self._show_command_result("STATUS", self._status_text())
+            return
+        if command.name == "workdir":
+            await self._command_workdir(argument)
             return
         if command.name == "help":
             composer = self.query_one("#composer", PromptComposer)
@@ -1689,17 +1854,17 @@ class AgentLearnTUI(App[str | None]):
             else ("ERROR" if self.stop_reason == "error" else "READY")
         )
         status = (
-            f"session   {self.session_id}\n"
-            f"model     {self.conversation.chat.model}\n"
-            f"thinking  {self.effort}\n"
-            f"approval  {self.approval_mode}\n"
-            f"steering  {self.steering_mode}\n"
-            f"queued    {len(self.queued_prompts)}\n"
-            f"state     {state}\n"
-            f"turns     {self.turn_count}\n"
-            f"tools     {self.tool_count}\n"
-            f"stop      {self.stop_reason}\n"
-            "storage   JSONL transcript + SQLite trace"
+            f"会话     {self.session_id}\n"
+            f"模型     {self.conversation.chat.model}\n"
+            f"思考     {self.effort}\n"
+            f"审批     {approval_label(self.approval_mode)}\n"
+            f"插话     {steering_label(self.steering_mode)}\n"
+            f"排队     {len(self.queued_prompts)}\n"
+            f"状态     {run_state_label(state)}\n"
+            f"轮次     {self.turn_count}\n"
+            f"工具     {self.tool_count}\n"
+            f"停止     {stop_reason_label(self.stop_reason)}\n"
+            "存储     JSONL 正文 + SQLite 轨迹"
         )
         capabilities = None
         capability_error = ""
@@ -1874,7 +2039,7 @@ class AgentLearnTUI(App[str | None]):
             [
                 f"input         {usage.get('input_tokens', '—')}",
                 f"cache_read    {usage.get('cache_read_tokens', '—')}"
-                f"（命中 {usage.get('cache_hit_ratio', '—')}‰）",
+                f"（命中 {cache_hit_percent(usage.get('cache_hit_ratio'))}）",
                 f"cache_write   {usage.get('cache_write_tokens', '—')}",
                 f"output        {usage.get('output_tokens', '—')}",
             ]
@@ -1940,6 +2105,71 @@ class AgentLearnTUI(App[str | None]):
             "MEMORY", f"已记下（下一圈请求生效）：\n{line}"
         )
 
+    async def _command_workdir(self, argument: str) -> None:
+        """会话工作目录（D35，与 WebUI 的 workdir 按钮同一套语义）。
+
+        目录跟会话走：写进 sessions.workdir，正在跑的 Conversation 每轮
+        开头 _load_workdir 重读，所以改完下一轮就生效，不用重启界面。
+        """
+        store = getattr(self.conversation, "store", None)
+        if store is None:
+            await self._show_command_result(
+                "WORKDIR", "存储没有装配，读不了会话工作目录。", error=True
+            )
+            return
+        if not argument:
+            raw = store.get_workdir(self.session_id)
+            await self._show_command_result(
+                "WORKDIR",
+                f"当前：{raw or f'{SANDBOX}（默认）'}\n"
+                "用法：/workdir <绝对路径> 换目录；/workdir reset 恢复默认。\n"
+                "整个会话生效，下一轮起跑。",
+            )
+            return
+        if not store.has_session(self.session_id):
+            await self._show_command_result(
+                "WORKDIR",
+                "会话还没登记（第一条消息没发过）。先发一条消息，再设目录。",
+                error=True,
+            )
+            return
+        if argument.casefold() in ("reset", "default"):
+            store.set_workdir(self.session_id, "")
+            self._refresh_workdir_ui()
+            await self._show_command_result(
+                "WORKDIR", f"已恢复默认 sandbox。下一轮起从 {SANDBOX} 起跑。"
+            )
+            return
+        try:
+            normalized = normalize_workdir(argument)
+        except ValueError as exc:
+            await self._show_command_result("WORKDIR", str(exc), error=True)
+            return
+        store.set_workdir(self.session_id, str(normalized))
+        self._refresh_workdir_ui()
+        await self._show_command_result(
+            "WORKDIR", f"工作目录已设：{normalized}。整个会话生效，下一轮起跑。"
+        )
+
+    def _workdir_label(self) -> str:
+        """输入区目录位的短名，与 WebUI workdirLabel 同规则：取最后两段。"""
+        store = getattr(self.conversation, "store", None)
+        raw = ""
+        if store is not None:
+            try:
+                raw = store.get_workdir(self.session_id)
+            except Exception:
+                raw = ""
+        if not raw:
+            return "sandbox"
+        parts = [part for part in raw.split("/") if part]
+        return "/".join(parts[-2:]) if parts else raw
+
+    def _refresh_workdir_ui(self) -> None:
+        self.query_one("#composer-workdir", Static).update(
+            f"目录 {self._workdir_label()}"
+        )
+
     async def _command_trace(self) -> None:
         store = getattr(self.conversation, "store", None)
         transcript = getattr(self.conversation, "transcript", None)
@@ -1951,7 +2181,7 @@ class AgentLearnTUI(App[str | None]):
             )
             return
         try:
-            spans = store.spans_for(self.session_id)
+            spans = span_payloads(store, self.session_id)
             messages = transcript.read(self.session_id)
         except Exception as exc:
             await self._show_command_result("TRACE", str(exc), error=True)
@@ -1965,7 +2195,7 @@ class AgentLearnTUI(App[str | None]):
 
         def load() -> tuple[list, list[str]]:
             return (
-                store.spans_for(self.session_id),
+                span_payloads(store, self.session_id),
                 answer_texts(transcript.read(self.session_id)),
             )
 
@@ -1999,8 +2229,9 @@ class AgentLearnTUI(App[str | None]):
         if empty:
             await empty.remove()
         timeline = self.query_one("#timeline", VerticalScroll)
+        # 收条标题在渲染口统一转中文（labels.RECEIPT_LABELS），调用点仍传英文枚举。
         await timeline.mount(
-            CommandResult(title, body, error=error, warning=warning)
+            CommandResult(receipt_label(title), body, error=error, warning=warning)
         )
         timeline.scroll_end(animate=False)
 
@@ -2089,19 +2320,19 @@ class AgentLearnTUI(App[str | None]):
             self.screen.dismiss(True)
         elif isinstance(self.screen, ApprovalScreen):
             self.screen.query_one("#approval-mode", Static).update(
-                f"MODE {self.approval_mode.upper()}"
+                f"档位 {approval_label(self.approval_mode)}"
             )
         self.query_one("#ledger-approval", Static).update(
-            self.approval_mode.upper()
+            approval_label(self.approval_mode)
         )
         descriptions = {
-            "approve": "每次工具调用都要 Accept",
+            "approve": "每次工具调用都要确认",
             "auto": "只读工具自动放行，bash 需确认",
             "yolo": "全部工具直接执行",
         }
         suffix = " · 已自动放行当前审批" if auto_approved else ""
         self.notify(
-            f"执行等级：{self.approval_mode.upper()} · "
+            f"执行等级：{approval_label(self.approval_mode)} · "
             f"{descriptions[self.approval_mode]}{suffix}"
         )
 
@@ -2117,7 +2348,7 @@ class AgentLearnTUI(App[str | None]):
     def _set_steering_mode(self, mode: str) -> None:
         self.steering_mode = mode
         self.query_one("#ledger-steering", Static).update(
-            self.steering_mode.upper()
+            steering_label(self.steering_mode)
         )
         descriptions = {
             "queue": "当前轮结束后再跑",
@@ -2125,7 +2356,7 @@ class AgentLearnTUI(App[str | None]):
             "preemptive": "下一个检查点打断当前轮",
         }
         self.notify(
-            f"Steering：{self.steering_mode.upper()} · {descriptions[self.steering_mode]}"
+            f"插话：{steering_label(self.steering_mode)} · {descriptions[self.steering_mode]}"
         )
 
     def _set_effort(self, effort: str) -> None:
