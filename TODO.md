@@ -106,7 +106,12 @@ desktop / TUI 还没接上的界面：
       不再只能靠刷新恢复。离线假 client 验证流中途断开、工具结果处断开、请求后收尾前
       断开、正常收尾、抢占各条路径的 span 终态；`npm run build`、`compileall` 通过。
       旧库里已积的 running 行仍按文末欠账处理。
-- [ ] 「墨与琥珀」浅色主题里 11px 琥珀小字（eyebrow / 状态 / 快捷键提示）对纸底只有约 3.5:1，低于 AA 的 4.5:1；大标题与描边不受影响。验收：要么加一档 `--accent-text`（浅色用 `#a85510`、深色仍用 `#eda03c`）只套小字，要么明确记录 accent 小字只是装饰、正文信息不用它。依据：2026-11-05 细节巡检按 WCAG 公式算得，属既有取色，不阻塞当前工作。
+- [x] 「墨与琥珀」浅色主题小字达到 AA 对比度 ✅（2026-11-09）：新增
+      `--accent-text`，浅色为 `#a85510`、深色保持 `#eda03c`，并加入 custom
+      主题白名单；只替换 eyebrow / 状态 / 快捷键提示 / 台账小字等文本，
+      按钮、边框和大面积图形仍用原 accent。WCAG 公式实测浅色
+      `#a85510` 对 `#fffefb` 为 5.24:1、对 `#f7f5f1` 为 4.86:1；380×900
+      浅色页面 computed color 命中、无横向溢出并已人工检查截图。
 - [x] 前端颜色主题 token 化（2026-11-09，D46）：light/dark/auto 与语义 token
       收进 `theme.css`，`styles.css` 只消费变量；custom 支持 URL 参数与控制台
       `AgentLearnTheme.set()` 试色并持久化，`reset()` 回 auto。

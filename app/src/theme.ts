@@ -16,6 +16,7 @@ const COLOR_TOKENS = new Set([
   "--dim",
   "--accent",
   "--accent-strong",
+  "--accent-text",
   "--accent-hover",
   "--on-accent",
   "--accent-dim",

@@ -404,7 +404,7 @@ kbd {
 }
 
 .thread-state.is-running {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .thread-state.is-error {
@@ -517,7 +517,7 @@ kbd {
 }
 
 .stage-heading .eyebrow {
-  color: var(--accent-dim);
+  color: var(--accent-text);
 }
 
 .stage-heading h1 {
@@ -546,7 +546,7 @@ kbd {
   align-items: center;
   gap: 7px;
   padding: 0 9px;
-  color: var(--accent);
+  color: var(--accent-text);
   background: transparent;
   /* 只是状态，不是控件：不加边框，免得不小心做成按钮的样子 */
   border: 0;
@@ -591,7 +591,7 @@ kbd {
 }
 
 .empty-boot .eyebrow {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .empty-signal {
@@ -1587,7 +1587,7 @@ kbd {
 
 .command-group {
   padding: 7px 10px 5px;
-  color: var(--accent-dim);
+  color: var(--accent-text);
   background: var(--void);
   border-bottom: 1px solid var(--line);
   font-family: var(--mono);
@@ -1734,7 +1734,7 @@ kbd {
 }
 
 .composer-heading > span:first-child {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 500;
 }
 
@@ -1942,7 +1942,7 @@ kbd {
 }
 
 .run-status-card strong.is-running {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .run-status-card strong.is-error {
@@ -1985,7 +1985,7 @@ kbd {
 .run-metrics dd {
   margin: 5px 0 0;
   overflow: hidden;
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 500;
@@ -2039,7 +2039,7 @@ kbd {
 .activity-tag {
   align-self: start;
   padding-top: 1px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 500;
@@ -2092,7 +2092,7 @@ kbd {
 .stop-section code {
   display: block;
   margin-top: 6px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: var(--mono);
   font-size: 11px;
 }
@@ -2164,7 +2164,7 @@ kbd {
 }
 
 .workspace-diff-header .eyebrow {
-  color: var(--accent-dim);
+  color: var(--accent-text);
 }
 
 .workspace-diff-header h2 {
@@ -2350,7 +2350,7 @@ kbd {
 .workspace-diff-hunk > header {
   padding: 6px 7px;
   overflow-wrap: anywhere;
-  color: var(--accent-dim);
+  color: var(--accent-text);
   background: var(--void);
   border-bottom: 1px solid var(--line);
   font-family: var(--mono);
@@ -2489,7 +2489,7 @@ kbd {
 }
 
 .settings-header .eyebrow {
-  color: var(--accent-dim);
+  color: var(--accent-text);
 }
 
 .settings-header h2 {
@@ -2647,11 +2647,11 @@ kbd {
 }
 
 .settings-status.is-busy {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .settings-status.is-ok {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .settings-status.is-error {
@@ -2777,7 +2777,7 @@ kbd {
 }
 
 .resume-header .eyebrow {
-  color: var(--accent-dim);
+  color: var(--accent-text);
 }
 
 .resume-header h2 {
@@ -2842,7 +2842,7 @@ kbd {
 
 .resume-index-line span:last-child {
   margin-left: auto;
-  color: var(--accent-dim);
+  color: var(--accent-text);
 }
 
 .resume-summary {
@@ -3327,7 +3327,7 @@ kbd {
 }
 
 .conversation-find-header .eyebrow {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .conversation-find-header h2 {
@@ -3352,7 +3352,7 @@ kbd {
 }
 
 .conversation-find-field > span {
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.1em;
@@ -3398,7 +3398,7 @@ kbd {
 }
 
 .conversation-find-item > span {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 11px;
   letter-spacing: 0.08em;
 }
@@ -3450,7 +3450,7 @@ kbd {
 
 .conversation-find-footer > span:last-child {
   margin-left: auto;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .trace-modal {
@@ -3505,7 +3505,7 @@ kbd {
 }
 
 .trace-header .eyebrow {
-  color: var(--accent-dim);
+  color: var(--accent-text);
 }
 
 .trace-header h2 {
@@ -3568,7 +3568,7 @@ kbd {
 }
 
 .trace-summary-line span:first-child {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .trace-workspace {
@@ -3811,7 +3811,7 @@ kbd {
 
 .trace-detail-section h3 {
   margin: 0 0 8px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 500;
@@ -4970,7 +4970,7 @@ button {
 
 .workdir-field small {
   min-height: 14px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 11px;
 }
 
