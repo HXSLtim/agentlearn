@@ -12,11 +12,9 @@ import type {
   ImageAttachment,
   ToolEvent,
   ToolPart,
-  AssistantPart,
   UiMessage,
   TurnUsage,
   Thread,
-  PersistedState,
   SettingsSnapshot,
   CapabilitiesResponse,
   ChatEvent,
@@ -46,6 +44,7 @@ import {
   threadKicker,
   threadTitle,
   connectionPill,
+  runtimeApiBase,
   conversation,
   conversationScroll,
   composer,
@@ -121,6 +120,16 @@ import {
   takePendingImages,
 } from "./composerImages";
 import {
+  activeThread,
+  createId,
+  createThread,
+  isThreadRunning,
+  persistState,
+  runningAssistant,
+  state,
+} from "./state";
+import { setShellBridge } from "./shellBridge";
+import {
   closeSettings,
   currentEffort,
   currentPricing,
@@ -162,16 +171,13 @@ import {
   resetCommandSelection,
   updateCommandPalette,
 } from "./commandPalette";
-const STORAGE_KEY = "agentlearn.desktop.v1";
-
-
-export let state = loadState();
-
 let renderFrame: number | undefined;
 
 let renderTarget: { threadId: string; messageId: string } | null = null;
 
 let transcriptMode: TranscriptMode = "normal";
+
+const expandedReasoning = new Set<string>();
 
 let commandReceipt: {
   threadId: string;
@@ -179,144 +185,6 @@ let commandReceipt: {
   body: string;
   error: boolean;
 } | null = null;
-
-function createId(): string {
-  return crypto.randomUUID();
-}
-
-export function createThread(): Thread {
-  const now = Date.now();
-  return {
-    id: createId(),
-    sessionId: "",
-    title: "新会话",
-    createdAt: now,
-    updatedAt: now,
-    stopReason: "",
-    approvalMode: "approve",
-    steeringMode: "queue",
-    model: "",
-    pinned: false,
-    archived: false,
-    workdir: "",
-    messagesLoaded: true,
-    messages: [],
-  };
-}
-
-function normalizeStoredMessage(message: UiMessage): UiMessage {
-  const parts: AssistantPart[] = Array.isArray(message.parts)
-    ? message.parts
-    : [];
-  const images = (message.images ?? [])
-    .map(parseImage)
-    .filter((image): image is ImageAttachment => Boolean(image));
-  if (
-    message.thinking &&
-    !parts.some((part) => part.type === "thinking")
-  ) {
-    parts.unshift({ type: "thinking", text: message.thinking });
-  }
-  return {
-    ...message,
-    images,
-    thinking: message.thinking ?? "",
-    parts,
-    error: message.error ?? "",
-    stopReason: message.stopReason ?? "",
-    streaming: false,
-    queued: false,
-    steeringState:
-      message.steeringState === "delivered"
-        ? "delivered"
-        : message.steeringState
-          ? "failed"
-          : undefined,
-  };
-}
-
-function loadState(): PersistedState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as PersistedState;
-      if (parsed.version === 1 && Array.isArray(parsed.threads) && parsed.threads.length) {
-        const threads = parsed.threads.slice(0, 24).map((thread) => ({
-          ...thread,
-          // 旧版本把没起名的会话一律存成「未命名运行」；本地有正文的趁着
-          // 加载改成首条用户消息，别等 server 列表合并时还顶着一排占位名。
-          title: (() => {
-            const firstUserText = Array.isArray(thread.messages)
-              ? thread.messages.find(
-                  (message) =>
-                    message.role === "user" && (message.text ?? "").trim(),
-                )?.text
-              : undefined;
-            if (isAutoThreadTitle(thread.title ?? "")) {
-              // 没有正文的旧占位草稿（旧版本一律叫「未命名运行」）
-              // 统一归成新会话默认名，别在列表里留一个假会话。
-              return firstUserText
-                ? threadTitleFor(firstUserText)
-                : "新会话";
-            }
-            return thread.title;
-          })(),
-          messages: Array.isArray(thread.messages)
-            ? thread.messages.map(normalizeStoredMessage)
-            : [],
-          approvalMode:
-            thread.approvalMode === "auto" || thread.approvalMode === "yolo"
-              ? (thread.approvalMode as ApprovalMode)
-              : "approve",
-          steeringMode:
-            thread.steeringMode === "cooperative" ||
-            thread.steeringMode === "preemptive"
-              ? (thread.steeringMode as SteeringMode)
-              : "queue",
-          model: typeof thread.model === "string" ? thread.model : "",
-          pinned: thread.pinned === true,
-          archived: thread.archived === true,
-          workdir:
-            typeof thread.workdir === "string" ? thread.workdir : "",
-          serverTurns:
-            typeof thread.serverTurns === "number"
-              ? thread.serverTurns
-              : undefined,
-          runStartedAt: undefined,
-          stopping: undefined,
-          messagesLoaded: Array.isArray(thread.messages)
-            ? thread.messages.length > 0
-            : false,
-        }));
-        const activeThreadId = threads.some(
-          (thread) => thread.id === parsed.activeThreadId,
-        )
-          ? parsed.activeThreadId
-          : threads[0].id;
-        return { version: 1, activeThreadId, threads };
-      }
-    }
-  } catch {
-    localStorage.removeItem(STORAGE_KEY);
-  }
-  const thread = createThread();
-  return { version: 1, activeThreadId: thread.id, threads: [thread] };
-}
-
-export function activeThread(): Thread {
-  return (
-    state.threads.find((thread) => thread.id === state.activeThreadId) ??
-    state.threads[0]
-  );
-}
-
-export function persistState(): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    showToast("本地会话缓存写入失败");
-  }
-}
 
 function parseServerTime(value: string): number {
   const timestamp = Date.parse(value);
@@ -612,17 +480,6 @@ function lastAssistant(thread: Thread): UiMessage | undefined {
   return [...thread.messages].reverse().find((message) => message.role === "assistant");
 }
 
-function runningAssistant(thread: Thread): UiMessage | undefined {
-  const running = [...thread.messages]
-    .reverse()
-    .filter((message) => message.role === "assistant" && message.streaming);
-  return running.find((message) => !message.queued) ?? running[0];
-}
-
-export function isThreadRunning(thread: Thread): boolean {
-  return runningAssistant(thread) !== undefined;
-}
-
 function threadStatus(thread: Thread): string {
   const active = runningAssistant(thread);
   if (active) {
@@ -773,6 +630,20 @@ function emptyStateMarkup(): string {
 }
 
 function renderTool(tool: ToolEvent, detailed: boolean): string {
+  if (!detailed) {
+    const preview = compactToolInput(tool);
+    const state = compactToolState(tool);
+    return `
+      <section class="tool-event is-compact ${tool.isError ? "is-error" : ""} ${tool.state === "running" ? "is-running" : ""}" title="${escapeHtml(preview)}">
+        <header>
+          <span class="tool-label">${tool.isError ? "工具错误" : "工具"}</span>
+          <code>${escapeHtml(tool.name)}</code>
+          <span>${escapeHtml(state)}</span>
+        </header>
+        <p class="tool-summary">${escapeHtml(preview)}</p>
+      </section>
+    `;
+  }
   const args = JSON.stringify(tool.input, null, 2);
   const showInput = detailed || tool.state === "waiting";
   const toolImage = tool.image
@@ -829,6 +700,31 @@ function renderTool(tool: ToolEvent, detailed: boolean): string {
       ${output}
     </section>
   `;
+}
+
+function compactToolInput(tool: ToolEvent): string {
+  const preferred = ["command", "path", "name", "text"].find((key) => {
+    const value = tool.input[key];
+    return typeof value === "string" && value.trim();
+  });
+  const raw = preferred
+    ? String(tool.input[preferred])
+    : Object.keys(tool.input).length
+      ? JSON.stringify(tool.input)
+      : "无参数";
+  return raw.replace(/\s+/g, " ").trim().slice(0, 120) || "无参数";
+}
+
+function compactToolState(tool: ToolEvent): string {
+  if (tool.state === "waiting") {
+    return "等待审批";
+  }
+  if (tool.state === "running") {
+    return "执行中";
+  }
+  const duration =
+    tool.elapsedMs === undefined ? "" : ` · ${formatDuration(tool.elapsedMs)}`;
+  return `${tool.isError ? "出错" : "完成"}${duration}`;
 }
 
 function renderPlan(plan: PlanEvent): string {
@@ -892,8 +788,8 @@ function assistantMaxDurationMs(): number {
 
 /**
  * 当前转录档位下，这条助手消息是否还有可见内容。
- * normal 会隐藏思考与工具明细；若一轮只调了工具，卡片会变成空白框——
- * 与其留白框，不如让整张卡片不出现（工具活动在右侧账本里仍有记录）。
+ * 若这轮只有不可渲染的空片段，卡片会变成空白框——与其留白框，
+ * 不如让整张卡片不出现（工具活动在右侧账本里仍有记录）。
  * 真正一条内容都没有的回答仍算可见，由 renderAssistant 写「没有返回内容」。
  */
 function assistantHasVisibleContent(message: UiMessage): boolean {
@@ -905,13 +801,13 @@ function assistantHasVisibleContent(message: UiMessage): boolean {
   }
   return message.parts.some((part) => {
     if (part.type === "tool") {
-      return part.tool.state === "waiting" || transcriptMode === "verbose";
+      return true;
     }
     if (part.type === "plan") {
       return true;
     }
     if (part.type === "thinking") {
-      return transcriptMode !== "normal" && Boolean(part.text);
+      return Boolean(part.text);
     }
     return Boolean(part.text);
   });
@@ -934,18 +830,15 @@ function renderAssistant(message: UiMessage, showAuthor = true): string {
     .map((part, index) => {
       if (part.type === "tool") {
         const needsApproval = part.tool.state === "waiting";
-        if (transcriptMode !== "verbose" && !needsApproval) {
-          return "";
-        }
-        return renderTool(part.tool, transcriptMode === "verbose");
+        return renderTool(
+          part.tool,
+          needsApproval || transcriptMode === "verbose",
+        );
       }
       if (part.type === "plan") {
         return renderPlan(part.plan);
       }
       if (part.type === "thinking") {
-        if (transcriptMode === "normal") {
-          return "";
-        }
         if (!part.text) {
           return "";
         }
@@ -954,18 +847,29 @@ function renderAssistant(message: UiMessage, showAuthor = true): string {
         );
         if (live) {
           const tail = part.text.slice(-280);
+          const reasoningKey = `${message.id}:${index}`;
           return `
-            <section class="reasoning-live" aria-label="模型正在思考">
-              <header>
+            <details
+              class="reasoning-live reasoning-toggle"
+              data-reasoning-key="${escapeHtml(reasoningKey)}"
+              ${expandedReasoning.has(reasoningKey) ? "open" : ""}
+              aria-label="模型正在思考"
+            >
+              <summary>
                 <span><i aria-hidden="true"></i> 思考 · 进行中</span>
                 <span>${part.text.length.toLocaleString()} 字</span>
-              </header>
-              <pre>${tail.length < part.text.length ? "…" : ""}${escapeHtml(tail)}</pre>
-            </section>
+              </summary>
+              <pre class="reasoning-stream">${tail.length < part.text.length ? "…" : ""}${escapeHtml(tail)}<i aria-hidden="true"></i></pre>
+            </details>
           `;
         }
+        const reasoningKey = `${message.id}:${index}`;
         return `
-          <details class="reasoning-block"${transcriptMode === "thinking" || transcriptMode === "verbose" ? " open" : ""}>
+          <details
+            class="reasoning-block reasoning-toggle"
+            data-reasoning-key="${escapeHtml(reasoningKey)}"
+            ${expandedReasoning.has(reasoningKey) || transcriptMode !== "normal" ? "open" : ""}
+          >
             <summary>
               <span>思考</span>
               <span>${part.text.length.toLocaleString()} 字</span>
@@ -981,7 +885,13 @@ function renderAssistant(message: UiMessage, showAuthor = true): string {
     })
     .join("");
   const waiting =
-    message.streaming && !message.text
+    message.streaming &&
+    !message.text &&
+    !message.parts.some(
+      (part) =>
+        (part.type === "thinking" && part.text) ||
+        (part.type === "tool" && part.tool.state !== "done"),
+    )
       ? `
         <div class="thinking-line" aria-label="模型正在生成">
           <span></span><span></span><span></span>
@@ -2157,8 +2067,8 @@ const TRANSCRIPT_MODES: TranscriptMode[] = [
 function setTranscriptMode(mode: TranscriptMode): void {
   transcriptMode = mode;
   const descriptions: Record<TranscriptMode, string> = {
-    normal: "只看用户消息、回答和审批；隐藏思考块与工具明细。",
-    thinking: "在 normal 基础上显示思考块；工具仍只保留审批。",
+    normal: "看回答、简略工具卡与折叠思考；审批仍显示完整入参。",
+    thinking: "在 normal 基础上自动展开思考；工具仍保持简略。",
     verbose: "显示思考块、工具入参和工具出参。",
   };
   showCommandResult("转录", `${mode}\n${descriptions[mode]}`);
@@ -2748,6 +2658,24 @@ conversation.addEventListener("click", (event) => {
     void submitPrompt(button.dataset.prompt);
   }
 });
+
+conversation.addEventListener(
+  "toggle",
+  (event) => {
+    const details = event.target as HTMLDetailsElement | null;
+    const key = details?.dataset.reasoningKey;
+    if (!key) {
+      return;
+    }
+    if (details.open) {
+      expandedReasoning.add(key);
+    } else {
+      expandedReasoning.delete(key);
+    }
+  },
+  true,
+);
+
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
   void submitPrompt(promptInput.value);
@@ -2895,6 +2823,18 @@ window.setInterval(() => {
   }
 }, 100);
 
+setShellBridge({
+  fetchServerSessions,
+  hydrateThread,
+  renderConversation,
+  renderEverything,
+  renderRunLedger,
+  renderThreadList,
+  resizePrompt,
+  switchThread,
+});
+
+runtimeApiBase.textContent = new URL(API_BASE).host;
 renderEverything();
 resizePrompt();
 void refreshEffort();

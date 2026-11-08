@@ -1126,20 +1126,50 @@ kbd {
   letter-spacing: 0.08em;
 }
 
-.reasoning-live header span:first-child {
+.reasoning-live summary {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 10px;
+  color: var(--accent);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  list-style: none;
+}
+
+.reasoning-live summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-live summary::after {
+  color: var(--dim);
+  content: "[+]";
+}
+
+.reasoning-live[open] summary::after {
+  content: "[-]";
+}
+
+.reasoning-live summary span:first-child {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  margin-right: auto;
 }
 
-.reasoning-live header i {
+.reasoning-live summary i {
   width: 5px;
   height: 10px;
   background: var(--accent);
   animation: pending-flicker 700ms steps(2, end) infinite;
 }
 
-.reasoning-live header span:last-child {
+.reasoning-live summary span:last-child {
   color: var(--dim);
   letter-spacing: 0;
 }
@@ -1162,6 +1192,16 @@ kbd {
   word-break: break-word;
 }
 
+.reasoning-stream i {
+  display: inline-block;
+  width: 6px;
+  height: 11px;
+  margin-left: 2px;
+  vertical-align: -1px;
+  background: var(--accent);
+  animation: pending-flicker 650ms steps(2, end) infinite;
+}
+
 .tool-event {
   margin: 15px 0;
   padding: 0 0 12px;
@@ -1171,6 +1211,11 @@ kbd {
   border: 1px solid var(--line-strong);
   border-left: 3px solid var(--accent);
   box-shadow: none;
+}
+
+.tool-event.is-compact {
+  margin: 12px 0;
+  border-left-width: 2px;
 }
 
 .tool-event.is-error {
@@ -1224,6 +1269,19 @@ kbd {
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0;
+}
+
+.tool-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  padding: 8px 12px 9px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .tool-event pre {

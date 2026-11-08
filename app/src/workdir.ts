@@ -3,7 +3,8 @@
 // 自带状态与 DOM 句柄、自接线自己的按钮——和 settings / resume 同一套
 // 模块规矩；从 main 取活绑定（activeThread）在回调里用。
 import { API_BASE, readError } from "./api";
-import { activeThread, renderEverything } from "./main";
+import { activeThread } from "./state";
+import { shellBridge } from "./shellBridge";
 import { requireElement, promptInput } from "./dom";
 import { showToast } from "./toast";
 
@@ -50,7 +51,7 @@ async function saveWorkdir(raw: string): Promise<void> {
   const cleaned = raw.trim();
   // 本地先记住（localStorage 随 schedulePersist 落盘）。
   thread.workdir = cleaned;
-  renderEverything();
+  shellBridge().renderEverything();
   if (!thread.sessionId) {
     // 会话行还没建（首条消息没发过）：PATCH 没有落脚点，
     // 这个值随下一次 /chat 的 workdir 字段落上去。

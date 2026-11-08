@@ -2,7 +2,7 @@
 import { API_BASE, readError } from "./api";
 import { escapeHtml, renderMarkdown, shortSession, formatDuration, cacheHitPercent } from "./format";
 import { promptInput, requireElement } from "./dom";
-import { activeThread } from "./main";
+import { activeThread } from "./state";
 import type { TraceSpan, TraceResponse } from "./types";
 
 const traceModal = requireElement<HTMLElement>("#trace-modal");

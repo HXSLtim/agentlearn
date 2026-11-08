@@ -34,6 +34,8 @@ export const threadTitle = requireElement<HTMLElement>("#thread-title");
 
 export const connectionPill = requireElement<HTMLElement>("#connection-pill");
 
+export const runtimeApiBase = requireElement<HTMLElement>("#runtime-api-base");
+
 export const conversation = requireElement<HTMLElement>("#conversation");
 
 export const conversationScroll = requireElement<HTMLElement>("#conversation-scroll");

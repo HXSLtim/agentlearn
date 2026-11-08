@@ -42,13 +42,10 @@ import { showToast } from "./toast";
 import {
   activeThread,
   createThread,
-  fetchServerSessions,
-  hydrateThread,
   persistState,
-  renderEverything,
   state,
-  switchThread,
-} from "./main";
+} from "./state";
+import { shellBridge } from "./shellBridge";
 
 let resumeMatches: Thread[] = [];
 let resumeSelection = 0;
@@ -183,7 +180,7 @@ function renderResumeList(): void {
 
 export async function openResume(): Promise<void> {
   resumeArchived = false;
-  await fetchServerSessions(true);
+  await shellBridge().fetchServerSessions(true);
   resumeQuery = "";
   contentHits.clear();
   contentSearchSequence += 1;
@@ -224,7 +221,7 @@ async function switchResumeView(archived: boolean): Promise<void> {
   renderResumeViewTabs();
   filterResumeThreads();
   renderResumeList();
-  await fetchServerSessions(true, archived);
+  await shellBridge().fetchServerSessions(true, archived);
   resumeSelection = 0;
   filterResumeThreads();
   renderResumeList();
@@ -319,7 +316,7 @@ async function saveResumeRename(): Promise<void> {
     cancelResumeRename();
     filterResumeThreads();
     renderResumeList();
-    renderEverything();
+    shellBridge().renderEverything();
     showToast("会话已重命名");
   } catch (error) {
     showToast(
@@ -358,7 +355,7 @@ async function toggleResumePin(): Promise<void> {
       resumeMatches.findIndex((item) => item.id === thread.id),
     );
     renderResumeList();
-    renderEverything();
+    shellBridge().renderEverything();
     showToast(thread.pinned ? "会话已 pin" : "会话已取消 pin");
   } catch (error) {
     showToast(
@@ -400,7 +397,7 @@ async function toggleResumeArchive(): Promise<void> {
       resumeMatches.findIndex((item) => item.id === thread.id),
     );
     renderResumeList();
-    renderEverything();
+    shellBridge().renderEverything();
     showToast(thread.archived ? "会话已归档" : "会话已恢复");
   } catch (error) {
     showToast(
@@ -467,7 +464,7 @@ async function confirmResumeDelete(): Promise<void> {
       Math.max(0, resumeMatches.length - 1),
     );
     renderResumeList();
-    renderEverything();
+    shellBridge().renderEverything();
     showToast("会话已永久删除");
   } catch (error) {
     showToast(
@@ -580,7 +577,7 @@ async function saveResumeFork(): Promise<void> {
       throw new Error(await readError(response));
     }
     const result = (await response.json()) as SessionForkResponse;
-    await fetchServerSessions(false);
+    await shellBridge().fetchServerSessions(false);
     let created = state.threads.find(
       (thread) => thread.sessionId === result.session_id,
     );
@@ -597,7 +594,7 @@ async function saveResumeFork(): Promise<void> {
     created.messagesLoaded = false;
     cancelResumeFork();
     persistState();
-    switchThread(created.id);
+    shellBridge().switchThread(created.id);
     showToast(`已 fork 前 ${result.copied} 条消息`);
   } catch (error) {
     showToast(
@@ -632,8 +629,9 @@ export async function selectResume(index: number): Promise<void> {
   if (!thread) {
     return;
   }
-  await hydrateThread(thread, true);
-  switchThread(thread.id);
+  const shell = shellBridge();
+  await shell.hydrateThread(thread, true);
+  shell.switchThread(thread.id);
   showToast(`已续接：${thread.title}`);
 }
 

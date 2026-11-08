@@ -23,7 +23,7 @@ import {
   settingsStatus,
 } from "./dom";
 import { showToast } from "./toast";
-import { renderRunLedger } from "./main";
+import { shellBridge } from "./shellBridge";
 
 export let currentEffort: SettingsSnapshot["effort"] = "";
 
@@ -259,7 +259,7 @@ export async function refreshEffort(): Promise<void> {
     currentPricing = snapshot.pricing;
     renderModelOptions(currentModelOptions, snapshot.model_id);
     runEffort.textContent = effortLabel(currentEffort);
-    renderRunLedger();
+    shellBridge().renderRunLedger();
   } catch {
     runEffort.textContent = "unavailable";
   }

@@ -11,7 +11,7 @@ import {
   promptInput,
 } from "./dom";
 import { showToast } from "./toast";
-import { activeThread } from "./main";
+import { activeThread } from "./state";
 
 let conversationFindMatches: ConversationSearchMatch[] = [];
 let conversationFindSelection = 0;

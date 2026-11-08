@@ -10,7 +10,8 @@ import {
   commandPaletteTitle,
   promptInput,
 } from "./dom";
-import { resizePrompt, activeThread } from "./main";
+import { activeThread } from "./state";
+import { shellBridge } from "./shellBridge";
 
 let commandMatches: SlashCommand[] = [...SLASH_COMMANDS];
 let commandSelection = 0;
@@ -248,7 +249,7 @@ export function completeSelectedCommand(): void {
     return;
   }
   promptInput.value = `/${command.name}${command.takesArgument ? " " : ""}`;
-  resizePrompt();
+  shellBridge().resizePrompt();
   closeCommandPalette();
   promptInput.focus();
   promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
@@ -273,7 +274,7 @@ export function completeSelectedFile(): void {
     promptInput.value.slice(caret);
   const nextCaret = token.tokenStart + path.length + 2;
   promptInput.setSelectionRange(nextCaret, nextCaret);
-  resizePrompt();
+  shellBridge().resizePrompt();
   closeCommandPalette();
   promptInput.focus();
 }

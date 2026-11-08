@@ -2,7 +2,7 @@
 import { API_BASE, readError } from "./api";
 import { escapeHtml } from "./format";
 import { promptInput, requireElement } from "./dom";
-import { activeThread } from "./main";
+import { activeThread } from "./state";
 import type { WorkspaceDiffResponse } from "./types";
 
 const DIFF_STATUS_LABELS: Record<string, string> = {

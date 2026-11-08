@@ -8,11 +8,9 @@ import {
   activeThread,
   isThreadRunning,
   persistState,
-  renderConversation,
-  renderRunLedger,
-  renderThreadList,
   state,
-} from "./main";
+} from "./state";
+import { shellBridge } from "./shellBridge";
 
 export const autoApprovedApprovalIds = new Set<string>();
 
@@ -95,8 +93,8 @@ export function markAutoApproved(thread: Thread, approvalIds: string[]): void {
   thread.updatedAt = Date.now();
   persistState();
   if (thread.id === state.activeThreadId) {
-    renderConversation(false);
-    renderRunLedger();
+    shellBridge().renderConversation(false);
+    shellBridge().renderRunLedger();
   }
 }
 
@@ -139,8 +137,8 @@ export function setApprovalMode(mode: ApprovalMode): void {
   thread.approvalMode = mode;
   thread.updatedAt = Date.now();
   persistState();
-  renderThreadList();
-  renderRunLedger();
+  shellBridge().renderThreadList();
+  shellBridge().renderRunLedger();
   const descriptions: Record<ApprovalMode, string> = {
     approve: "每次工具调用都要人工接受",
     auto: "只读工具自动放行，bash 需确认",
