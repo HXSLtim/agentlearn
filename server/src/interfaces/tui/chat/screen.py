@@ -138,6 +138,12 @@ from .panels import (
 
 TRANSCRIPT_MODES = ("normal", "thinking", "verbose")
 
+COMMAND_PROMPTS = {
+    "now": "现在几点了？",
+    "files": "看一下 sandbox 目录里有哪些文件。",
+    "boundary": "先说明你准备怎么做，再执行，最后把结论和依据分开列出来。",
+}
+
 # 侧栏内宽：#rail 宽 31 列减左右 padding 各 1。活动条目的截断预算用它。
 RAIL_INNER_CELLS = 29
 
@@ -1769,109 +1775,108 @@ class AgentLearnTUI(App[str | None]):
                 error=True,
             )
             return
-        if command.name == "stop":
-            self._request_stop()
-            return
-        if command.name == "retry":
-            if self.streaming:
-                self.notify("当前轮还在运行，不能重试", severity="warning")
-            elif self._last_failed_question is not None:
-                await self._start_turn(
-                    self._last_failed_question, show_user=False, append_user=False
-                )
-            else:
+        await self._execute_command(command, argument.strip())
+
+    async def _execute_command(
+        self,
+        command: SlashCommand,
+        argument: str,
+    ) -> None:
+        match command.name:
+            case "stop":
+                self._request_stop()
+            case "retry":
+                await self._retry_last_request()
+            case "plan":
+                await self._command_plan(argument)
+            case "attach":
+                await self._command_attach(argument)
+            case "detach":
+                await self._command_detach(argument)
+            case "steering":
+                await self._command_steering(argument)
+            case "effort":
+                await self._command_effort(argument)
+            case "approval":
+                await self._command_approval(argument)
+            case "rounds":
+                await self._command_rounds(argument)
+            case "trace":
+                await self._command_trace()
+            case "diff":
+                self._command_diff()
+            case "transcript":
+                await self._command_transcript(argument)
+            case "context":
+                await self._command_context()
+            case "compact":
+                await self._command_compact()
+            case "memory":
+                await self._command_memory(argument)
+            case "copy":
+                self.action_copy_answer()
+            case "export":
+                await self._command_export(argument)
+            case "find":
+                self._command_find(argument)
+            case "config":
+                self.action_settings()
+            case "model":
+                await self._command_model(argument)
+            case "status":
+                await self._show_command_result("STATUS", self._status_text())
+            case "workdir":
+                await self._command_workdir(argument)
+            case "help":
+                self._open_command_palette()
+            case "quit":
+                self.exit(None)
+            case "resume" | "clear" | "new":
+                await self._switch_session(command.name, argument)
+            case "now" | "files" | "boundary":
+                await self._submit(COMMAND_PROMPTS[command.name])
+            case _:
                 await self._show_command_result(
-                    "RETRY",
-                    "还没有失败请求可重试。",
+                    "UNKNOWN",
+                    f"/{command.name} 还没有接入 TUI。",
                     error=True,
                 )
-            return
-        if command.name == "plan":
-            await self._command_plan(argument)
-            return
-        if command.name == "attach":
-            await self._command_attach(argument)
-            return
-        if command.name == "detach":
-            await self._command_detach(argument)
-            return
 
-        if command.name == "steering":
-            await self._command_steering(argument)
+    async def _retry_last_request(self) -> None:
+        if self.streaming:
+            self.notify("当前轮还在运行，不能重试", severity="warning")
             return
-        if command.name == "effort":
-            await self._command_effort(argument)
+        if self._last_failed_question is None:
+            await self._show_command_result(
+                "RETRY",
+                "还没有失败请求可重试。",
+                error=True,
+            )
             return
-        if command.name == "approval":
-            await self._command_approval(argument)
+        await self._start_turn(
+            self._last_failed_question,
+            show_user=False,
+            append_user=False,
+        )
+
+    async def _switch_session(self, name: str, argument: str) -> None:
+        if self.streaming:
+            self.notify("当前轮结束后再切换会话", severity="warning")
             return
-        if command.name == "rounds":
-            await self._command_rounds(argument)
+        if name == "resume":
+            await self._command_resume(argument)
             return
-        if command.name == "trace":
-            await self._command_trace()
-            return
-        if command.name == "diff":
-            self._command_diff()
-            return
-        if command.name == "transcript":
-            await self._command_transcript(argument)
-            return
-        if command.name == "context":
-            await self._command_context()
-            return
-        if command.name == "compact":
-            await self._command_compact()
-            return
-        if command.name == "memory":
-            await self._command_memory(argument)
-            return
-        if command.name == "copy":
-            self.action_copy_answer()
-            return
-        if command.name == "export":
-            await self._command_export(argument)
-            return
-        if command.name == "find":
-            self._command_find(argument)
-            return
-        if command.name == "config":
-            self.action_settings()
-            return
-        if command.name == "model":
-            await self._command_model(argument)
-            return
-        if command.name == "status":
-            await self._show_command_result("STATUS", self._status_text())
-            return
-        if command.name == "workdir":
-            await self._command_workdir(argument)
-            return
-        if command.name == "help":
-            composer = self.query_one("#composer", PromptComposer)
-            composer.load_text("/")
-            composer.move_cursor((0, 1))
-            self.query_one(CommandPalette).filter("/")
-            composer.focus()
-            return
-        if command.name == "quit":
-            self.exit(None)
-            return
-        if command.name in ("resume", "clear", "new"):
-            if self.streaming:
-                self.notify("当前轮结束后再切换会话", severity="warning")
-                return
-            if command.name == "resume":
-                await self._command_resume(argument)
-            else:
-                self.exit(str(uuid.uuid4()))
-            return
-        prompts = {
-            "now": "现在几点了？",
-            "files": "看一下 sandbox 目录里有哪些文件。",
-            "boundary": "先说明你准备怎么做，再执行，最后把结论和依据分开列出来。",
-        }
-        await self._submit(prompts[name])
+        self.exit(str(uuid.uuid4()))
+
+    def _open_command_palette(self) -> None:
+        composer = self.query_one("#composer", PromptComposer)
+        composer.load_text("/")
+        composer.move_cursor((0, 1))
+        self.query_one(CommandPalette).filter("/")
+        self._focus_composer()
+
+    def _focus_composer(self) -> None:
+        self.query_one("#composer", PromptComposer).focus()
 
     async def _command_plan(self, argument: str) -> None:
         if not argument:
