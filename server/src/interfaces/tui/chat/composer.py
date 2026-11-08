@@ -45,36 +45,45 @@ class PromptComposer(TextArea):
             self.value = value
             super().__init__()
 
+    @staticmethod
+    def _consume_key(event: events.Key) -> None:
+        event.stop()
+        event.prevent_default()
+
+    def _run_key_handler(
+        self,
+        handler: Callable[[events.Key], bool] | None,
+        event: events.Key,
+    ) -> bool:
+        if handler is None or not handler(event):
+            return False
+        self._consume_key(event)
+        return True
+
+    def _submit_from_enter(self, event: events.Key) -> None:
+        self._consume_key(event)
+        value = self.text.strip()
+        if value or self.allow_empty_submit:
+            self.post_message(self.Submitted(value))
+
+    def _insert_newline(self, event: events.Key) -> None:
+        self._consume_key(event)
+        self.insert("\n")
+
     async def _on_key(self, event: events.Key) -> None:
-        command_key_handler = self.command_key_handler
-        if command_key_handler is not None and command_key_handler(event):
-            event.stop()
-            event.prevent_default()
+        if self._run_key_handler(self.command_key_handler, event):
             return
-        history_key_handler = self.history_key_handler
-        if history_key_handler is not None and history_key_handler(event):
-            event.stop()
-            event.prevent_default()
+        if self._run_key_handler(self.history_key_handler, event):
             return
-        escape_handler = self.escape_handler
         if (
             event.key == "escape"
-            and escape_handler is not None
-            and escape_handler(event)
+            and self._run_key_handler(self.escape_handler, event)
         ):
-            event.stop()
-            event.prevent_default()
             return
         if event.key == "enter":
-            event.stop()
-            event.prevent_default()
-            value = self.text.strip()
-            if value or self.allow_empty_submit:
-                self.post_message(self.Submitted(value))
+            self._submit_from_enter(event)
             return
         if event.key in ("shift+enter", "ctrl+j"):
-            event.stop()
-            event.prevent_default()
-            self.insert("\n")
+            self._insert_newline(event)
             return
         await super()._on_key(event)
