@@ -55,6 +55,9 @@ class Store:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         # 默认一行结果是元组，只能靠下标取值。换成 Row 后能用列名：row["id"]。
         self.conn.row_factory = sqlite3.Row
+        journal_mode = self.conn.execute("pragma journal_mode=WAL").fetchone()[0]
+        if journal_mode != "wal":
+            raise RuntimeError(f"SQLite WAL mode unavailable: {journal_mode}")
         # 见 _locked 的说明：多线程共用这条连接的串行化。必须在
         # _create_tables 之前就位（它也要过锁）。
         self._lock = threading.RLock()

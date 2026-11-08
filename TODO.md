@@ -78,7 +78,9 @@ desktop / TUI 还没接上的界面：
 
 - [ ] OpenAI 路径的 thinking `signature` 仍是空串。验收：换到会校验历史的接口之前，先确认它不校验，或者把可回传的签名补上。依据：`llm.py` 写明 OpenAI 流不给 signature。
 - [ ] 在准则段后面再打一个缓存断点。验收：只改 `memory.md` 或摘要时，准则前缀仍能 `cache_read`。依据：D21 要求断点在准则后；D22 已实现的是最后一条消息上的断点（`adapter.py` 的 `mark_cache_breakpoint`），这一条还没做。
-- [ ] SQLite 打开 `PRAGMA journal_mode=WAL`。验收：读写不再互相堵住；不上连接池、不上 ORM。依据：`store.py` 仍写着这是欠账，连接上没有 WAL。
+- [x] SQLite 打开 `PRAGMA journal_mode=WAL`（2026-11-09）：连接初始化即切
+      WAL，切换失败直接启动报错；不上连接池、不上 ORM。双连接验证写事务
+      未提交时另一连接仍可读旧快照，提交后读到新行。
 - [ ] bash 超时改为杀掉进程组，和 `stop_job` 一样。验收：超时后 `sleep && ...` 的子进程不残留。依据：`tools.py` 的 `subprocess.run(timeout=...)` 只杀 shell。
 - [x] 按 session 分开 sandbox 工作目录 ✅（2026-11-07，D35）：`sessions.workdir` 记每个会话的起跑目录（界面可选，默认仍是 data/sandbox），bash / start_job 经 contextvar 取当轮目录；「变更」和 @file 跟会话目录走。两个会话的相对路径互不可见✅（各在各的项目里）；后半句（并行执行器的冲突检测）仍未做，跟下面「并行执行」那条一起算。
 - [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
