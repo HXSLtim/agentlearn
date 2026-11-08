@@ -1298,6 +1298,27 @@ class AgentLearnTUI(App[str | None]):
         plan_mode: bool = False,
     ) -> None:
         self._last_failed_question = None
+        timeline = await self._prepare_turn_timeline(
+            question, show_user=show_user, append_user=append_user, images=images
+        )
+        self._reset_live_turn()
+        running = self._begin_turn(timeline)
+        self._run_turn(
+            question,
+            running,
+            append_user=append_user,
+            images=list(images or []) if append_user else None,
+            plan_mode=plan_mode,
+        )
+
+    async def _prepare_turn_timeline(
+        self,
+        question: str,
+        *,
+        show_user: bool,
+        append_user: bool,
+        images: list[ImageBlock] | None,
+    ) -> VerticalScroll:
         empty = self.query("#empty")
         if empty:
             await empty.remove()
@@ -1307,6 +1328,9 @@ class AgentLearnTUI(App[str | None]):
             turn_images = list(images or []) if append_user else []
             await timeline.mount(UserMessage(question, len(turn_images)))
             self._expect_kicker = True
+        return timeline
+
+    def _reset_live_turn(self) -> None:
         self._assistant = None
         self._reasoning = None
         self._tool_cards = {}
@@ -1314,6 +1338,7 @@ class AgentLearnTUI(App[str | None]):
         # 活动只看最后一轮：新轮开始清空（WebUI activity 同口径）。
         self._clear_activity()
 
+    def _begin_turn(self, timeline: VerticalScroll) -> RunningTurn:
         self.streaming = True
         self.turn_started = time.monotonic()
         self.turn_count += 1
@@ -1331,13 +1356,7 @@ class AgentLearnTUI(App[str | None]):
         self._set_running_state("STREAMING")
         self._update_ledger()
         self.call_after_refresh(timeline.scroll_end, animate=False)
-        self._run_turn(
-            question,
-            running,
-            append_user=append_user,
-            images=list(images or []) if append_user else None,
-            plan_mode=plan_mode,
-        )
+        return running
 
     async def _steer(
         self, question: str, images: list[ImageBlock] | None = None
