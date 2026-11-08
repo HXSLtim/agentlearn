@@ -150,7 +150,7 @@ import {
   cycleApprovalMode,
   setApprovalMode,
 } from "./approval";
-import { renderWorkdir } from "./workdir";
+import { isWorkdirOpen, renderWorkdir } from "./workdir";
 import {
   applyConversationFindHighlight,
   closeConversationFind,
@@ -2737,6 +2737,9 @@ promptInput.addEventListener("input", () => {
 });
 document.addEventListener("keydown", (event) => {
   const modifier = event.metaKey || event.ctrlKey;
+  if (isWorkdirOpen()) {
+    return;
+  }
   const conversationFindVisible = isConversationFindOpen();
   if (conversationFindVisible) {
     if (event.key === "Escape") {

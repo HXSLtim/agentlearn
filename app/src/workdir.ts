@@ -14,6 +14,7 @@ const workdirInput = requireElement<HTMLInputElement>("#workdir-input");
 const workdirStatus = requireElement<HTMLElement>("#workdir-status");
 const workdirForm = requireElement<HTMLFormElement>("#workdir-form");
 const workdirResetButton = requireElement<HTMLButtonElement>("#workdir-reset");
+const workdirCloseButton = requireElement<HTMLButtonElement>("#workdir-close");
 
 // 界面显示的短名：默认就是「sandbox」；设过的目录取最后两段，
 // 一般是「父目录/项目名」，足够认出是哪个项目，整条路径放 title。
@@ -39,6 +40,10 @@ function openWorkdir(): void {
   workdirModal.hidden = false;
   workdirInput.focus();
   workdirInput.select();
+}
+
+export function isWorkdirOpen(): boolean {
+  return !workdirModal.hidden;
 }
 
 function closeWorkdir(): void {
@@ -85,9 +90,9 @@ workdirForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void saveWorkdir(workdirInput.value);
 });
+workdirCloseButton.addEventListener("click", closeWorkdir);
 workdirResetButton.addEventListener("click", () => {
-  workdirInput.value = "";
-  workdirInput.focus();
+  void saveWorkdir("");
 });
 workdirModal.addEventListener("click", (event) => {
   if ((event.target as Element).closest("[data-workdir-close]")) {
