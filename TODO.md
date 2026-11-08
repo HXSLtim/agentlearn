@@ -85,7 +85,10 @@ desktop / TUI 还没接上的界面：
       超时先 `SIGKILL` 进程组再回收输出；验证 `sleep` 子进程在超时后消失。
 - [x] 按 session 分开 sandbox 工作目录 ✅（2026-11-07，D35）：`sessions.workdir` 记每个会话的起跑目录（界面可选，默认仍是 data/sandbox），bash / start_job 经 contextvar 取当轮目录；「变更」和 @file 跟会话目录走。两个会话的相对路径互不可见✅（各在各的项目里）；后半句（并行执行器的冲突检测）仍未做，跟下面「并行执行」那条一起算。
 - [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
-- [ ] web 在绑定非 127.0.0.1 之前先加鉴权。验收：现在 `uvicorn.run(app, port=port)` 没有 host，默认只本机；没有鉴权时拒绝 `--host 0.0.0.0`。
+- [x] web 无鉴权时拒绝非回环绑定 ✅（2026-11-09，D47）：desktop CLI
+      显式支持 `--host`，解析阶段用 `ipaddress` 只放行数字回环地址；
+      `0.0.0.0`、局域网地址与 `localhost` 都在装配依赖和绑定前拒绝。
+      HTTP 鉴权仍未实现；放开非回环前要单独补协议、实现与验证。
 - [x] Tauri dev 态检测并拉起 desktop server（2026-11-09，D45）：
       `/agentlearn/identity` 校验产品/协议，managed server 额外校验 launch id、
       PID 与 HMAC proof；默认端口失败可退随机回环端口，退出只 kill 自己拉起

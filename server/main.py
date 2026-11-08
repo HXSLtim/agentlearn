@@ -9,6 +9,7 @@
     uv run python main.py web                desktop 的兼容别名
 """
 import argparse
+import ipaddress
 import os
 import uuid
 from pathlib import Path
@@ -17,6 +18,20 @@ import uvicorn
 
 # server/ 的绝对路径。config.ini 和 data/ 这些相对路径全靠它锚定。
 ROOT = Path(__file__).resolve().parent
+
+
+def _loopback_host(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "鉴权可用前 --host 只能是数字回环地址（如 127.0.0.1 或 ::1）"
+        ) from None
+    if not address.is_loopback:
+        raise argparse.ArgumentTypeError(
+            "鉴权可用前 --host 只能是数字回环地址（如 127.0.0.1 或 ::1）"
+        )
+    return value
 
 
 def run() -> None:
@@ -37,6 +52,12 @@ def run() -> None:
         aliases=["web"],
         help="启动给 Tauri 桌面端用的 HTTP/SSE 服务（web 为兼容别名）",
     )
+    desktop.add_argument(
+        "--host",
+        type=_loopback_host,
+        default="127.0.0.1",
+        help="监听地址，鉴权可用前只允许数字回环地址",
+    )
     desktop.add_argument("--port", type=int, default=8000, help="监听端口，默认 8000")
 
     trace = sub.add_parser("trace", help="在终端检查一个会话的执行轨迹")
@@ -48,7 +69,7 @@ def run() -> None:
     elif args.mode == "trace":
         _run_trace(args.session_id)
     else:
-        _run_desktop(args.port)
+        _run_desktop(args.host, args.port)
 
 
 def _run_tui(session_id: str | None) -> None:
@@ -177,7 +198,7 @@ def _run_trace(session_id: str) -> None:
     run_trace(session_id)
 
 
-def _run_desktop(port: int) -> None:
+def _run_desktop(host: str, port: int) -> None:
     from application.approval import ApprovalBroker
     from application.plan import PlanBroker
     from application.sessionManager import SessionManager
@@ -215,7 +236,7 @@ def _run_desktop(port: int) -> None:
         )
     )
 
-    uvicorn.run(app, port=port)
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
