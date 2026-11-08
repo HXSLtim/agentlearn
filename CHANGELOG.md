@@ -2,6 +2,52 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-08（三十一）：TUI 会话管理五件套、实时活动与挂图管理（D42）
+
+- `/resume` 弹层加动作排：重命名 / 置顶 / 归档（V 切含已归档视图）/
+  分支（选前 N 条）/ 删除（二次确认，默认焦点在取消）；删除或归档当前
+  会话被拦。fork 抽到 `application/sessionFork.py`，web 端点改调它。
+- 侧栏拆指标滚动段 + 活动停靠段；指标压行（token/缓存各并一行、排队数
+  并入插话行），36 行屏两段默认全见。活动条目同 WebUI 口径：最后一轮、
+  新的在上、6 条上限计数全量、思考字数、工具耗时+首行（剥 `[exit N]`），
+  按显示宽度截断不折行；新轮清空、恢复会话水合。
+- `/attach` 无参列「序号 + 路径」；`/detach <n|all|路径后缀>` 移除，
+  多匹配要求用序号，计数与状态行同步。
+- 过滤框里 ↓/↑ 直接进列表并把焦点带过去，字母动作键才生效。
+- 验证：临时库 headless 探针 30 项断言全过；120×36 tmux 实机截图三张
+  人工检查。
+
+## 2026-11-08（三十）：运行中工具与思考可视化（D41）
+
+- normal 转录档不再隐藏工具调用：每个工具显示名称、执行中/完成/出错、
+  耗时与一行参数摘要；等待审批与 verbose 档仍用完整工具卡。
+- thinking 在 normal 档可见但默认折叠；流式阶段可展开查看尾部 280 字，
+  caret 闪烁，后续 SSE 重绘保留用户手动展开状态。
+- 已有思考或进行中的工具时不再显示通用「等待首个 token」占位，减少干等感。
+- 验证：mock SSE 覆盖两段 thinking、tool_use/tool_result、正文与 done；
+  展开状态跨重绘保持；380×900 截图人工检查，`scrollWidth=380`；
+  `npm run build` 通过。
+
+## 2026-11-07（二十九）：前端解环与 API 地址配置（D40）
+
+- 本地线程状态抽到 `state.ts`；功能抽屉通过 `shellBridge` 消费 main 注册的
+  hydrate/render/switch 能力，8 个模块不再反向 import `main.ts`。
+- API 基址支持 `?apiBase=`、`VITE_AGENTLEARN_API_BASE`、localStorage 与默认
+  回环地址，侧栏显示实际 host；desktop 换端口后可用查询参数跟上。
+- 验证：结构探针、`npm run build`、真实 Vite + desktop 18081 冒烟、380×900
+  截图与 `scrollWidth=380`。
+
+## 2026-11-07（二十八）：组合根与 application 端口（D39）
+
+- desktop 依赖收回到 `main.py`：web 模块改成 `create_app(WebDependencies)`，
+  import 不再建库、迁移、清扫 span 或回填标题；这些启动动作只在创建应用时发生。
+- application 新增模型、正文、span、外部工具四个端口，Conversation 不再
+  直接依赖具体 SDK/SQLite/MCP 实现；MCP 网关由 TUI/desktop 组合根注入。
+- token 估算挪进 application，adapter 继续复用；顺带移除 tools/jobs 的
+  保留式循环 import。
+- 验证：结构探针、临时目录 TestClient 四个只读端点、真实 desktop 冒烟、
+  `compileall`、`py_compile`、`npm run build`。
+
 ## 2026-11-07（二十七）：TUI 布局对齐 WebUI（D38）
 
 - D30 与三批细节只改了 WebUI，这次把布局层同步到 TUI：台账从两行制

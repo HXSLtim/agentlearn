@@ -1100,3 +1100,141 @@ turn span 记 workdir；变更面板 root 切到 AgentLearn（19+8 文件）；
 2 tick（14.7 秒满条、1.6 秒一格）；120×36 tmux 实机检查台账全行可见、
 /trace 树「● turn 已取消 10.4 秒」、/diff「已跟踪 28 · 未跟踪 14
 （已计入）」、面板 /workdir 条目；`compileall` 通过。
+
+---
+
+## D39 desktop 组合根回归 main.py：application 只认端口（2026-11-07）
+
+**背景**：D14 写的是 `main.py` 只做装配，但 desktop 的依赖实际长在
+`interfaces/web/server.py` 模块级：import 就建 SQLite 连接、迁移表、
+清扫孤儿 span、回填标题。与此同时 `application` 直接 import 具体的
+LLM / SQLite / MCP 实现，分层口径变成文档说法。
+
+**决定**：
+
+1. `interfaces.web.server` 只暴露 `WebDependencies` + `create_app()`；
+   Store、Transcript、SessionManager、审批、计划、配置读写、模型工厂、
+   MCP 网关全部由 `main.py desktop` 构造后注入。import web 模块不再有
+   存储副作用，标题回填和孤儿清扫挪到 `create_app()`。
+2. application 新增 `ports.py`：`ChatClient`、`TranscriptStore`、
+   `SpanStore`、`ToolGateway` 只描述用例需要的方法。Conversation 不再
+   认识 Anthropic/OpenAI/SQLite 具体类；MCP 由组合根注入，未注入时保留
+   内置工具空网关。
+3. token 估算是压缩决策，不是协议差异，挪到 `application/tokens.py`；
+   adapter 反向复用，协议字段翻译仍留在 adapter。
+
+**否掉的备选**：
+
+- 继续 web 模块单例——测试/复用必须先改真实 `data/agent.db`，隐藏副作用
+  比 globals 更贵。
+- 引 DI 容器——当前依赖数量手写 dataclass 就能表达，不需要生命周期容器。
+
+**验收**：结构探针确认 application 无 `from infrastructure.*`、web import
+无构造/回填；临时目录 TestClient 验证 `/health`、`/settings`、`/models`、
+`/capabilities`；真实 `main.py desktop` 冒烟另跑；`compileall`、
+`py_compile`、前端 build 不受影响。
+
+---
+
+## D40 前端解环与 API 地址运行期解析（2026-11-07）
+
+**背景**：D30 后前端按功能拆出 8 个模块，但这些模块为了拿 activeThread、
+hydrate、render 又反向 import `main.ts`，模块边界仍是环。API 基址则固定在
+`api.ts`，desktop 换端口时前端跟不上。
+
+**决定**：
+
+1. 本地线程状态、持久化、运行判断抽到 `state.ts`；这是无 DOM 的下层模块。
+2. 抽屉需要 main 才能实现的 hydrate / render / switch 能力走 `shellBridge.ts`
+   契约，main 启动时注册实现。功能模块不 import main，环清零。
+3. API 基址解析顺序为 `?apiBase=`、`VITE_AGENTLEARN_API_BASE`、
+   localStorage、默认回环地址；查询参数与 localStorage 只允许回环 origin，
+   防止恶意链接把对话发到远端；只有显式构建期 env 允许 https 远端。
+   查询参数成功后持久化，侧栏显示实际 host，避免界面继续谎报 8000。
+
+**否掉的备选**：
+
+- 继续把函数从 main 搬出去——render/hydrate 本来就是 shell 编排，搬到
+  “公共模块”只是换一个更大的 god module。
+- 只支持 Vite env——那是构建期配置，desktop 换端口后不能跟随。
+
+**验收**：结构探针确认 8 个功能模块无 `from "./main"`；`npm run build` 通过；
+真实 Vite 页面带 `?apiBase=http://127.0.0.1:18081`，后端日志收到
+`GET /settings 200`，页面显示实际模型；380×900 截图人工检查，document/body
+`scrollWidth` 均为 380。
+
+---
+
+## D41 运行中工具与思考可视化（2026-11-08）
+
+**背景**：SSE 已经按事件推送 thinking / tool_use / tool_result，但 desktop
+normal 档在渲染层隐藏前两者。长工具执行时用户只能看通用等待占位，既不知道
+模型是否在思考，也不知道工具是否已经开始。
+
+**决定**：
+
+1. normal 档显示简略工具卡：工具名、状态、耗时和一行参数摘要；不展开输入、
+   输出或图片。等待审批仍用完整工具卡，verbose 档保持完整明细，审批能力
+   不因简略展示降级。
+2. normal 档显示可折叠思考块。流式阶段 summary 显示进行中与字数，展开后只看
+   尾部 280 字并带闪烁 caret；用户展开状态用 `message.id + part index` 记录，
+   SSE 每次重绘后恢复。thinking 档自动展开，verbose 档保持完整思考。
+3. 只要已有 thinking 或非完成工具，就不再显示「正在组织回复」通用占位，
+   避免同一时刻出现两层等待提示。
+
+**否掉的备选**：
+
+- normal 直接展开完整工具输入/输出——工具输出常是日志或长文本，会淹没正文；
+   完整细节已有 verbose 档。
+- 只在右侧 RUN LOG 展示活动——运行中正文区域仍空白，用户视线仍会干等。
+
+**验收**：mock SSE 发送两段 thinking、bash tool_use、tool_result、正文与 done，
+normal 档出现 compact 工具卡与思考折叠块；手动展开后跨 SSE 重绘保持展开；
+380×900 populated 截图人工检查，`documentElement.scrollWidth/clientWidth`
+均为 380；`npm run build` 通过。
+
+---
+
+## D42 TUI 会话管理五件套、台账实时活动与挂图管理（2026-11-08）
+
+**背景**：布局对齐（D38）后 TUI 与 desktop 还有三块真差距：/resume 只能选不能管
+（重命名/pin/归档/分支/删除都要去 web 端做）、侧栏没有活动流（工具跑到哪一步
+只能看正文区）、`/attach` 挂错了图没有反悔入口（终端没有缩略图可点 ×）。
+
+**决定**：
+
+1. `/resume` 五件套直接在弹层里做：列表下加一排动作按钮（重命名 R / 置顶 P /
+   归档 A / 分支 F / 删除 D），字母键与按钮同源。重命名/分支用 InputModal，
+   删除用 ConfirmModal（Enter 落在「取消」上——危险动作默认路径是反悔）；
+   删除/归档正在使用的会话被拦，提示先切走。V 切换含已归档视图。
+2. fork 语义抽到 `application/sessionFork.py`（TUI 与 web 端点共用，越界抛
+   ValueError 由两端各自翻译成 422 / 错误收条）；分支标题加「（分支）」后缀，
+   spans 不复制。
+3. 侧栏拆成 `#rail`：指标段（VerticalScroll，矮屏自己滚）+ 活动停靠段
+   （钉在滚动区外）。为在 36 行屏放下，指标压行：token 入/出并一行、缓存
+   读/写/命中并一行、排队数以「排 N」后缀并入插话行——指标集合与 WebUI
+   一致，只是呈现密度不同。
+4. 活动口径照抄 WebUI run-rail activity：只看最后一轮、条目新的在上、最多
+   显示 6 条但计数给全部、思考给字数、工具给「耗时 · 输出首行」、错误条目
+   变红。终端适配两处：首行剥 `[exit N]` 前缀（29 列窄栏里 exit 码是工具层
+   状态尾巴不是内容）、按显示宽度截断（W/F 算 2 格）保证一条一行不折行。
+   恢复会话从最后一轮水合（历史无时长，只给首行，同 WebUI elapsed 缺省）。
+5. `/attach` 无参给「序号 + 路径」列表（ImageBlock 里只有 base64，路径存
+   平行的 `_pending_image_paths`）；`/detach <n|all|路径后缀>` 移除，多匹配
+   要求改用序号，计数与状态行同步，发送时两份表一起清。
+6. 过滤框里 ↓/↑ 把焦点带进列表：Input 会把字母吃成过滤词，动作绑定只在
+   列表/按钮拿到焦点后生效，不带焦点过去页脚键位说明就是空头支票。
+
+**否掉的备选**：
+
+- 活动放指标段末尾靠侧栏滚动看——「正在发生」的信息不该靠滚轮找；
+  这也是把 rail 拆成两段的直接原因。
+- 活动条目照搬 WebUI 48 字符不截断——29 列窄栏里必折行，一条占三行很快
+  把停靠段挤爆。
+- 删当前会话先自动切走再删——静默改变当前会话比拒绝更危险。
+
+**验收**：临时库 headless 探针 30 项断言全过（五件套 14：重命名落库 / pin
+开关 / 归档往返 / 分支标题+条数+越界 / 删当前被拦 / 删除后索引+正文文件消失；
+活动 10：水合条目与计数 / 新轮清空 / 完成序 / 6 条上限 / 最旧挤出；挂图 6：
+挂两张 / 列表 / 序号+路径+all 移除 / 状态行同步）；120×36 tmux 实机截图三张
+（台账+水合活动、/resume 按钮排、分支 InputModal）人工检查。

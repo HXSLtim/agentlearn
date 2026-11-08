@@ -106,7 +106,7 @@ A/B 真机同问「写运行报告」：无技能 0/4 格式标记，有技能�
 | 会话持久化 | JSONL + SQLite（见 docs/decisions.md D2） | ✅ |
 | 配置体系 | config.ini + ${ENV}（D4） | ✅ |
 | conversation.py | TUI/desktop 共用 application 层一份会话循环（D9/D14） | ✅ |
-| TUI | 黑绿控制台：流式正文、`/transcript` 三档视图、按事件顺序挂载工具卡、每轮 token usage、显式价目成本、接近预算告警、`/attach` 图片附件、`/find` 当前会话定位与 `/export` Markdown；停止、重试、历史搜索、外编辑器、复制、`/diff` 只读 pager 与 `/status` 能力事实闭环（D14/D16）；布局与文案对齐 WebUI：台账一行两列、标题顶栏、span-tick 耗时条、`/workdir`（D36/D38） | ✅ |
+| TUI | 黑绿控制台：流式正文、`/transcript` 三档视图、按事件顺序挂载工具卡、每轮 token usage、显式价目成本、接近预算告警、`/attach` 图片附件与 `/detach` 移除、`/find` 当前会话定位与 `/export` Markdown；停止、重试、历史搜索、外编辑器、复制、`/diff` 只读 pager 与 `/status` 能力事实闭环（D14/D16）；布局与文案对齐 WebUI：台账一行两列、标题顶栏、span-tick 耗时条、`/workdir`、实时活动停靠段、`/resume` 会话管理五件套（D36/D38/D42） | ✅ |
 | trace | spans 表（D10/D11）+ TUI `/trace` 与 desktop 只读抽屉：span 树、耗时、token、工具入参/出参、回答配对 | ✅ |
 | 设置界面 | TUI / desktop 共用 `GET/PUT /settings`；只改 `[llm]`，密钥不回显，下一请求生效（D15）；desktop 用 `GET /models` 提供模型下拉，TUI 接同一个 `list_models()` 能力 | ✅ |
 | 能力面板 | application 层统一能力快照；TUI `/status` 与 desktop `/capabilities` 展示工具来源、MCP health、运行版本、触发器数量和 sandbox 边界 | ✅ |

@@ -70,6 +70,9 @@ desktop / TUI 还没接上的界面：
 - [x] desktop 用 RUN LOG 或同等面板渲染 `GET /capabilities` ✅（2026-11-03）：新增 `/capabilities` 命令，在同等命令结果面板展示 Python/provider/model/effort、触发器数量、builtin/skill/MCP 工具来源、MCP health、sandbox 路径与「不是安全边界」说明。380×900 mock 验证全部字段、`body/document scrollWidth` 均 380，截图人工检查。
 - [x] TUI 布局细节对齐 WebUI（D30/三批细节落地 TUI）✅（2026-11-07，D38）：台账从「标签上值下」的两行制改成一行两列（标签宽 11 左、值右对齐），指标与行序照抄 WebUI run-metrics，加底脚「JSONL · SQLite · 仅本地」；侧栏改 VerticalScroll，矮终端不裁内容。顶栏从 UUID 换会话标题；连续助手消息不重复「智能体」抬头（同 WebUI is-continuation 规则）；助手消息底部加 span-tick 12 格耗时条（恢复会话从 turn span 水合，>24h 脏时长丢弃）；输入区两行化（键位提示 + 目录位，图片计数写进提示行）；14 行 key-help 从侧栏挪进输入区单行提示。Textual headless 17 项断言全过 + 120×36 tmux 实机截图人工检查。
 - [x] TUI 增加 `/workdir` ✅（2026-11-07，D38）：命令面板新增 `/workdir [路径]`，语义与 WebUI 目录按钮同一套（`normalize_workdir` 校验、写 `sessions.workdir`、`reset` 恢复 sandbox）；输入区右侧常驻「目录 短名」位（最后两段，同 WebUI workdirLabel），点击弹用法提示。headless 验证无参查当前、设 /tmp 生效且短名刷新、reset 清空、非法路径报错不落库；正在跑的 Conversation 每轮 `_load_workdir` 重读，下一轮即生效。
+- [x] TUI `/resume` 补会话管理五件套 ✅（2026-11-08，D42）：重命名、pin、归档/恢复（V 切含已归档视图）、fork（选前 N 条，默认全量）、删除（ConfirmModal 二次确认，Enter 落在取消上）；删/归档当前会话被拦。fork 从 web 端点抽到 `application/sessionFork.py` 两端共用（web 端点改调它，422 语义不变）；过滤框里 ↓/↑ 把焦点带进列表，字母动作键才生效。临时库 headless 14 项断言全过（重命名落库 / pin 开关 / 归档往返 / 分支标题+条数 / 越界抛错 / 删当前被拦 / 删除后索引+正文消失）+ 120×36 tmux 实机截图。
+- [x] TUI 台账补「实时活动」 ✅（2026-11-08，D42）：侧栏拆 #rail（指标滚动段 + 活动停靠段），指标压行（token 入/出并一行、缓存读/写/命中并一行、排队数并入插话行）给活动腾位；条目只看最后一轮、新的在上、最多显示 6 条计数给全部、按显示宽度截断不折行，detail 剥 `[exit N]` 前缀；思考/工具/上下文警告事件接入，新轮清空，恢复会话从最后一轮水合（无时长只给首行，同 WebUI）。headless 断言（水合条目/计数/新轮清空/6 条上限）全过 + tmux 实机截图。
+- [x] TUI `/attach` 无参列表 + `/detach` 移除 ✅（2026-11-08，D42）：`/attach` 无参给「序号 + 路径」；`/detach <n|all|路径后缀>`（多匹配要求改用序号），计数与状态行同步，发送时路径表与图片一起清。headless 验收（挂两张→列表→序号移除→路径移除→all 清空→状态行同步）全过。
 
 已知欠账拆开：
 
@@ -81,7 +84,10 @@ desktop / TUI 还没接上的界面：
 - [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
 - [ ] web 在绑定非 127.0.0.1 之前先加鉴权。验收：现在 `uvicorn.run(app, port=port)` 没有 host，默认只本机；没有鉴权时拒绝 `--host 0.0.0.0`。
 - [ ] Tauri 启动时拉起 desktop server，并去掉模板 `greet` 命令。依据：`app/src-tauri/src/lib.rs` 只有 greet。
-- [ ] 前端 API 地址可配置。验收：`app/src/main.ts` 不再写死 `http://127.0.0.1:8000`，`main.py desktop --port` 改端口后前端能跟上。
+- [x] 前端 API 地址可配置 ✅（2026-11-07）：`api.ts` 按 `?apiBase=`、
+      `VITE_AGENTLEARN_API_BASE`、localStorage、默认回环地址解析；查询参数会
+      持久化，侧栏显示实际 host。真实浏览器用 `?apiBase=http://127.0.0.1:18081`
+      打开，后端收到 `/settings` 200，380×900 无横向溢出。
 - [ ] 替换 Tauri 模板图标为 AgentLearn 图标。
 - [ ] 顶层包名出现冲突时，再把 `domain` / `application` / `infrastructure` / `interfaces` 收成 `agentlearn.*`。验收：现在不改；`server/pyproject.toml` 的 `packages.find.where = src` 就是现状。
 - [x] 客户端断开的 `GeneratorExit` 收成 `cancelled`（2026-11-06，D33）：不改
@@ -101,6 +107,13 @@ desktop / TUI 还没接上的界面：
       从 main 取 activeThread、hydrate、render。main.ts 4542→2803，剩下的是
       对话渲染、SSE 轮次和斜杠分发（壳，不再按功能切）。`npm run build` 通过。
       行为是原样搬家，没有改交互，所以没重拍抽屉截图。
+- [x] 前端反向依赖环清零（2026-11-07）：本地线程状态抽到 `state.ts`，
+      抽屉需要的 hydrate/render/switch 能力走 `shellBridge.ts` 契约，由 main
+      启动时注册；8 个功能模块不再 import main。`npm run build` 通过。
+- [x] desktop 运行中显示工具与思考（2026-11-08，D41）：normal 档显示简略
+      工具卡与折叠思考；流式思考可展开为尾部 280 字并保留手动展开状态，
+      审批/verbose 仍用完整工具卡。mock SSE 验证两段 thinking、
+      tool_use/tool_result 与正文，380×900 截图无横向溢出。
 - [ ] 意图分类做路由：闲聊直接答、任务进 agent loop、明确命令走快捷路径。验收：分类器省不下主模型开销就不启用。设计见 docs/superpowers/specs/2026-11-05-intent-funnel-design.md（三层漏斗：规则 → few-shot → 微调兜底）。
 - [ ] 意图分类做工具裁剪：请求里只放相关工具定义。
 - [ ] 意图分类给 steering 档位建议。验收：前端传入的档位仍可覆盖建议。
