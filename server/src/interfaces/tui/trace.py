@@ -67,14 +67,10 @@ class SpanDetail(Static):
     ) -> None:
         data = span["data"] or {}
         status = span["status"]
-        status_color = TOOL if status == "ok" else (ERROR if status == "error" else MUTED if status == "cancelled" else WARN)
+        status_color = _span_status_color(status)
         # 只有还在跑的才说「未结束」；被清扫的孤儿 span 没有真实结束
         # 时间，显示「—」而不是假装它跑到了现在。
-        duration = (
-            format_duration(duration_ms)
-            if duration_ms is not None
-            else ("进行中" if status == "running" else "—")
-        )
+        duration = _span_duration(duration_ms, status)
         status_text = span_status_label(status)
         text = Text.assemble(
             (span["name"].upper(), f"bold {PAPER}"),
@@ -365,12 +361,8 @@ class TraceInspector(App):
         data = span["data"] or {}
         duration = self.store.span_duration_ms(span["span_id"])
         status = span["status"]
-        cost = (
-            format_duration(duration)
-            if duration is not None
-            else ("进行中" if status == "running" else "—")
-        )
-        color = TOOL if status == "ok" else (ERROR if status == "error" else MUTED if status == "cancelled" else WARN)
+        cost = _span_duration(duration, status)
+        color = _span_status_color(status)
         name = span["name"]
         detail = ""
         if name == "llm_request":
@@ -434,6 +426,21 @@ class TraceInspector(App):
 def _pretty(value) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
+
+def _span_status_color(status: str) -> str:
+    if status == "ok":
+        return TOOL
+    if status == "error":
+        return ERROR
+    if status == "cancelled":
+        return MUTED
+    return WARN
+
+
+def _span_duration(duration_ms: int | None, status: str) -> str:
+    if duration_ms is not None:
+        return format_duration(duration_ms)
+    return "进行中" if status == "running" else "—"
 
 
 def _local_time(value: str) -> str:
