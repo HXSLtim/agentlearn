@@ -2692,12 +2692,18 @@ class AgentLearnTUI(App[str | None]):
             )
             return
         if argument.casefold() in ("reset", "default"):
-            store.set_workdir(self.session_id, "")
-            self._refresh_workdir_ui()
-            await self._show_command_result(
-                "WORKDIR", f"已恢复默认 sandbox。下一轮起从 {SANDBOX} 起跑。"
-            )
+            await self._reset_workdir(store)
             return
+        await self._apply_workdir(store, argument)
+
+    async def _reset_workdir(self, store) -> None:
+        store.set_workdir(self.session_id, "")
+        self._refresh_workdir_ui()
+        await self._show_command_result(
+            "WORKDIR", f"已恢复默认 sandbox。下一轮起从 {SANDBOX} 起跑。"
+        )
+
+    async def _apply_workdir(self, store, argument: str) -> None:
         try:
             normalized = normalize_workdir(argument)
         except ValueError as exc:
