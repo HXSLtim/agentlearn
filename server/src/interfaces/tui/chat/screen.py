@@ -1433,36 +1433,10 @@ class AgentLearnTUI(App[str | None]):
     async def _apply_event(self, event: dict) -> None:
         kind = event["kind"]
         if kind == "thinking":
-            fragment = event["text"]
-            if not fragment:
-                return
-            # thinking 如果出现在上一段正文之后，先收住正文，保证屏幕顺序
-            # 和模型块顺序一致；连续 thinking 片段仍复用同一个 ticker。
-            if self._assistant is not None:
-                self._assistant.finish()
-                self._assistant = None
-            if self._reasoning is None:
-                self._reasoning = ReasoningPanel()
-                await self.query_one("#timeline", VerticalScroll).mount(self._reasoning)
-                self._activity_thinking = self._push_activity(
-                    "思考", "推理中", tone="running"
-                )
-            self._reasoning.append_text(fragment)
-            self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+            await self._apply_thinking(event)
             return
         if kind == "text":
-            fragment = event["text"]
-            if not fragment:
-                return
-            if self._reasoning is not None:
-                self._finish_reasoning()
-            if self._assistant is None:
-                self._assistant = AssistantMessage(show_kicker=self._expect_kicker)
-                self._expect_kicker = False
-                self._turn_assistants.append(self._assistant)
-                await self.query_one("#timeline", VerticalScroll).mount(self._assistant)
-            self._assistant.append_text(fragment)
-            self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+            await self._apply_text(event)
             return
         if kind == "usage":
             self.turn_usage = dict(event.get("usage", {}))
@@ -1584,6 +1558,38 @@ class AgentLearnTUI(App[str | None]):
                     tone="error" if event.get("is_error") else "done",
                 )
             self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+
+    async def _apply_thinking(self, event: dict) -> None:
+        fragment = event["text"]
+        if not fragment:
+            return
+        # thinking 如果出现在上一段正文之后，先收住正文，保证屏幕顺序
+        # 和模型块顺序一致；连续 thinking 片段仍复用同一个 ticker。
+        if self._assistant is not None:
+            self._assistant.finish()
+            self._assistant = None
+        if self._reasoning is None:
+            self._reasoning = ReasoningPanel()
+            await self.query_one("#timeline", VerticalScroll).mount(self._reasoning)
+            self._activity_thinking = self._push_activity(
+                "思考", "推理中", tone="running"
+            )
+        self._reasoning.append_text(fragment)
+        self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+
+    async def _apply_text(self, event: dict) -> None:
+        fragment = event["text"]
+        if not fragment:
+            return
+        if self._reasoning is not None:
+            self._finish_reasoning()
+        if self._assistant is None:
+            self._assistant = AssistantMessage(show_kicker=self._expect_kicker)
+            self._expect_kicker = False
+            self._turn_assistants.append(self._assistant)
+            await self.query_one("#timeline", VerticalScroll).mount(self._assistant)
+        self._assistant.append_text(fragment)
+        self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
