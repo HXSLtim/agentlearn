@@ -893,61 +893,25 @@ class AgentLearnTUI(App[str | None]):
         # 台账与 WebUI 右栏（index.html 的 run-metrics）同一套指标和行序。
         # 「标签上、值下」的两行制在 36 行的终端里放不下 13 行指标，
         # 这里压成一行两列：标签左、值右，一格一行，信息密度对齐。
-        yield from self._compose_ledger_row("状态", "就绪", value_id="ledger-state")
-        yield from self._compose_ledger_row(
-            "会话",
-            self._short_session(),
-            value_id="ledger-session",
-        )
-        yield from self._compose_ledger_row(
-            "轮次",
-            str(self.turn_count),
-            value_id="ledger-turns",
-        )
-        yield from self._compose_ledger_row(
-            "工具调用",
-            str(self.tool_count),
-            value_id="ledger-tools",
-        )
-        yield from self._compose_ledger_row("用时", "—", value_id="ledger-elapsed")
-        # token/缓存各自并一行：五个数占 5 行太贵，36 行屏要给活动腾位。
-        yield from self._compose_ledger_row(
-            "token",
-            "入 0 · 出 0",
-            value_id="ledger-tokens",
-        )
-        yield from self._compose_ledger_row(
-            "缓存",
-            "读 0 · 写 0 · —",
-            value_id="ledger-cache",
-        )
-        yield from self._compose_ledger_row(
-            "成本",
-            self._format_cost(),
-            value_id="ledger-cost",
-        )
-        yield from self._compose_ledger_row(
-            "思考强度",
-            self.effort,
-            value_id="ledger-effort",
-        )
-        yield from self._compose_ledger_row(
-            "执行审批",
-            approval_label(self.approval_mode),
-            value_id="ledger-approval",
-        )
-        # 插话档位 + 排队数并一行：排队的消息靠「排 N」后缀报存在感。
-        yield from self._compose_ledger_row(
-            "消息插话",
-            self._steering_value(),
-            value_id="ledger-steering",
-        )
-        # 模型名是 TUI 补充的实时位（WebUI 放在设置里）。
-        yield from self._compose_ledger_row(
-            "模型",
-            self.conversation.chat.model,
-            value_id="ledger-model",
-        )
+        rows = [
+            ("状态", "就绪", "ledger-state"),
+            ("会话", self._short_session(), "ledger-session"),
+            ("轮次", str(self.turn_count), "ledger-turns"),
+            ("工具调用", str(self.tool_count), "ledger-tools"),
+            ("用时", "—", "ledger-elapsed"),
+            # token/缓存各自并一行：五个数占 5 行太贵，36 行屏要给活动腾位。
+            ("token", "入 0 · 出 0", "ledger-tokens"),
+            ("缓存", "读 0 · 写 0 · —", "ledger-cache"),
+            ("成本", self._format_cost(), "ledger-cost"),
+            ("思考强度", self.effort, "ledger-effort"),
+            ("执行审批", approval_label(self.approval_mode), "ledger-approval"),
+            # 插话档位 + 排队数并一行：排队的消息靠「排 N」后缀报存在感。
+            ("消息插话", self._steering_value(), "ledger-steering"),
+            # 模型名是 TUI 补充的实时位（WebUI 放在设置里）。
+            ("模型", self.conversation.chat.model, "ledger-model"),
+        ]
+        for label, value, value_id in rows:
+            yield from self._compose_ledger_row(label, value, value_id=value_id)
         yield Static("", classes="ledger-rule")
         yield from self._compose_ledger_row(
             "停止原因",
