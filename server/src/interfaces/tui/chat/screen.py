@@ -1439,8 +1439,7 @@ class AgentLearnTUI(App[str | None]):
             await self._apply_text(event)
             return
         if kind == "usage":
-            self.turn_usage = dict(event.get("usage", {}))
-            self._update_ledger()
+            self._apply_usage(event)
             return
         if kind == "context_warning":
             await self._apply_context_warning(event)
@@ -1593,6 +1592,10 @@ class AgentLearnTUI(App[str | None]):
             warning=True,
         )
         self.notify("工作集接近预算", severity="warning")
+
+    def _apply_usage(self, event: dict) -> None:
+        self.turn_usage = dict(event.get("usage", {}))
+        self._update_ledger()
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
