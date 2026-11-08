@@ -1064,59 +1064,79 @@ class AgentLearnTUI(App[str | None]):
         turn_groups: list[list[AssistantMessage]] = []
         for message in self.history:
             if message.role == "user":
-                # 切组只认真正带文本的用户消息：tool_result 也住在 user
-                # 消息里，但它是上一轮的回执，不开新轮（WebUI 同规则，
-                # 否则组和 turn span 错位，tick 配错轮）。
-                has_prompt = any(
-                    block.type == "text" and block.text
-                    for block in message.content
+                await self._mount_history_user(
+                    message, timeline, by_tool_id, turn_groups
                 )
-                if has_prompt:
-                    self._expect_kicker = True
-                    turn_groups.append([])
-                for block in message.content:
-                    if block.type == "text" and block.text:
-                        await timeline.mount(UserMessage(block.text))
-                    elif block.type == "tool_result":
-                        card = by_tool_id.get(block.tool_use_id)
-                        if card is None:
-                            card = ToolCard(
-                                block.tool_use_id,
-                                "tool",
-                                {},
-                                detailed=self.transcript_mode == "verbose",
-                            )
-                            by_tool_id[block.tool_use_id] = card
-                            await timeline.mount(card)
-                        card.set_result(block.content, block.is_error, None)
-                continue
-
-            # JSONL 的 content 顺序就是模型实际生成顺序。恢复时逐块挂载，
-            # 不再先攒 thinking、再攒正文、最后把工具卡统一追到末尾。
-            for block in message.content:
-                if block.type == "thinking" and block.thinking:
-                    await timeline.mount(ReasoningPanel(block.thinking, restored=True))
-                elif block.type == "text" and block.text:
-                    assistant = AssistantMessage(
-                        restored=True, show_kicker=self._expect_kicker
-                    )
-                    self._expect_kicker = False
-                    await timeline.mount(assistant)
-                    assistant.append_text(block.text)
-                    if turn_groups:
-                        turn_groups[-1].append(assistant)
-                elif block.type == "tool_use":
-                    card = ToolCard(
-                        block.id,
-                        block.name,
-                        block.input,
-                        detailed=self.transcript_mode == "verbose",
-                    )
-                    by_tool_id[block.id] = card
-                    await timeline.mount(card)
+            else:
+                await self._mount_history_assistant(
+                    message, timeline, by_tool_id, turn_groups
+                )
         self._hydrate_turn_ticks(turn_groups)
         self._hydrate_activity()
         timeline.scroll_end(animate=False)
+
+    async def _mount_history_user(
+        self,
+        message: DomainMessage,
+        timeline: VerticalScroll,
+        by_tool_id: dict[str, ToolCard],
+        turn_groups: list[list[AssistantMessage]],
+    ) -> None:
+        # 切组只认真正带文本的用户消息：tool_result 也住在 user
+        # 消息里，但它是上一轮的回执，不开新轮（WebUI 同规则，
+        # 否则组和 turn span 错位，tick 配错轮）。
+        has_prompt = any(
+            block.type == "text" and block.text for block in message.content
+        )
+        if has_prompt:
+            self._expect_kicker = True
+            turn_groups.append([])
+        for block in message.content:
+            if block.type == "text" and block.text:
+                await timeline.mount(UserMessage(block.text))
+            elif block.type == "tool_result":
+                card = by_tool_id.get(block.tool_use_id)
+                if card is None:
+                    card = ToolCard(
+                        block.tool_use_id,
+                        "tool",
+                        {},
+                        detailed=self.transcript_mode == "verbose",
+                    )
+                    by_tool_id[block.tool_use_id] = card
+                    await timeline.mount(card)
+                card.set_result(block.content, block.is_error, None)
+
+    async def _mount_history_assistant(
+        self,
+        message: DomainMessage,
+        timeline: VerticalScroll,
+        by_tool_id: dict[str, ToolCard],
+        turn_groups: list[list[AssistantMessage]],
+    ) -> None:
+        # JSONL 的 content 顺序就是模型实际生成顺序。恢复时逐块挂载，
+        # 不再先攒 thinking、再攒正文、最后把工具卡统一追到末尾。
+        for block in message.content:
+            if block.type == "thinking" and block.thinking:
+                await timeline.mount(ReasoningPanel(block.thinking, restored=True))
+            elif block.type == "text" and block.text:
+                assistant = AssistantMessage(
+                    restored=True, show_kicker=self._expect_kicker
+                )
+                self._expect_kicker = False
+                await timeline.mount(assistant)
+                assistant.append_text(block.text)
+                if turn_groups:
+                    turn_groups[-1].append(assistant)
+            elif block.type == "tool_use":
+                card = ToolCard(
+                    block.id,
+                    block.name,
+                    block.input,
+                    detailed=self.transcript_mode == "verbose",
+                )
+                by_tool_id[block.id] = card
+                await timeline.mount(card)
 
     def _hydrate_turn_ticks(self, turn_groups: list[list[AssistantMessage]]) -> None:
         """恢复会话时给每轮收尾的助手消息补 turn 时长（span-tick 数据源）。
