@@ -134,6 +134,11 @@ class ReasoningPanel(Collapsible):
         tail = compact[-88:]
         return ("…" if len(compact) > len(tail) else "") + tail
 
+    @property
+    def char_count(self) -> int:
+        """字数（活动条目用）；标题里的同一个数，别两处各算各的。"""
+        return len(self._text)
+
     def append_text(self, fragment: str) -> None:
         self._text += fragment
         self._label.update(self._text)

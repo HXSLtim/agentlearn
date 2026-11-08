@@ -12,7 +12,7 @@ from typing import Callable
 
 from rich.text import Text
 
-from textual import on
+from textual import events, on
 
 from textual.app import ComposeResult
 
@@ -35,6 +35,8 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from infrastructure.config import SettingsSnapshot, SettingsValues
+
+from application.sessionFork import fork_session
 
 from .labels import approval_label
 from ..theme import (
@@ -65,6 +67,198 @@ class SessionSummary:
     model: str
     created_at: str
     turns: int
+    # 管理位（P1 会话库）：/resume 的置顶 / 归档动作要显示和切换它们。
+    pinned: bool = False
+    archived: bool = False
+
+
+class InputModal(ModalScreen[str | None]):
+    """单字段输入弹层：重命名、分支条数这类「一个值」的动作用。
+
+    Enter 提交（Input.Submitted 也走确定），Esc / 取消返回 None。
+    """
+
+    CSS = f"""
+    InputModal {{
+        align: center middle;
+    }}
+
+    #input-modal-dialog {{
+        width: 64;
+        max-width: 94%;
+        height: auto;
+        background: {PANEL};
+        border: thick {SIGNAL};
+        padding: 1 2;
+    }}
+
+    #input-modal-title {{
+        color: {SIGNAL};
+        text-style: bold;
+        margin-bottom: 1;
+    }}
+
+    #input-modal-note {{
+        color: {DIM};
+        margin-bottom: 1;
+    }}
+
+    #input-modal-field {{
+        margin-bottom: 1;
+    }}
+
+    #input-modal-actions {{
+        height: 3;
+        align: right middle;
+    }}
+
+    #input-modal-cancel, #input-modal-ok {{
+        width: 12;
+        min-width: 12;
+        height: 3;
+        margin-left: 1;
+    }}
+
+    #input-modal-ok {{
+        border: solid {SIGNAL};
+        background: {SIGNAL};
+        color: {INK};
+        text-style: bold;
+    }}
+
+    #input-modal-cancel {{
+        border: solid {LINE};
+        background: {PANEL_RAISED};
+        color: {PAPER};
+    }}
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel", show=False)]
+
+    def __init__(self, title: str, note: str = "", initial: str = "") -> None:
+        super().__init__()
+        self._title = title
+        self._note = note
+        self._initial = initial
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="input-modal-dialog"):
+            yield Static(self._title, id="input-modal-title")
+            if self._note:
+                yield Static(self._note, id="input-modal-note")
+            yield Input(
+                value=self._initial, id="input-modal-field", select_on_focus=True
+            )
+            with Horizontal(id="input-modal-actions"):
+                yield Button("取消", id="input-modal-cancel")
+                yield Button("确定", id="input-modal-ok")
+
+    def on_mount(self) -> None:
+        self.query_one("#input-modal-field", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#input-modal-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+    def _submit(self) -> None:
+        self.dismiss(self.query_one("#input-modal-field", Input).value.strip())
+
+    @on(Button.Pressed, "#input-modal-ok")
+    def _ok(self) -> None:
+        self._submit()
+
+    @on(Input.Submitted, "#input-modal-field")
+    def _entered(self) -> None:
+        self._submit()
+
+
+class ConfirmModal(ModalScreen[bool]):
+    """危险动作的二次确认：删除会话这类不可恢复的操作。"""
+
+    CSS = f"""
+    ConfirmModal {{
+        align: center middle;
+    }}
+
+    #confirm-dialog {{
+        width: 64;
+        max-width: 94%;
+        height: auto;
+        background: {PANEL};
+        border: thick {ERROR};
+        padding: 1 2;
+    }}
+
+    #confirm-title {{
+        color: {ERROR};
+        text-style: bold;
+        margin-bottom: 1;
+    }}
+
+    #confirm-body {{
+        color: {MUTED};
+        margin-bottom: 1;
+        text-wrap: wrap;
+    }}
+
+    #confirm-actions {{
+        height: 3;
+        align: right middle;
+    }}
+
+    #confirm-cancel, #confirm-go {{
+        width: 12;
+        min-width: 12;
+        height: 3;
+        margin-left: 1;
+    }}
+
+    #confirm-go {{
+        border: solid {ERROR};
+        background: {ERROR};
+        color: {INK};
+        text-style: bold;
+    }}
+
+    #confirm-cancel {{
+        border: solid {LINE};
+        background: {PANEL_RAISED};
+        color: {PAPER};
+    }}
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel", show=False)]
+
+    def __init__(self, title: str, body: str, action: str = "执行") -> None:
+        super().__init__()
+        self._title = title
+        self._body = body
+        self._action = action
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-dialog"):
+            yield Static(self._title, id="confirm-title")
+            yield Static(self._body, id="confirm-body")
+            with Horizontal(id="confirm-actions"):
+                yield Button("取消", id="confirm-cancel")
+                yield Button(self._action, id="confirm-go")
+
+    # 焦点交给 Textual 的默认 autofocus（第一个可聚焦控件 = 取消按钮）：
+    # Screen 的 on_mount 时序里子组件还没挂完，query 会扑空；且 Enter 落在
+    # 「取消」上——危险动作的默认路径必须是反悔。
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#confirm-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#confirm-go")
+    def _go(self) -> None:
+        self.dismiss(True)
 
 
 class HistorySearchScreen(ModalScreen[str | None]):
@@ -307,18 +501,68 @@ class ResumeScreen(ModalScreen[str | None]):
         padding-top: 1;
         color: {DIM};
     }}
+
+    #resume-actions {{
+        height: 3;
+        margin-top: 1;
+    }}
+
+    #resume-actions Button {{
+        height: 3;
+        margin-right: 1;
+        min-width: 11;
+        border: solid {LINE};
+        background: {PANEL_RAISED};
+        color: {PAPER};
+    }}
+
+    #resume-actions Button:hover, #resume-actions Button:focus {{
+        border: solid {SIGNAL};
+        color: {SIGNAL};
+        text-style: bold;
+    }}
+
+    #resume-actions #resume-delete {{
+        border: solid {ERROR};
+        color: {ERROR};
+    }}
+
+    #resume-actions #resume-delete:hover, #resume-actions #resume-delete:focus {{
+        background: {ERROR};
+        color: {INK};
+    }}
     """
 
-    BINDINGS = [Binding("escape", "cancel", "cancel", show=False)]
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel", show=False),
+        # 管理五件套（desktop 恢复框同源）：焦点在列表时按字母触发；
+        # 焦点在过滤框时字母正常输入，不会误触。
+        Binding("r", "rename", "重命名", show=False),
+        Binding("p", "toggle_pin", "置顶", show=False),
+        Binding("a", "toggle_archive", "归档/恢复", show=False),
+        Binding("f", "fork", "分支", show=False),
+        Binding("d", "delete", "删除", show=False),
+        Binding("v", "toggle_view", "含已归档", show=False),
+    ]
 
     def __init__(
         self,
         sessions: list[SessionSummary],
         current_session_id: str,
+        *,
+        store=None,
+        transcript=None,
+        reloader: Callable[[bool], list[SessionSummary]] | None = None,
     ) -> None:
         super().__init__()
         self.sessions = sessions
         self.current_session_id = current_session_id
+        # 管理动作直接走进程内的 Store / Transcript（TUI 没有 HTTP 一跳），
+        # reloader 负责动作后拉最新列表；三者都缺时退化为纯选择器。
+        self.store = store
+        self.transcript = transcript
+        self.reloader = reloader
+        self.include_archived = False
         self.matches = list(sessions)
 
     def compose(self) -> ComposeResult:
@@ -336,14 +580,38 @@ class ResumeScreen(ModalScreen[str | None]):
                 id="resume-search",
             )
             yield OptionList(id="resume-list")
+            with Horizontal(id="resume-actions"):
+                yield Button("重命名 R", id="resume-rename")
+                yield Button("置顶 P", id="resume-pin")
+                yield Button("归档 A", id="resume-archive")
+                yield Button("分支 F", id="resume-fork")
+                yield Button("删除 D", id="resume-delete")
             yield Static(
-                "输入过滤 · ↑↓ 选择 · Enter 续接 · Esc 关闭",
+                "输入过滤 · ↓ 进列表 · Enter 续接 · R 重命名 · P 置顶 · A 归档"
+                " · F 分支 · D 删除 · V 含已归档 · Tab 焦点 · Esc 关闭",
                 id="resume-footer",
             )
 
     def on_mount(self) -> None:
         self.query_one("#resume-search", Input).focus()
         self._refresh("")
+
+    def on_key(self, event: events.Key) -> None:
+        # 过滤框里按 ↓/↑ 直接进列表，焦点跟着走：Input 会把字母吃成
+        # 过滤词，R/P/A/F/D/V 这些动作绑定只在列表/按钮拿到焦点后才生效，
+        # 不带焦点过去页脚的键位说明就是空头支票。Tab 能回到过滤框。
+        if event.key not in ("up", "down"):
+            return
+        search = self.query_one("#resume-search", Input)
+        if not search.has_focus:
+            return
+        event.stop()
+        option_list = self.query_one("#resume-list", OptionList)
+        option_list.focus()
+        if event.key == "down":
+            option_list.action_cursor_down()
+        else:
+            option_list.action_cursor_up()
 
     def _refresh(self, query: str) -> None:
         normalized = query.strip().casefold()
@@ -356,6 +624,11 @@ class ResumeScreen(ModalScreen[str | None]):
             or normalized in session.model.casefold()
         ]
         option_list = self.query_one("#resume-list", OptionList)
+        highlighted_id = None
+        if option_list.highlighted is not None and self.matches:
+            # 重载前列表可能已经变了；记住当前行，重载后尽量回到它。
+            if option_list.highlighted < len(self.matches):
+                highlighted_id = self.matches[option_list.highlighted].session_id
         option_list.clear_options()
         if not self.matches:
             option_list.add_option(Option(Text("没有匹配的会话", style=DIM)))
@@ -365,12 +638,135 @@ class ResumeScreen(ModalScreen[str | None]):
             for session in self.matches
         )
         for index, session in enumerate(self.matches):
-            if session.session_id == self.current_session_id:
+            if session.session_id == highlighted_id:
                 option_list.highlighted = index
                 break
         else:
-            option_list.highlighted = 0
+            for index, session in enumerate(self.matches):
+                if session.session_id == self.current_session_id:
+                    option_list.highlighted = index
+                    break
+            else:
+                option_list.highlighted = 0
         option_list.scroll_to_highlight()
+
+    def _reload(self) -> None:
+        """动作落地后重拉列表：置顶要重排、归档要消失、分支要出现。"""
+        if self.reloader is not None:
+            self.sessions = self.reloader(self.include_archived)
+        query = self.query_one("#resume-search", Input).value
+        self._refresh(query)
+        self.query_one("#resume-note", Static).update(
+            f"当前 {self.current_session_id[:8]}  ·  "
+            f"{len(self.sessions)} 个已落盘会话  ·  正文来自 JSONL"
+        )
+
+    def _selected_summary(self) -> SessionSummary | None:
+        option_list = self.query_one("#resume-list", OptionList)
+        if not self.matches or option_list.highlighted is None:
+            self.notify("先在列表里选中一个会话", severity="warning")
+            return None
+        return self.matches[option_list.highlighted]
+
+    def action_rename(self) -> None:
+        session = self._selected_summary()
+        if session is None or self.store is None:
+            return
+
+        def done(value: str | None) -> None:
+            if value:
+                self.store.rename_session(session.session_id, value)
+                self.notify("已重命名")
+                self._reload()
+
+        # 弹层套弹层走 app：Screen 自己没有 push_screen。
+        self.app.push_screen(InputModal("重命名会话", initial=session.title), done)
+
+    def action_toggle_pin(self) -> None:
+        session = self._selected_summary()
+        if session is None or self.store is None:
+            return
+        self.store.set_pinned(session.session_id, not session.pinned)
+        self.notify("已置顶" if not session.pinned else "已取消置顶")
+        self._reload()
+
+    def action_toggle_archive(self) -> None:
+        session = self._selected_summary()
+        if session is None or self.store is None:
+            return
+        if session.session_id == self.current_session_id:
+            self.notify("不能归档正在使用的会话", severity="warning")
+            return
+        self.store.set_archived(session.session_id, not session.archived)
+        self.notify("已恢复" if session.archived else "已归档（正文保留，可恢复）")
+        self._reload()
+
+    def action_fork(self) -> None:
+        session = self._selected_summary()
+        if session is None or self.store is None or self.transcript is None:
+            return
+        total = len(self.transcript.read(session.session_id))
+
+        def done(value: str | None) -> None:
+            if value is None:
+                return
+            try:
+                through = int(value)
+            except ValueError:
+                self.notify("分支条数要是数字", severity="error")
+                return
+            try:
+                new_id, copied = fork_session(
+                    self.store, self.transcript, session.session_id, through
+                )
+            except ValueError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self.notify(f"已分支：前 {copied} 条 → {new_id[:8]}（列表第一个）")
+            self._reload()
+
+        self.app.push_screen(
+            InputModal(
+                "分支会话",
+                note=f"保留前 N 条消息（1..{total}），spans 不复制。",
+                initial=str(total),
+            ),
+            done,
+        )
+
+    def action_delete(self) -> None:
+        session = self._selected_summary()
+        if session is None or self.store is None or self.transcript is None:
+            return
+        if session.session_id == self.current_session_id:
+            self.notify("不能删除正在使用的会话；先切到别的会话", severity="warning")
+            return
+
+        def done(go: bool) -> None:
+            if not go:
+                return
+            self.store.delete_session(session.session_id)
+            self.transcript.delete(session.session_id)
+            self.notify("已永久删除（正文 + 索引 + spans）")
+            self._reload()
+
+        self.app.push_screen(
+            ConfirmModal(
+                "永久删除会话",
+                f"{session.title}\n{session.session_id}\n\n"
+                "删除后 JSONL 正文、索引和 spans 都不可恢复。\n"
+                "只是想收起来的话用 A 归档。",
+                action="删除",
+            ),
+            done,
+        )
+
+    def action_toggle_view(self) -> None:
+        self.include_archived = not self.include_archived
+        self.notify(
+            "显示含已归档" if self.include_archived else "只显示活跃会话"
+        )
+        self._reload()
 
     @on(Input.Changed, "#resume-search")
     def _search_changed(self, event: Input.Changed) -> None:
@@ -388,6 +784,10 @@ class ResumeScreen(ModalScreen[str | None]):
         text.append(_format_session_time(session.created_at), style=DIM)
         text.append(f"  {session.session_id[:8]}", style=f"bold {SIGNAL}")
         text.append(f"  {session.turns} 轮", style=MUTED)
+        if session.pinned:
+            text.append("  置顶", style=f"bold {SIGNAL}")
+        if session.archived:
+            text.append("  已归档", style=DIM)
         if current:
             text.append("  当前会话", style=f"bold {WARN}")
         text.append(f"\n  {session.title}", style=PAPER)
@@ -404,6 +804,27 @@ class ResumeScreen(ModalScreen[str | None]):
     @on(OptionList.OptionSelected, "#resume-list")
     def _selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option_id)
+
+    # 按钮和快捷键同一套动作；列表焦点时按字母，鼠标时点按钮。
+    @on(Button.Pressed, "#resume-rename")
+    def _btn_rename(self) -> None:
+        self.action_rename()
+
+    @on(Button.Pressed, "#resume-pin")
+    def _btn_pin(self) -> None:
+        self.action_toggle_pin()
+
+    @on(Button.Pressed, "#resume-archive")
+    def _btn_archive(self) -> None:
+        self.action_toggle_archive()
+
+    @on(Button.Pressed, "#resume-fork")
+    def _btn_fork(self) -> None:
+        self.action_fork()
+
+    @on(Button.Pressed, "#resume-delete")
+    def _btn_delete(self) -> None:
+        self.action_delete()
 
 
 @dataclass(frozen=True)

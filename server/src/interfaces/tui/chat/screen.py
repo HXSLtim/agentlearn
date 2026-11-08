@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import shlex
 import subprocess
 import tempfile
 import time
+import unicodedata
 import uuid
 
 from collections import deque
@@ -136,6 +138,41 @@ from .panels import (
 
 TRANSCRIPT_MODES = ("normal", "thinking", "verbose")
 
+# 侧栏内宽：#rail 宽 31 列减左右 padding 各 1。活动条目的截断预算用它。
+RAIL_INNER_CELLS = 29
+
+
+def _cell_width(text: str) -> int:
+    """终端显示宽度：中文等 W/F 字符占 2 格，其余 1 格。"""
+    return sum(
+        2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        for char in text
+    )
+
+
+def _clip_cells(text: str, budget: int) -> str:
+    """按显示宽度截断，末尾带省略号；budget ≤ 0 给空串。"""
+    if budget <= 0:
+        return ""
+    used = 0
+    for index, char in enumerate(text):
+        width = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        if used + width > budget - 1:  # 留一格给 …
+            return text[:index] + "…"
+        used += width
+    return text
+
+
+def _first_output_line(output: str) -> str:
+    """活动条目 detail 的底料：输出首行，剥掉 bash 结果的「[exit N] 」前缀。
+
+    29 列的窄栏里每格都贵，exit 码是工具层的状态尾巴不是内容；
+    剥掉后首行直接是 pwd 的路径或 ls 的第一个文件名。
+    """
+    line = output.strip().split("\n")[0]
+    stripped = re.sub(r"^\[exit \d+\]\s*", "", line)
+    return stripped[:48]
+
 
 class AgentLearnTUI(App[str | None]):
     """AgentLearn 的交互式终端入口。"""
@@ -191,11 +228,18 @@ class AgentLearnTUI(App[str | None]):
         scrollbar-corner-color: {INK};
     }}
 
-    #ledger {{
+    /* 侧栏外框：宽 31 列，里面分两段——#ledger 指标（可滚）+ 活动停靠段。
+       拆成两段是因为 36 行屏装不下 16 行指标再叠活动：指标段内容比可视
+       高时自己滚，活动永远钉在滚动区外，不靠滚轮也能看到最新事件。 */
+    #rail {{
         width: 31;
         background: {PANEL};
         border-left: solid {LINE};
         padding: 1 1;
+    }}
+
+    #ledger {{
+        height: 1fr;
         scrollbar-size-vertical: 1;
         scrollbar-color: {SIGNAL};
         scrollbar-background: {PANEL};
@@ -233,6 +277,16 @@ class AgentLearnTUI(App[str | None]):
 
     #ledger-footer {{
         color: {DIM};
+    }}
+
+    #ledger-activity-title {{
+        color: {SIGNAL};
+        text-style: bold;
+        margin-top: 1;
+    }}
+
+    #ledger-activity {{
+        color: {PAPER};
     }}
 
     #ledger-state {{
@@ -544,7 +598,7 @@ class AgentLearnTUI(App[str | None]):
         margin-top: 1;
     }}
 
-    Screen.-compact #ledger {{
+    Screen.-compact #rail {{
         display: none;
     }}
 
@@ -619,7 +673,7 @@ class AgentLearnTUI(App[str | None]):
         session_id: str,
         settings_loader: Callable[[], SettingsSnapshot] | None = None,
         settings_saver: Callable[[SettingsValues], SettingsSnapshot] | None = None,
-        session_loader: Callable[[], list[SessionSummary]] | None = None,
+        session_loader: Callable[..., list[SessionSummary]] | None = None,
         approval: ApprovalBroker | None = None,
         plan_broker: PlanBroker | None = None,
         capability_loader: Callable[[], dict] | None = None,
@@ -642,6 +696,9 @@ class AgentLearnTUI(App[str | None]):
         self.steering_turn: RunningTurn | None = None
         self.queued_prompts: deque[QueuedPrompt] = deque()
         self.pending_images: list[ImageBlock] = []
+        # 与 pending_images 平行：ImageBlock 里只有 base64，没有来源路径；
+        # /attach 列表和 /detach 按路径移除要靠这份原始路径。
+        self._pending_image_paths: list[str] = []
         self.input_history: list[str] = [
             text
             for message in history
@@ -694,6 +751,12 @@ class AgentLearnTUI(App[str | None]):
         self._turn_assistants: list[AssistantMessage] = []
         self._tick_registry: list[tuple[AssistantMessage, float]] = []
         self._max_turn_ms = 0.0
+        # 实时活动（WebUI activity 的口径：只看最后一轮）。条目是
+        # {tag, title, detail, tone}，tone ∈ running/done/error 决定颜色。
+        self._activity: list[dict] = []
+        # tool_use id → self._activity 下标：tool_result 回来时改同一条。
+        self._activity_by_tool: dict[str, int] = {}
+        self._activity_thinking: int | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
@@ -712,80 +775,77 @@ class AgentLearnTUI(App[str | None]):
                 yield EmptyState(id="empty") if not self.history else Static(
                     "历史会话", classes="message-kicker"
                 )
-            # VerticalScroll：内容是 22 行起步的固定清单，比这矮的终端
-            # （比如 30 行的分屏）靠滚轮也能看全，不硬裁。
-            with VerticalScroll(id="ledger"):
-                yield Static("运行日志", classes="ledger-kicker")
-                # 台账与 WebUI 右栏（index.html 的 run-metrics）同一套指标和行序。
-                # 「标签上、值下」的两行制在 36 行的终端里放不下 13 行指标，
-                # 这里压成一行两列：标签左、值右，一格一行，信息密度对齐。
-                with Horizontal(classes="ledger-row"):
-                    yield Static("状态", classes="ledger-label")
-                    yield Static("就绪", id="ledger-state", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("会话", classes="ledger-label")
-                    yield Static(self._short_session(), id="ledger-session", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("轮次", classes="ledger-label")
-                    yield Static(str(self.turn_count), id="ledger-turns", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("工具调用", classes="ledger-label")
-                    yield Static(str(self.tool_count), id="ledger-tools", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("用时", classes="ledger-label")
-                    yield Static("—", id="ledger-elapsed", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("输入 token", classes="ledger-label")
-                    yield Static("0", id="ledger-input", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("输出 token", classes="ledger-label")
-                    yield Static("0", id="ledger-output", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("缓存读", classes="ledger-label")
-                    yield Static("0", id="ledger-cache-read", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("缓存写", classes="ledger-label")
-                    yield Static("0", id="ledger-cache-write", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("缓存命中", classes="ledger-label")
-                    yield Static("—", id="ledger-cache-hit", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("成本", classes="ledger-label")
-                    yield Static(
-                        self._format_cost(),
-                        id="ledger-cost",
-                        classes="ledger-value",
-                    )
-                with Horizontal(classes="ledger-row"):
-                    yield Static("思考强度", classes="ledger-label")
-                    yield Static(self.effort, id="ledger-effort", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("执行审批", classes="ledger-label")
-                    yield Static(
-                        approval_label(self.approval_mode),
-                        id="ledger-approval",
-                        classes="ledger-value",
-                    )
-                with Horizontal(classes="ledger-row"):
-                    yield Static("消息插话", classes="ledger-label")
-                    yield Static(
-                        steering_label(self.steering_mode),
-                        id="ledger-steering",
-                        classes="ledger-value",
-                    )
-                # 下面两行是 TUI 补充的实时位：模型名和排队中的插话数。
-                # WebUI 不在右栏放这两项（模型在设置里，插话有自己的浮层）。
-                with Horizontal(classes="ledger-row"):
-                    yield Static("模型", classes="ledger-label")
-                    yield Static(self.conversation.chat.model, id="ledger-model", classes="ledger-value")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("排队中", classes="ledger-label")
-                    yield Static("0", id="ledger-queued", classes="ledger-value")
-                yield Static("", classes="ledger-rule")
-                with Horizontal(classes="ledger-row"):
-                    yield Static("停止原因", classes="ledger-label")
-                    yield Static("—", id="ledger-stop", classes="ledger-value")
-                yield Static("JSONL · SQLite · 仅本地", id="ledger-footer")
+            # 侧栏分两段（#rail 外框）：#ledger 指标段可滚，活动段钉在
+            # 滚动区外。36 行的终端装不下 16 行指标再叠活动——指标集合
+            # 与 WebUI 右栏一致，呈现上 token/缓存各并一行、排队数并入
+            # 插话行，省下的行留给活动停靠段，见下方 compose 注释。
+            with Vertical(id="rail"):
+                with VerticalScroll(id="ledger"):
+                    yield Static("运行日志", classes="ledger-kicker")
+                    # 台账与 WebUI 右栏（index.html 的 run-metrics）同一套指标和行序。
+                    # 「标签上、值下」的两行制在 36 行的终端里放不下 13 行指标，
+                    # 这里压成一行两列：标签左、值右，一格一行，信息密度对齐。
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("状态", classes="ledger-label")
+                        yield Static("就绪", id="ledger-state", classes="ledger-value")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("会话", classes="ledger-label")
+                        yield Static(self._short_session(), id="ledger-session", classes="ledger-value")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("轮次", classes="ledger-label")
+                        yield Static(str(self.turn_count), id="ledger-turns", classes="ledger-value")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("工具调用", classes="ledger-label")
+                        yield Static(str(self.tool_count), id="ledger-tools", classes="ledger-value")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("用时", classes="ledger-label")
+                        yield Static("—", id="ledger-elapsed", classes="ledger-value")
+                    # token/缓存各自并一行：五个数占 5 行太贵，36 行屏要给活动腾位。
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("token", classes="ledger-label")
+                        yield Static("入 0 · 出 0", id="ledger-tokens", classes="ledger-value")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("缓存", classes="ledger-label")
+                        yield Static("读 0 · 写 0 · —", id="ledger-cache", classes="ledger-value")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("成本", classes="ledger-label")
+                        yield Static(
+                            self._format_cost(),
+                            id="ledger-cost",
+                            classes="ledger-value",
+                        )
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("思考强度", classes="ledger-label")
+                        yield Static(self.effort, id="ledger-effort", classes="ledger-value")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("执行审批", classes="ledger-label")
+                        yield Static(
+                            approval_label(self.approval_mode),
+                            id="ledger-approval",
+                            classes="ledger-value",
+                        )
+                    # 插话档位 + 排队数并一行：排队的消息靠「排 N」后缀报存在感。
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("消息插话", classes="ledger-label")
+                        yield Static(
+                            self._steering_value(),
+                            id="ledger-steering",
+                            classes="ledger-value",
+                        )
+                    # 模型名是 TUI 补充的实时位（WebUI 放在设置里）。
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("模型", classes="ledger-label")
+                        yield Static(self.conversation.chat.model, id="ledger-model", classes="ledger-value")
+                    yield Static("", classes="ledger-rule")
+                    with Horizontal(classes="ledger-row"):
+                        yield Static("停止原因", classes="ledger-label")
+                        yield Static("—", id="ledger-stop", classes="ledger-value")
+                    yield Static("JSONL · SQLite · 仅本地", id="ledger-footer")
+                # 实时活动（WebUI run-rail activity 的终端位）：只看最后一轮，
+                # 新轮开始清空；恢复会话时从最后一轮水合。钉在指标滚动区
+                # 之外——正在发生的事不该靠滚轮找。
+                yield Static("实时活动", id="ledger-activity-title")
+                yield Static("工具与思考事件会出现在这里。", id="ledger-activity")
 
         with Vertical(id="composer-shell"):
             yield CommandPalette()
@@ -917,6 +977,7 @@ class AgentLearnTUI(App[str | None]):
                     by_tool_id[block.id] = card
                     await timeline.mount(card)
         self._hydrate_turn_ticks(turn_groups)
+        self._hydrate_activity()
         timeline.scroll_end(animate=False)
 
     def _hydrate_turn_ticks(self, turn_groups: list[list[AssistantMessage]]) -> None:
@@ -963,6 +1024,104 @@ class AgentLearnTUI(App[str | None]):
         for widget, duration in self._tick_registry:
             widget.set_tick(duration, self._max_turn_ms)
 
+    # —— 实时活动（WebUI run-rail activity 同口径：只看最后一轮） ——
+
+    def _push_activity(self, tag: str, title: str, detail: str = "", tone: str = "done") -> int:
+        self._activity.append({"tag": tag, "title": title, "detail": detail, "tone": tone})
+        self._render_activity()
+        return len(self._activity) - 1
+
+    def _set_activity(self, index: int, **fields) -> None:
+        if 0 <= index < len(self._activity):
+            self._activity[index].update(fields)
+            self._render_activity()
+
+    def _clear_activity(self) -> None:
+        self._activity = []
+        self._activity_by_tool = {}
+        self._render_activity()
+
+    def _render_activity(self) -> None:
+        """最多显示 6 条新的在上，计数给全部；每条压进一行不折行。
+
+        WebUI 是按状态重排（警告→思考→工具新→旧）；这里按时间新的在上，
+        警告/工具顺序一致，思考通常垫底——面板本体就在旁边，不抢位置。
+        """
+        title = self.query_one("#ledger-activity-title", Static)
+        body = self.query_one("#ledger-activity", Static)
+        if not self._activity:
+            title.update("实时活动")
+            body.update(Text("工具与思考事件会出现在这里。", style=DIM))
+            return
+        title.update(f"实时活动 · {len(self._activity)}")
+        text = Text()
+        for position, item in enumerate(reversed(self._activity[-6:])):
+            tone = item["tone"]
+            color = ERROR if tone == "error" else SIGNAL if tone == "running" else TOOL
+            if position:
+                text.append("\n")
+            prefix = f"▸ {item['tag']} "
+            budget = RAIL_INNER_CELLS - _cell_width(prefix)
+            shown_title = _clip_cells(item["title"], budget)
+            text.append(prefix, style=f"bold {color}")
+            text.append(shown_title, style=PAPER)
+            if item["detail"]:
+                detail_budget = budget - _cell_width(shown_title) - len(" · ")
+                shown_detail = _clip_cells(item["detail"], detail_budget)
+                if shown_detail:
+                    text.append(f" · {shown_detail}", style=MUTED)
+        body.update(text)
+
+    def _hydrate_activity(self) -> None:
+        """恢复会话时从最后一轮水合活动条目（WebUI 同口径：只看最后一轮）。
+
+        历史里没有 elapsed：时长只存在 spans 里，水合的条目只给输出首行，
+        与 WebUI 恢复时 tool.elapsedMs 为 undefined 的表现一致。
+        """
+        # 最后一条带文本的用户消息之后都算最后一轮（tool_result 住在
+        # user 消息里但不开新轮，跟上面切 turn_groups 同一条规则）。
+        last_prompt = -1
+        for index, message in enumerate(self.history):
+            if message.role == "user" and any(
+                block.type == "text" and block.text.strip()
+                for block in message.content
+            ):
+                last_prompt = index
+        if last_prompt < 0:
+            return
+        thinking_chars = 0
+        uses: list[tuple[str, str]] = []  # (tool_use_id, name)，按出现顺序
+        results: dict[str, tuple[str, bool]] = {}
+        for message in self.history[last_prompt:]:
+            for block in message.content:
+                if block.type == "thinking" and block.thinking:
+                    thinking_chars += len(block.thinking)
+                elif block.type == "tool_use":
+                    uses.append((block.id, block.name))
+                elif block.type == "tool_result":
+                    results[block.tool_use_id] = (block.content, block.is_error)
+        if thinking_chars:
+            self._activity.append(
+                {
+                    "tag": "思考",
+                    "title": "已捕获思考",
+                    "detail": f"{thinking_chars} 字",
+                    "tone": "done",
+                }
+            )
+        for tool_id, name in uses:
+            output, is_error = results.get(tool_id, ("", False))
+            first_line = _first_output_line(output)
+            self._activity.append(
+                {
+                    "tag": "错误" if is_error else "工具",
+                    "title": name,
+                    "detail": first_line or "完成",
+                    "tone": "error" if is_error else "done",
+                }
+            )
+        self._render_activity()
+
     def _scroll_timeline_end(self) -> None:
         """把续接会话定位到最后一轮，而不是停在历史开头。"""
         self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
@@ -977,6 +1136,7 @@ class AgentLearnTUI(App[str | None]):
             return
         if images:
             self.pending_images = []
+            self._pending_image_paths = []
             self._update_attachment_status()
         composer = self.query_one("#composer", PromptComposer)
         composer.load_text("")
@@ -1008,6 +1168,8 @@ class AgentLearnTUI(App[str | None]):
         self._reasoning = None
         self._tool_cards = {}
         self._turn_assistants = []
+        # 活动只看最后一轮：新轮开始清空（WebUI activity 同口径）。
+        self._clear_activity()
 
         self.streaming = True
         self.turn_started = time.monotonic()
@@ -1145,6 +1307,9 @@ class AgentLearnTUI(App[str | None]):
             if self._reasoning is None:
                 self._reasoning = ReasoningPanel()
                 await self.query_one("#timeline", VerticalScroll).mount(self._reasoning)
+                self._activity_thinking = self._push_activity(
+                    "思考", "推理中", tone="running"
+                )
             self._reasoning.append_text(fragment)
             self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
             return
@@ -1153,8 +1318,7 @@ class AgentLearnTUI(App[str | None]):
             if not fragment:
                 return
             if self._reasoning is not None:
-                self._reasoning.finish()
-                self._reasoning = None
+                self._finish_reasoning()
             if self._assistant is None:
                 self._assistant = AssistantMessage(show_kicker=self._expect_kicker)
                 self._expect_kicker = False
@@ -1169,6 +1333,12 @@ class AgentLearnTUI(App[str | None]):
             return
         if kind == "context_warning":
             self._finish_live_blocks()
+            self._push_activity(
+                "警告",
+                "上下文接近预算",
+                f"{event['estimate_tokens']} / {event['budget_tokens']} token",
+                tone="error",
+            )
             estimate = event["estimate_tokens"]
             budget = event["budget_tokens"]
             ratio = event["ratio"]
@@ -1192,6 +1362,9 @@ class AgentLearnTUI(App[str | None]):
             self.tool_count += 1
             card = ToolCard(event["id"], event["name"], event["input"])
             self._tool_cards[event["id"]] = card
+            self._activity_by_tool[event["id"]] = self._push_activity(
+                "执行", event["name"], "执行中", tone="running"
+            )
             await self.query_one("#timeline", VerticalScroll).mount(card)
             self._update_ledger()
             self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
@@ -1246,12 +1419,34 @@ class AgentLearnTUI(App[str | None]):
                     event["is_error"],
                     event["elapsed_ms"],
                 )
+            index = self._activity_by_tool.get(event["id"])
+            if index is not None:
+                first_line = _first_output_line(str(event.get("output", "")))
+                detail = (
+                    f"{format_duration(event['elapsed_ms'])} · {first_line}"
+                    if event.get("elapsed_ms") is not None
+                    else first_line or "完成"
+                )
+                self._set_activity(
+                    index,
+                    tag="错误" if event.get("is_error") else "工具",
+                    detail=detail,
+                    tone="error" if event.get("is_error") else "done",
+                )
             self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
-            self._reasoning.finish()
-            self._reasoning = None
+            self._finish_reasoning()
+
+    def _finish_reasoning(self) -> None:
+        """收住思考面板：屏幕上折叠，活动条目落字数（WebUI 同口径）。"""
+        panel, self._reasoning = self._reasoning, None
+        panel.finish()
+        index = getattr(self, "_activity_thinking", None)
+        if index is not None:
+            self._set_activity(index, detail=f"{panel.char_count} 字")
+            self._activity_thinking = None
         if self._assistant is not None:
             self._assistant.finish()
             self._assistant = None
@@ -1362,29 +1557,29 @@ class AgentLearnTUI(App[str | None]):
         ledger.update(label)
         ledger.styles.color = color
 
+    def _steering_value(self) -> str:
+        """插话行的值：档位名 + 排队后缀（排队数原先单占一行，腾位并进来了）。"""
+        base = steering_label(self.steering_mode)
+        queued = len(self.queued_prompts)
+        return f"{base} · 排 {queued}" if queued else base
+
     def _update_ledger(self) -> None:
         # 顶栏标题跟着刷：第一条用户消息落库后 set_title_if_empty 会补标题。
         self.query_one("#top-session", Static).update(self._session_line())
         self.query_one("#ledger-turns", Static).update(str(self.turn_count))
         self.query_one("#ledger-tools", Static).update(str(self.tool_count))
-        self.query_one("#ledger-queued", Static).update(str(len(self.queued_prompts)))
+        self.query_one("#ledger-steering", Static).update(self._steering_value())
         self.query_one("#ledger-stop", Static).update(
             stop_reason_label(self.stop_reason) if self.stop_reason else "—"
         )
-        self.query_one("#ledger-input", Static).update(
-            str(self.turn_usage.get("input_tokens", 0))
+        self.query_one("#ledger-tokens", Static).update(
+            f"入 {self.turn_usage.get('input_tokens', 0)}"
+            f" · 出 {self.turn_usage.get('output_tokens', 0)}"
         )
-        self.query_one("#ledger-output", Static).update(
-            str(self.turn_usage.get("output_tokens", 0))
-        )
-        self.query_one("#ledger-cache-read", Static).update(
-            str(self.turn_usage.get("cache_read_tokens", 0))
-        )
-        self.query_one("#ledger-cache-write", Static).update(
-            str(self.turn_usage.get("cache_write_tokens", 0))
-        )
-        self.query_one("#ledger-cache-hit", Static).update(
-            cache_hit_percent(self.turn_usage.get("cache_hit_ratio", 0))
+        self.query_one("#ledger-cache", Static).update(
+            f"读 {self.turn_usage.get('cache_read_tokens', 0)}"
+            f" · 写 {self.turn_usage.get('cache_write_tokens', 0)}"
+            f" · {cache_hit_percent(self.turn_usage.get('cache_hit_ratio', 0))}"
         )
         self.query_one("#ledger-cost", Static).update(self._format_cost())
         if not self.streaming:
@@ -1597,6 +1792,9 @@ class AgentLearnTUI(App[str | None]):
         if command.name == "attach":
             await self._command_attach(argument)
             return
+        if command.name == "detach":
+            await self._command_detach(argument)
+            return
 
         if command.name == "steering":
             await self._command_steering(argument)
@@ -1706,10 +1904,23 @@ class AgentLearnTUI(App[str | None]):
 
     async def _command_attach(self, argument: str) -> None:
         if not argument:
+            # 无参 = 列表：挂了什么、按什么序号移除，比翻记忆可靠。
+            if not self.pending_images:
+                await self._show_command_result(
+                    "ATTACH",
+                    "当前没有挂图片。用法：/attach <path>（png / jpg / webp / gif）",
+                    error=True,
+                )
+                return
+            lines = [
+                f"{position}. {path}"
+                for position, path in enumerate(self._pending_image_paths, start=1)
+            ]
             await self._show_command_result(
                 "ATTACH",
-                "用法：/attach <path>（png / jpg / webp / gif）",
-                error=True,
+                f"已挂 {len(lines)} 张，随下一条用户消息发送：\n"
+                + "\n".join(lines)
+                + "\n用 /detach <序号|路径|all> 移除。",
             )
             return
         path = Path(argument).expanduser().resolve()
@@ -1727,10 +1938,73 @@ class AgentLearnTUI(App[str | None]):
             await self._show_command_result("ATTACH", str(exc), error=True)
             return
         self.pending_images.append(ImageBlock(media_type=media_type, data=data))
+        self._pending_image_paths.append(str(path))
         self._update_attachment_status()
         await self._show_command_result(
             "ATTACH",
             f"{path}\n已排队到下一条用户消息；发送时只支持 queue。",
+        )
+
+    async def _command_detach(self, argument: str) -> None:
+        if not self.pending_images:
+            await self._show_command_result(
+                "DETACH", "当前没有挂图片，无可移除。", error=True
+            )
+            return
+        if not argument or argument == "list":
+            lines = [
+                f"{position}. {path}"
+                for position, path in enumerate(self._pending_image_paths, start=1)
+            ]
+            await self._show_command_result(
+                "DETACH",
+                f"已挂 {len(lines)} 张：\n" + "\n".join(lines)
+                + "\n/detach <序号|路径|all>",
+            )
+            return
+        if argument == "all":
+            self.pending_images = []
+            self._pending_image_paths = []
+            self._update_attachment_status()
+            await self._show_command_result("DETACH", "已移除全部挂图。")
+            return
+        if argument.isdigit():
+            # 序号是 1 起：跟上面列表里打出来的编号一致。
+            index = int(argument) - 1
+            if not 0 <= index < len(self._pending_image_paths):
+                await self._show_command_result(
+                    "DETACH",
+                    f"序号超出范围：{argument}（共 {len(self._pending_image_paths)} 张）。",
+                    error=True,
+                )
+                return
+        else:
+            # 路径匹配用后缀：完整路径太长，打文件名或末几级目录就够。
+            matches = [
+                index
+                for index, path in enumerate(self._pending_image_paths)
+                if path.endswith(argument)
+            ]
+            if not matches:
+                await self._show_command_result(
+                    "DETACH", f"没有匹配的路径：{argument}", error=True
+                )
+                return
+            if len(matches) > 1:
+                listing = "、".join(str(m + 1) for m in matches)
+                await self._show_command_result(
+                    "DETACH",
+                    f"「{argument}」匹配多张（序号 {listing}），请用序号指定。",
+                    error=True,
+                )
+                return
+            index = matches[0]
+        removed = self._pending_image_paths.pop(index)
+        self.pending_images.pop(index)
+        self._update_attachment_status()
+        await self._show_command_result(
+            "DETACH",
+            f"已移除 {removed}（剩 {len(self.pending_images)} 张）。",
         )
 
     async def _command_export(self, argument: str) -> None:
@@ -1830,9 +2104,22 @@ class AgentLearnTUI(App[str | None]):
             return
 
         self.push_screen(
-            ResumeScreen(sessions, self.session_id),
+            ResumeScreen(
+                sessions,
+                self.session_id,
+                store=getattr(self.conversation, "store", None),
+                transcript=getattr(self.conversation, "transcript", None),
+                # 管理动作落地后要重拉列表（置顶重排 / 归档消失 / 分支出现）。
+                # session_loader 的形状是 () -> list；归档视图要包含已归档，
+                # 所以探一下它接不接参数——不接（旧签名）就只给默认视图。
+                reloader=self._reload_sessions,
+            ),
             self._resume_closed,
         )
+
+    def _reload_sessions(self, include_archived: bool) -> list[SessionSummary]:
+        """load_sessions(include_archived)（组合根签名，默认 False）。"""
+        return self.session_loader(include_archived)  # type: ignore[call-arg]
 
     def _resume_closed(self, session_id: str | None) -> None:
         if session_id is None:
@@ -2347,9 +2634,7 @@ class AgentLearnTUI(App[str | None]):
 
     def _set_steering_mode(self, mode: str) -> None:
         self.steering_mode = mode
-        self.query_one("#ledger-steering", Static).update(
-            steering_label(self.steering_mode)
-        )
+        self.query_one("#ledger-steering", Static).update(self._steering_value())
         descriptions = {
             "queue": "当前轮结束后再跑",
             "cooperative": "下一次请求前并入当前轮",
@@ -2576,7 +2861,7 @@ def run_chat(
     session_id: str | None = None,
     settings_loader: Callable[[], SettingsSnapshot] | None = None,
     settings_saver: Callable[[SettingsValues], SettingsSnapshot] | None = None,
-    session_loader: Callable[[], list[SessionSummary]] | None = None,
+    session_loader: Callable[..., list[SessionSummary]] | None = None,
     approval: ApprovalBroker | None = None,
     plan_broker: PlanBroker | None = None,
     capability_loader: Callable[[], dict] | None = None,

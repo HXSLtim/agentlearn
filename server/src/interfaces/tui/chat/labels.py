@@ -38,6 +38,7 @@ RECEIPT_LABELS = {
     "COMPACT": "压缩",
     "CONTEXT": "上下文",
     "COOPERATIVE": "插话 · 协作",
+    "DETACH": "图片",
     "EXPORT": "导出",
     "MEMORY": "记忆",
     "MODEL": "模型",

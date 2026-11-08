@@ -51,8 +51,15 @@ COMMANDS = (
     SlashCommand("retry", "/retry", "重跑上一条失败请求，不重复用户卡片", "运行"),
     SlashCommand(
         "attach",
-        "/attach <path>",
-        "给下一条用户消息附一张图片",
+        "/attach [path]",
+        "挂一张图片；无参列出已挂列表",
+        "运行",
+        takes_argument=True,
+    ),
+    SlashCommand(
+        "detach",
+        "/detach [n|all|path]",
+        "移除已挂图片：按序号、路径或全部",
         "运行",
         takes_argument=True,
     ),
