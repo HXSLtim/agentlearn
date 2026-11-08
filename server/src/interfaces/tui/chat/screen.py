@@ -2370,6 +2370,9 @@ class AgentLearnTUI(App[str | None]):
             f"停止     {stop_reason_label(self.stop_reason)}\n"
             "存储     JSONL 正文 + SQLite 轨迹"
         )
+        return status + self._capability_status_text()
+
+    def _capability_status_text(self) -> str:
         capabilities = None
         capability_error = ""
         if self.capability_loader is not None:
@@ -2379,8 +2382,7 @@ class AgentLearnTUI(App[str | None]):
                 capability_error = str(exc)
         if capabilities is None:
             return (
-                status
-                + "\ncaps      unavailable"
+                "\ncaps      unavailable"
                 + (f"\ncaps err  {capability_error}" if capability_error else "")
             )
         sources: dict[str, list[str]] = {}
@@ -2404,8 +2406,7 @@ class AgentLearnTUI(App[str | None]):
             else "none configured/not started"
         )
         return (
-            status
-            + f"\npython    {runtime.get('python', '?')}"
+            f"\npython    {runtime.get('python', '?')}"
             + f"\nprovider  {runtime.get('provider', '?')}"
             + f"\nmodel     {runtime.get('model', '?')}"
             + f"\neffort    {runtime.get('effort') or 'omit'}"
