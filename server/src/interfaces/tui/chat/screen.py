@@ -1445,11 +1445,7 @@ class AgentLearnTUI(App[str | None]):
             await self._apply_context_warning(event)
             return
         if kind == "steering_injected":
-            self._finish_live_blocks()
-            timeline = self.query_one("#timeline", VerticalScroll)
-            await timeline.mount(UserMessage(event["text"]))
-            self._expect_kicker = True
-            timeline.scroll_end(animate=False)
+            await self._apply_steering_injected(event)
             return
         if kind == "tool_use":
             self._finish_live_blocks()
@@ -1596,6 +1592,13 @@ class AgentLearnTUI(App[str | None]):
     def _apply_usage(self, event: dict) -> None:
         self.turn_usage = dict(event.get("usage", {}))
         self._update_ledger()
+
+    async def _apply_steering_injected(self, event: dict) -> None:
+        self._finish_live_blocks()
+        timeline = self.query_one("#timeline", VerticalScroll)
+        await timeline.mount(UserMessage(event["text"]))
+        self._expect_kicker = True
+        timeline.scroll_end(animate=False)
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
