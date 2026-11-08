@@ -1,0 +1,5 @@
+/* 预设颜色只在 theme.css；自定义颜色可用 URL `?--accent=%230969da`，
+   或控制台 `AgentLearnTheme.set("--accent", "#0969da")`。 */
+:root[data-theme="custom"] {
+  /* 例：--accent: #0969da; */
+}

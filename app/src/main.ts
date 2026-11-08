@@ -4,6 +4,9 @@ if ("__TAURI_INTERNALS__" in window) {
   document.documentElement.classList.add("is-tauri");
 }
 
+import "./theme";
+import { initTheme } from "./theme";
+
 import type {
   ApprovalMode,
   SteeringMode,
@@ -173,6 +176,8 @@ import {
   updateCommandPalette,
 } from "./commandPalette";
 let renderFrame: number | undefined;
+
+initTheme();
 
 let renderTarget: { threadId: string; messageId: string } | null = null;
 

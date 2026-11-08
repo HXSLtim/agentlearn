@@ -1,70 +1,13 @@
+@import "./theme.css";
+@import "./user-theme.css";
+
 :root {
-  color-scheme: light dark;
   color: var(--text);
   background: var(--void);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-    "Hiragino Sans GB", system-ui, sans-serif;
+  font-family: var(--sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  /* 墨与琥珀（浅色）：暖纸白画布、墨色文本、琥珀批注强调。
-     设计语言见 docs/decisions.md D30——数据永远 mono，圆角 4/6/8 三档。 */
-  --void: #f7f5f1;
-  --black: #fffefb;
-  --panel: #fffefb;
-  --panel-raised: #f1eee7;
-  --line: rgba(63, 56, 46, 0.14);
-  --line-strong: rgba(63, 56, 46, 0.26);
-  --text: #211e1a;
-  --text-soft: #4b463e;
-  --muted: #837c70;
-  --dim: #a59d8e;
-  --accent: #c96a15;
-  --accent-strong: #a85510;
-  /* 实心琥珀按钮的 hover：浅色主题里往亮走，墨色字才不掉对比（暗色同理） */
-  --accent-hover: #d87b2b;
-  /* 实心琥珀上的字：墨色，不用纸色——浅色主题里才够对比 */
-  --on-accent: #191309;
-  --accent-dim: #cf8b4d;
-  --accent-soft: rgba(201, 106, 21, 0.13);
-  --red: #d3392a;
-  --red-soft: rgba(211, 57, 42, 0.11);
-  --red-line: rgba(211, 57, 42, 0.45);
-  /* 语义绿只用于 diff 新增与成功态，不参与强调色 */
-  --success: #3f7a4b;
-  --success-soft: rgba(63, 122, 75, 0.10);
-  --card-shadow: 0 1px 2px rgba(46, 38, 26, 0.05), 0 6px 18px rgba(46, 38, 26, 0.07);
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-    "Hiragino Sans GB", system-ui, sans-serif;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* 墨与琥珀（深色）：墨黑带暖调、悬浮层抬升、同套语义 */
-    --void: #151412;
-    --black: #100f0d;
-    --panel: #1c1a17;
-    --panel-raised: #26231e;
-    --line: #35312a;
-    --line-strong: #474135;
-    --text: #ece7dd;
-    --text-soft: #c9c3b6;
-    --muted: #948d7f;
-    --dim: #6f695e;
-    --accent: #eda03c;
-    --accent-strong: #f5b35c;
-    --accent-hover: #f5b35c;
-    --on-accent: #191309;
-    --accent-dim: #b98040;
-    --accent-soft: rgba(237, 160, 60, 0.16);
-    --red: #ff6a58;
-    --red-soft: rgba(255, 106, 88, 0.15);
-    --red-line: rgba(255, 106, 88, 0.5);
-    --success: #86bd90;
-    --success-soft: rgba(134, 189, 144, 0.13);
-    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.26), 0 6px 18px rgba(0, 0, 0, 0.3);
-  }
 }
 
 * {
@@ -329,7 +272,7 @@ kbd {
 .new-thread-button:hover kbd {
   color: var(--on-accent);
   background: transparent;
-  border-color: rgba(5, 7, 5, 0.45);
+  border-color: var(--inverse-line);
 }
 
 .rail-section-heading,
@@ -538,8 +481,8 @@ kbd {
   pointer-events: none;
   content: "";
   background-image:
-    linear-gradient(rgba(120, 120, 128, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(120, 120, 128, 0.04) 1px, transparent 1px);
+    linear-gradient(var(--stage-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--stage-grid-line) 1px, transparent 1px);
   background-size: 48px 48px;
   mask-image: linear-gradient(to bottom, black, transparent 74%);
 }
@@ -2912,7 +2855,7 @@ kbd {
   display: flex;
   gap: 2px;
   padding: 2px;
-  background: rgba(120, 113, 100, 0.14);
+  background: var(--segment-track-bg);
   border-radius: 6px;
 }
 
@@ -3947,7 +3890,7 @@ kbd {
   inset: 0;
   z-index: 8;
   display: none;
-  background: rgba(21, 20, 18, 0.55);
+  background: var(--thread-scrim);
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms linear;
@@ -4647,7 +4590,7 @@ input[type="search"]::-webkit-search-decoration {
 .trace-backdrop,
 .workspace-diff-backdrop,
 .conversation-find-backdrop {
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay-scrim);
   backdrop-filter: saturate(160%) blur(20px);
   border: 0;
   border-radius: 0;
@@ -4659,7 +4602,7 @@ input[type="search"]::-webkit-search-decoration {
 .conversation-find-panel {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--overlay-shadow);
 }
 
 .trace-panel,
@@ -4667,7 +4610,7 @@ input[type="search"]::-webkit-search-decoration {
   border-radius: 8px 0 0 8px;
   border: 1px solid var(--line-strong);
   border-right: 0;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--overlay-shadow);
 }
 
 /* —— 分段控件（TRACE / DIFF / LOG）—— */
@@ -4676,7 +4619,7 @@ input[type="search"]::-webkit-search-decoration {
   align-items: center;
   gap: 2px;
   padding: 2px;
-  background: rgba(120, 113, 100, 0.14);
+  background: var(--segment-track-bg);
   border-radius: 6px;
 }
 
@@ -4699,20 +4642,9 @@ input[type="search"]::-webkit-search-decoration {
 
 .segmented .text-icon-button[aria-pressed="true"],
 .segmented .text-icon-button.is-active {
-  background: var(--panel);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px var(--line);
+  background: var(--segment-active-bg);
+  box-shadow: var(--segment-active-shadow);
   color: var(--text);
-}
-
-@media (prefers-color-scheme: dark) {
-  .segmented {
-    background: rgba(120, 120, 128, 0.24);
-  }
-  .segmented .text-icon-button[aria-pressed="true"],
-  .segmented .text-icon-button.is-active {
-    background: #3d382e;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  }
 }
 
 /* —— 按钮：主操作琥珀实心、次操作安静 —— */
@@ -4776,7 +4708,7 @@ input[type="search"]::-webkit-search-decoration {
 
 .connection-pill {
   border-radius: 6px;
-  background: rgba(120, 120, 128, 0.12);
+  background: var(--pill-bg);
 }
 
 .thread-item {
@@ -4902,7 +4834,7 @@ button {
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 6px;
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--popover-shadow);
 }
 
 .context-menu[hidden] {

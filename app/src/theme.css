@@ -1,0 +1,108 @@
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", system-ui, sans-serif;
+  --void: #f7f5f1;
+  --black: #fffefb;
+  --panel: #fffefb;
+  --panel-raised: #f1eee7;
+  --line: rgba(63, 56, 46, 0.14);
+  --line-strong: rgba(63, 56, 46, 0.26);
+  --text: #211e1a;
+  --text-soft: #4b463e;
+  --muted: #837c70;
+  --dim: #a59d8e;
+  --accent: #c96a15;
+  --accent-strong: #a85510;
+  --accent-hover: #d87b2b;
+  --on-accent: #191309;
+  --accent-dim: #cf8b4d;
+  --accent-soft: rgba(201, 106, 21, 0.13);
+  --red: #d3392a;
+  --red-soft: rgba(211, 57, 42, 0.11);
+  --red-line: rgba(211, 57, 42, 0.45);
+  --success: #3f7a4b;
+  --success-soft: rgba(63, 122, 75, 0.1);
+  --card-shadow: 0 1px 2px rgba(46, 38, 26, 0.05), 0 6px 18px rgba(46, 38, 26, 0.07);
+  --stage-grid-line: rgba(120, 120, 128, 0.045);
+  --inverse-line: rgba(5, 7, 5, 0.45);
+  --segment-track-bg: rgba(120, 113, 100, 0.14);
+  --segment-active-bg: var(--panel);
+  --segment-active-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px var(--line);
+  --thread-scrim: rgba(21, 20, 18, 0.55);
+  --overlay-scrim: rgba(0, 0, 0, 0.32);
+  --overlay-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  --popover-shadow: 0 10px 32px rgba(0, 0, 0, 0.28);
+  --pill-bg: rgba(120, 120, 128, 0.12);
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", system-ui, sans-serif;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --void: #151412;
+  --black: #100f0d;
+  --panel: #1c1a17;
+  --panel-raised: #26231e;
+  --line: #35312a;
+  --line-strong: #474135;
+  --text: #ece7dd;
+  --text-soft: #c9c3b6;
+  --muted: #948d7f;
+  --dim: #6f695e;
+  --accent: #eda03c;
+  --accent-strong: #f5b35c;
+  --accent-hover: #f5b35c;
+  --on-accent: #191309;
+  --accent-dim: #b98040;
+  --accent-soft: rgba(237, 160, 60, 0.16);
+  --red: #ff6a58;
+  --red-soft: rgba(255, 106, 88, 0.15);
+  --red-line: rgba(255, 106, 88, 0.5);
+  --success: #86bd90;
+  --success-soft: rgba(134, 189, 144, 0.13);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.26), 0 6px 18px rgba(0, 0, 0, 0.3);
+  --stage-grid-line: rgba(120, 120, 128, 0.045);
+  --inverse-line: rgba(5, 7, 5, 0.45);
+  --segment-track-bg: rgba(120, 120, 128, 0.24);
+  --segment-active-bg: #3d382e;
+  --segment-active-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --thread-scrim: rgba(21, 20, 18, 0.55);
+  --overlay-scrim: rgba(0, 0, 0, 0.32);
+  --overlay-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  --popover-shadow: 0 10px 32px rgba(0, 0, 0, 0.28);
+  --pill-bg: rgba(120, 120, 128, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --void: #151412;
+    --black: #100f0d;
+    --panel: #1c1a17;
+    --panel-raised: #26231e;
+    --line: #35312a;
+    --line-strong: #474135;
+    --text: #ece7dd;
+    --text-soft: #c9c3b6;
+    --muted: #948d7f;
+    --dim: #6f695e;
+    --accent: #eda03c;
+    --accent-strong: #f5b35c;
+    --accent-hover: #f5b35c;
+    --on-accent: #191309;
+    --accent-dim: #b98040;
+    --accent-soft: rgba(237, 160, 60, 0.16);
+    --red: #ff6a58;
+    --red-soft: rgba(255, 106, 88, 0.15);
+    --red-line: rgba(255, 106, 88, 0.5);
+    --success: #86bd90;
+    --success-soft: rgba(134, 189, 144, 0.13);
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.26), 0 6px 18px rgba(0, 0, 0, 0.3);
+    --segment-track-bg: rgba(120, 120, 128, 0.24);
+    --segment-active-bg: #3d382e;
+    --segment-active-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  }
+}
