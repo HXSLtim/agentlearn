@@ -4,6 +4,13 @@ import type { ChatEvent } from "./types";
 const DEFAULT_API_BASE = "http://127.0.0.1:8000";
 const API_BASE_STORAGE_KEY = "agentlearn.apiBase";
 
+interface ServerStatus {
+  api_base: string;
+  managed: boolean;
+  server_id: string;
+  pid: number;
+}
+
 function normalizeApiBase(value: string, allowRemote = false): string | null {
   try {
     const url = new URL(value);
@@ -55,7 +62,29 @@ function resolveApiBase(): string {
   return DEFAULT_API_BASE;
 }
 
-export const API_BASE = resolveApiBase();
+export let API_BASE = resolveApiBase();
+
+export function setApiBase(value: string): string {
+  const normalized = normalizeApiBase(value, true);
+  if (!normalized) {
+    throw new Error(`invalid API base: ${value}`);
+  }
+  API_BASE = normalized;
+  return API_BASE;
+}
+
+export async function ensureApiServer(): Promise<ServerStatus | null> {
+  if (!("__TAURI_INTERNALS__" in window)) {
+    return null;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  const status = await invoke<ServerStatus>("ensure_server", {
+    preferred_base: API_BASE,
+    allow_fallback: true,
+  });
+  setApiBase(status.api_base);
+  return status;
+}
 
 export async function consumeSse(
   body: ReadableStream<Uint8Array>,

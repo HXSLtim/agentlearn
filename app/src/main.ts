@@ -84,6 +84,7 @@ import {
 import {
   API_BASE,
   consumeSse,
+  ensureApiServer,
   readError,
 } from "./api";
 import {
@@ -2834,14 +2835,36 @@ setShellBridge({
   switchThread,
 });
 
-runtimeApiBase.textContent = new URL(API_BASE).host;
-renderEverything();
-resizePrompt();
-void refreshEffort();
-// 启动时跟服务端对一次账：标题、轮数、归档状态都以后端为准。
-// 以前只有打开「恢复会话」才合并，侧栏一直顶着 localStorage 里的旧标题
-// （一排「未命名运行」就是这么来的）。失败静默——本地缓存照常能用。
-void fetchServerSessions(false);
+function showServerBootstrapError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  runtimeApiBase.textContent = "启动失败";
+  setStatusLight(runtimeLight, "is-error");
+  connectionPill.className = "connection-pill is-error";
+  connectionPill.innerHTML = '<span class="status-light is-error"></span>离线';
+  showToast(`本地运行时启动失败：${message}`);
+}
+
+async function bootstrapServer(): Promise<void> {
+  runtimeApiBase.textContent = "检测中…";
+  renderEverything();
+  resizePrompt();
+  try {
+    await ensureApiServer();
+    runtimeApiBase.textContent = new URL(API_BASE).host;
+  } catch (error) {
+    showServerBootstrapError(error);
+    return;
+  }
+  await Promise.all([
+    refreshEffort(),
+    // 启动时跟服务端对一次账：标题、轮数、归档状态都以后端为准。
+    // 以前只有打开「恢复会话」才合并，侧栏一直顶着 localStorage 里的旧标题
+    // （一排「未命名运行」就是这么来的）。失败静默——本地缓存照常能用。
+    fetchServerSessions(false),
+  ]);
+}
+
+void bootstrapServer();
 if (window.matchMedia("(max-width: 1180px)").matches) {
   runRailToggle.setAttribute("aria-pressed", "false");
 }

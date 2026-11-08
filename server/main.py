@@ -210,6 +210,8 @@ def _run_desktop(port: int) -> None:
             model_lister=list_models,
             trigger_loader=load_triggers,
             tool_gateway_factory=lambda: MCPManager(load_mcp_servers()),
+            launch_id=os.environ.get("AGENTLEARN_LAUNCH_ID"),
+            launch_secret=os.environ.get("AGENTLEARN_LAUNCH_SECRET"),
         )
     )
 

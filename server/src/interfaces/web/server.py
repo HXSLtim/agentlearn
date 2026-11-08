@@ -72,6 +72,9 @@ POST /plans/{plan_id}/confirm
     的 POST /chat 发起。
 """
 import json
+import hmac
+import hashlib
+import os
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -111,6 +114,9 @@ from infrastructure.config import (
 from infrastructure.store import Store
 from infrastructure.transcript import Transcript
 
+
+IDENTITY_PROTOCOL_VERSION = 1
+
 @dataclass(frozen=True)
 class WebDependencies:
     """desktop 服务的组合根注入项；web 模块自己不创建外部依赖。"""
@@ -127,6 +133,8 @@ class WebDependencies:
     model_lister: Callable[[LLMConfig], list[str]]
     trigger_loader: Callable[[], list[dict]]
     tool_gateway_factory: Callable[[], ToolGateway]
+    launch_id: str | None = None
+    launch_secret: str | None = None
 
 
 _store: Store
@@ -141,6 +149,10 @@ _chat_factory: Callable[[LLMConfig], ChatClient]
 _model_lister: Callable[[LLMConfig], list[str]]
 _trigger_loader: Callable[[], list[dict]]
 _started_at: float
+_started_wall_at: datetime
+_server_id: str
+_launch_id: str | None
+_launch_secret: str | None
 _cached_config: LLMConfig | None = None
 
 
@@ -203,6 +215,7 @@ def create_app(dependencies: WebDependencies) -> FastAPI:
     global _config_loader, _settings_loader, _settings_saver
     global _chat_factory, _model_lister, _trigger_loader
     global _started_at, _cached_config, _proactivity
+    global _started_wall_at, _server_id, _launch_id, _launch_secret
 
     _store = dependencies.store
     _transcript = dependencies.transcript
@@ -217,6 +230,10 @@ def create_app(dependencies: WebDependencies) -> FastAPI:
     _trigger_loader = dependencies.trigger_loader
     configure_tool_gateway(dependencies.tool_gateway_factory)
     _started_at = time.monotonic()
+    _started_wall_at = datetime.now(timezone.utc)
+    _server_id = str(uuid.uuid4())
+    _launch_id = dependencies.launch_id
+    _launch_secret = dependencies.launch_secret
     _cached_config = None
     _proactivity = None
 
@@ -230,6 +247,37 @@ def create_app(dependencies: WebDependencies) -> FastAPI:
     if backfilled:
         print(f"[startup] 给 {backfilled} 个历史会话补上了标题")
     return app
+
+
+@app.get("/agentlearn/identity")
+def agentlearn_identity() -> dict:
+    """desktop 壳的启动握手：产品身份、协议版本与本次拉起的凭证。
+
+    external server 没有 launch_secret，只能证明「自己是 AgentLearn」；
+    Tauri 拉起的 managed server 还要用 HMAC 证明「是这次 spawn 出来的那个
+    进程」。secret 只留在父子进程环境里，接口不回显。
+    """
+    identity = {
+        "product": "agentlearn",
+        "component": "desktop-api",
+        "protocol_version": IDENTITY_PROTOCOL_VERSION,
+        "ready": True,
+        "server_id": _server_id,
+        "pid": os.getpid(),
+        "started_at": _started_wall_at.isoformat(),
+        "data_root": str(Path("data").resolve()),
+        "launch_id": _launch_id,
+    }
+    if _launch_id is not None and _launch_secret is not None:
+        digest = hmac.new(
+            _launch_secret.encode("utf-8"),
+            f"{_launch_id}:{identity['pid']}:{IDENTITY_PROTOCOL_VERSION}".encode(
+                "utf-8"
+            ),
+            hashlib.sha256,
+        ).hexdigest()
+        identity["launch_proof"] = digest
+    return identity
 
 
 def _backfill_session_titles(limit: int = 300) -> int:
