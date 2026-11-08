@@ -83,12 +83,17 @@ desktop / TUI 还没接上的界面：
 - [x] 按 session 分开 sandbox 工作目录 ✅（2026-11-07，D35）：`sessions.workdir` 记每个会话的起跑目录（界面可选，默认仍是 data/sandbox），bash / start_job 经 contextvar 取当轮目录；「变更」和 @file 跟会话目录走。两个会话的相对路径互不可见✅（各在各的项目里）；后半句（并行执行器的冲突检测）仍未做，跟下面「并行执行」那条一起算。
 - [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
 - [ ] web 在绑定非 127.0.0.1 之前先加鉴权。验收：现在 `uvicorn.run(app, port=port)` 没有 host，默认只本机；没有鉴权时拒绝 `--host 0.0.0.0`。
-- [ ] Tauri 启动时拉起 desktop server，并去掉模板 `greet` 命令。依据：`app/src-tauri/src/lib.rs` 只有 greet。
+- [x] Tauri dev 态检测并拉起 desktop server（2026-11-09，D45）：
+      `/agentlearn/identity` 校验产品/协议，managed server 额外校验 launch id、
+      PID 与 HMAC proof；默认端口失败可退随机回环端口，退出只 kill 自己拉起
+      的子进程。模板 `greet` 已移除。正式包 server 交付物与安装路径仍未定。
 - [x] 前端 API 地址可配置 ✅（2026-11-07）：`api.ts` 按 `?apiBase=`、
       `VITE_AGENTLEARN_API_BASE`、localStorage、默认回环地址解析；查询参数会
       持久化，侧栏显示实际 host。真实浏览器用 `?apiBase=http://127.0.0.1:18081`
       打开，后端收到 `/settings` 200，380×900 无横向溢出。
-- [ ] 替换 Tauri 模板图标为 AgentLearn 图标。
+- [ ] 替换 Tauri 模板图标为 AgentLearn 图标。2026-11-09 已画
+      `app/src-tauri/icons/agentlearn-icon.svg` 源稿；待确认视觉后生成
+      PNG/ICNS/ICO 全套并替换。
 - [ ] 顶层包名出现冲突时，再把 `domain` / `application` / `infrastructure` / `interfaces` 收成 `agentlearn.*`。验收：现在不改；`server/pyproject.toml` 的 `packages.find.where = src` 就是现状。
 - [x] 客户端断开的 `GeneratorExit` 收成 `cancelled`（2026-11-06，D33）：不改
       成功率统计的语义，只解决「trace 永久挂运行中、界面分不清假运行」。
@@ -99,6 +104,9 @@ desktop / TUI 还没接上的界面：
       断开、正常收尾、抢占各条路径的 span 终态；`npm run build`、`compileall` 通过。
       旧库里已积的 running 行仍按文末欠账处理。
 - [ ] 「墨与琥珀」浅色主题里 11px 琥珀小字（eyebrow / 状态 / 快捷键提示）对纸底只有约 3.5:1，低于 AA 的 4.5:1；大标题与描边不受影响。验收：要么加一档 `--accent-text`（浅色用 `#a85510`、深色仍用 `#eda03c`）只套小字，要么明确记录 accent 小字只是装饰、正文信息不用它。依据：2026-11-05 细节巡检按 WCAG 公式算得，属既有取色，不阻塞当前工作。
+- [x] 前端颜色主题 token 化（2026-11-09，D46）：light/dark/auto 与语义 token
+      收进 `theme.css`，`styles.css` 只消费变量；custom 支持 URL 参数与控制台
+      `AgentLearnTheme.set()` 试色并持久化，`reset()` 回 auto。
 
 路线图后段（层本身已完成，这里是剩下的事）：
 
@@ -114,6 +122,13 @@ desktop / TUI 还没接上的界面：
       工具卡与折叠思考；流式思考可展开为尾部 280 字并保留手动展开状态，
       审批/verbose 仍用完整工具卡。mock SSE 验证两段 thinking、
       tool_use/tool_result 与正文，380×900 截图无横向溢出。
+- [x] TUI 转录档对齐 WebUI（2026-11-08，D43）：normal 不再隐藏思考和工具，
+      改为折叠思考 + 简略工具卡；thinking 展开思考但工具仍简略；verbose 保留
+      完整入参/出参。流式思考只露尾部 280 字。headless 断言三态与尾巴长度。
+- [x] TUI 动作按钮与 desktop 同语义（2026-11-09，D44）：顶栏补
+      「新建会话 / 轨迹 / 变更 / 日志」，输入台目录改成按钮，发送/停止
+      按运行态切换；布局仍按终端密度自适应。tmux 宽窄截图与 headless
+      点击断言通过。
 - [ ] 意图分类做路由：闲聊直接答、任务进 agent loop、明确命令走快捷路径。验收：分类器省不下主模型开销就不启用。设计见 docs/superpowers/specs/2026-11-05-intent-funnel-design.md（三层漏斗：规则 → few-shot → 微调兜底）。
 - [ ] 意图分类做工具裁剪：请求里只放相关工具定义。
 - [ ] 意图分类给 steering 档位建议。验收：前端传入的档位仍可覆盖建议。

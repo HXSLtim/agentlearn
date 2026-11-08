@@ -1238,3 +1238,100 @@ normal 档出现 compact 工具卡与思考折叠块；手动展开后跨 SSE �
 活动 10：水合条目与计数 / 新轮清空 / 完成序 / 6 条上限 / 最旧挤出；挂图 6：
 挂两张 / 列表 / 序号+路径+all 移除 / 状态行同步）；120×36 tmux 实机截图三张
 （台账+水合活动、/resume 按钮排、分支 InputModal）人工检查。
+
+
+---
+
+## D43 TUI 转录档对齐 WebUI 的运行中可见性（2026-11-08）
+
+**背景**：D41 让 desktop normal 档显示简略工具卡和可展开思考，TUI 仍用
+`transcript-normal` / `transcript-thinking` 的 CSS 把 `.reasoning` 和
+`.tool-card` 整段 `display: none`。同一轮在两端的可见事实不一致，终端用户
+在工具执行期间只能看账本，不知道时间线上正在发生什么。
+
+**决定**：
+
+1. normal 显示折叠思考和简略工具卡：工具名、执行中 / 等待审批 / 完成 / 出错、
+   耗时、一行参数摘要（优先 command / path / name / text，最多 120 字）。
+   不展开工具输出。
+2. thinking 自动展开思考，工具卡仍保持简略。verbose 保持完整入参和出参。
+3. 流式思考的折叠标题继续滚动最新 88 字；展开内容在进行中只显示尾部 280 字，
+   结束后恢复全文。组件不随 token 重挂，手动展开状态自然保留。
+4. 审批不降级：TUI 仍弹完整参数的审批层；时间线卡片只把状态改成「等待审批」。
+
+**否掉的备选**：
+
+- 只删 CSS、沿用原来的完整工具卡——normal 会把命令输出整段铺进时间线，
+  和 WebUI 选择简略卡的理由相反。
+- 审批等待时把时间线卡也换成完整入参——完整参数已经在审批弹层里，
+  时间线再铺一遍会挡住后续输出。
+
+**验收**：Textual headless 断言 compact 只有一行命令且不含 `bash(`、
+等待审批文案、完成后不泄漏输出、verbose 同时含入参和输出；流式思考
+`_visible_text` 为 281 字且以最新片段结尾，`finish()` 后恢复全文。
+结构截图人工检查折叠标题、简略工具行、展开思考和完整工具行。
+
+---
+
+## D44 两端按钮语义一致，布局允许终端化（2026-11-09）
+
+**背景**：D38/D43 连续对齐信息结构后，TUI 仍把主要动作藏在快捷键和斜杠
+命令里；desktop 顶栏有「轨迹 / 变更 / 日志」和可见的新建入口，输入台有
+目录、停止、发送。终端强行克隆三栏网页布局会把 36 行屏挤碎。
+
+**决定**：
+
+1. 保留 TUI「顶栏 + 时间线/账本 + 输入台」的终端布局，不克隆 desktop 的
+   左会话栏；但同一层级的动作入口必须同名、同效。
+2. 顶栏动作组提供「新建会话 / 轨迹 / 变更 / 日志」：新建退出到组合根的
+   新 session；轨迹 / 变更打开既有只读弹层；日志显隐右侧账本。
+3. 输入台与 desktop 同语义：`目录 sandbox` 是按钮；空闲显示 `发送 →`，
+   运行中变 `插话` 并露出 `停止`，停止等待期按钮变 `停止中` 且禁用；
+   快捷键提示保留 `/`、`@`、思考、插话、审批、新会话。
+
+**验收**：150×45 与 104×36 tmux 实机截图检查按钮同行、不遮输入框；
+headless 点击验证日志显隐、轨迹收条、变更弹层、空发送/空停止不崩；
+运行态断言发送/停止的文案与禁用状态。
+
+---
+
+## D45 desktop 壳托管 server 的身份与启动协议（2026-11-09）
+
+**背景**：Tauri 壳不能把任意 8000 端口服务当成自己的后端；也不能为了“自动启动”
+去杀用户手动起的进程。managed server 还要回答一个更强的问题：这个 ready 服务
+是不是本次 Tauri spawn 出来的子进程，而不是刚好抢到同一端口的旧进程。
+
+**协议**：
+
+1. `GET /agentlearn/identity` 返回 `product=agentlearn`、`component=desktop-api`、
+   `protocol_version=1`、`ready`、`server_id`、`pid`。字段不匹配即拒绝接管。
+2. external server 只要求身份匹配：Tauri 复用、标记 external，不 kill、不重启。
+3. managed server 由 Tauri 生成 `launch_id + launch_secret` 并注入子进程环境；
+   server 对 `launch_id:pid:protocol_version` 计算 HMAC-SHA256，只返回 proof，
+   不回显 secret。Tauri 校验 proof、PID 与协议版本后才写入 managed 状态。
+4. dev 直接启动 `server/.venv/bin/python main.py desktop`，保证 child PID 就是
+   server PID；`uv run` 会引入父进程，不能作为 PID 证明。默认 8000 失败时允许
+   选择回环随机端口；Tauri 退出只 kill 自己管理的 child。
+5. 正式包仍拒绝 managed 启动，等 server 交付物和安装路径定义后再放开；这不是
+   “打包已支持”的证据。
+
+**前端时序**：浏览器仍按原 API base 直连；Tauri 先 `ensure_server`，成功后更新
+可写的 `API_BASE` 和侧栏 host，再拉 `/settings` 与 `/sessions`，避免旧地址抢先
+请求。握手失败保留本地界面并显示离线/启动失败，不冒充在线。
+
+---
+
+## D46 前端颜色主题只维护 token 层（2026-11-09）
+
+**决定**：组件 CSS 不新增颜色字面量。`theme.css` 定义 light、dark、auto 与
+语义 token（画布、面板、文本、强调、状态、网格线、分段控件、遮罩、投影等）；
+`styles.css` 只消费 token。主题切换由 `data-theme=auto|light|dark|custom` 控制，
+auto 继续跟随 `prefers-color-scheme`。
+
+自定义入口保留两层：URL 可用 `?theme=custom&--accent=%230969da` 试色；控制台
+`AgentLearnTheme.set("--accent", "#0969da")` 会校验颜色 token 与 CSS color 后
+写入 localStorage。`reset()` 回 auto 并清空覆盖。颜色 token 有白名单，投影等
+复合值暂不开放注入。
+
+**否掉的备选**：在每个组件上继续写 rgba——主题只能靠全文替换，浅深两套会漂；
+只给 CSS 变量不加运行时入口——开发态可改，真实 WebView 用户无法持久试色。

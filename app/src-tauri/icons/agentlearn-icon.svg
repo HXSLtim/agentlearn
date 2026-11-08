@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="AgentLearn icon">
+  <defs>
+    <linearGradient id="amber" x1="176" y1="180" x2="848" y2="844" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f5b35c"/>
+      <stop offset=".55" stop-color="#eda03c"/>
+      <stop offset="1" stop-color="#c96a15"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="176" y1="844" x2="848" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#211d18"/>
+      <stop offset="1" stop-color="#151412"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#ink)"/>
+  <rect x="34" y="34" width="956" height="956" fill="none" stroke="#3b342a" stroke-width="20"/>
+  <rect x="82" y="82" width="860" height="860" fill="none" stroke="#252119" stroke-width="8"/>
+
+  <path d="M188 742 512 170l324 572-324-140-324 140Z" fill="url(#amber)"/>
+  <path d="m343 662 169-330 169 330" fill="none" stroke="#151412" stroke-width="54" stroke-linecap="square" stroke-linejoin="miter"/>
+
+  <g fill="#eda03c">
+    <rect x="188" y="802" width="120" height="18"/>
+    <rect x="356" y="802" width="238" height="18"/>
+    <rect x="642" y="802" width="82" height="18"/>
+    <rect x="782" y="802" width="54" height="18"/>
+  </g>
+</svg>
