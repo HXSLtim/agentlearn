@@ -1443,23 +1443,7 @@ class AgentLearnTUI(App[str | None]):
             self._update_ledger()
             return
         if kind == "context_warning":
-            self._finish_live_blocks()
-            self._push_activity(
-                "警告",
-                "上下文接近预算",
-                f"{event['estimate_tokens']} / {event['budget_tokens']} token",
-                tone="error",
-            )
-            estimate = event["estimate_tokens"]
-            budget = event["budget_tokens"]
-            ratio = event["ratio"]
-            await self._show_command_result(
-                "CONTEXT",
-                f"工作集接近预算：{estimate} / {budget} token"
-                f"（{round(ratio * 100)}%）。超过预算会自动压缩；可 /compact 手动压缩。",
-                warning=True,
-            )
-            self.notify("工作集接近预算", severity="warning")
+            await self._apply_context_warning(event)
             return
         if kind == "steering_injected":
             self._finish_live_blocks()
@@ -1590,6 +1574,25 @@ class AgentLearnTUI(App[str | None]):
             await self.query_one("#timeline", VerticalScroll).mount(self._assistant)
         self._assistant.append_text(fragment)
         self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+
+    async def _apply_context_warning(self, event: dict) -> None:
+        self._finish_live_blocks()
+        estimate = event["estimate_tokens"]
+        budget = event["budget_tokens"]
+        ratio = event["ratio"]
+        self._push_activity(
+            "警告",
+            "上下文接近预算",
+            f"{estimate} / {budget} token",
+            tone="error",
+        )
+        await self._show_command_result(
+            "CONTEXT",
+            f"工作集接近预算：{estimate} / {budget} token"
+            f"（{round(ratio * 100)}%）。超过预算会自动压缩；可 /compact 手动压缩。",
+            warning=True,
+        )
+        self.notify("工作集接近预算", severity="warning")
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
