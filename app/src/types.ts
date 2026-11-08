@@ -309,6 +309,7 @@ export interface WorkspaceDiffFile {
   status: string;
   binary: boolean;
   truncated: boolean;
+  omitted?: boolean;
   hunks: WorkspaceDiffHunk[];
   additions: number;
   deletions: number;
@@ -335,6 +336,8 @@ export interface WorkspaceDiffResponse {
   files: WorkspaceDiffFile[];
   untracked_count: number;
   include_untracked: boolean;
+  partial?: boolean;
+  omitted_count?: number;
 }
 
 export interface WorkspacePathsResponse {

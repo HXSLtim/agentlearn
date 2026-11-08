@@ -551,13 +551,14 @@ def _session_workdir(session_id: str) -> Path:
 def get_workspace_diff(include_untracked: bool = False, session_id: str = ""):
     """只读列出 Git 工作区变更文件，供 desktop diff 工作台使用。
 
-    session_id 给了就查那个会话的工作目录，没给保持旧行为（server 进程
-    的 cwd）——@file 补全和它同一个约定。
+    没带 session_id（desktop 新会话还没发过消息）也走会话默认目录 sandbox，
+    不再退回 server 进程的 cwd。新开会话立刻看变更，应当和这个会话之后
+    的工具起跑点是同一棵树。
     """
     try:
         return changed_files(
             include_untracked=include_untracked,
-            start=_session_workdir(session_id) if session_id else None,
+            start=_session_workdir(session_id),
         )
     except WorkspaceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -569,7 +570,7 @@ def get_workspace_paths(q: str = "", limit: int = 50, session_id: str = ""):
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit 要在 1..100 之间。")
     try:
-        return complete_paths(q, limit=limit, start=_session_workdir(session_id) if session_id else None)
+        return complete_paths(q, limit=limit, start=_session_workdir(session_id))
     except WorkspaceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

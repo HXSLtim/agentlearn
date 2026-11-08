@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 MAX_PATCH_BYTES = 1_000_000
+# 一次面板最多展开这么多补丁。新会话会把整个仓库的未跟踪文件算进来
+# （例如 node_modules）；不设上限的话每个文件一次 git diff，界面会一直停在加载。
+MAX_TOTAL_PATCH_BYTES = 1_000_000
 MAX_PATH_COMPLETIONS = 100
+_COMMAND_TIMEOUT_SECONDS = 8
+_TOTAL_TIMEOUT_SECONDS = 20
 _HUNK_RE = re.compile(
     r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
     r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@"
@@ -22,30 +29,55 @@ def _git_env() -> dict[str, str]:
     # status 默认可顺手刷新 index；只读面板连这个可选写入也关掉。
     env["GIT_OPTIONAL_LOCKS"] = "0"
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_PAGER"] = "cat"
+    env["PAGER"] = "cat"
     env.pop("GIT_EXTERNAL_DIFF", None)
     env.pop("GIT_DIFF_OPTS", None)
     return env
 
 
-def _run_git(root: Path, args: list[str]) -> bytes:
+def _kill_git(proc: subprocess.Popen[bytes]) -> None:
+    """超时后连同孙进程一起杀掉。
+
+    只杀直接子进程不够：git 拉起的钩子或 fsmonitor 若继承了管道，
+    communicate 会一直等 EOF，调用方就停在「正在读取」。
+    """
     try:
-        completed = subprocess.run(
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
+
+
+def _run_git(root: Path, args: list[str], timeout: float = _COMMAND_TIMEOUT_SECONDS) -> bytes:
+    # stdin 必须关掉。继承终端的话，git 或其钩子会把 Esc 读走，
+    # 面板就关不掉。新会话另起进程，这是第一次碰 git，最容易踩中。
+    try:
+        proc = subprocess.Popen(
             ["git", "-C", str(root), "--no-pager", *args],
-            capture_output=True,
-            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=_git_env(),
-            timeout=8,
+            start_new_session=True,
         )
     except FileNotFoundError as exc:
         raise WorkspaceError("没有找到 git 命令。") from exc
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        _kill_git(proc)
         raise WorkspaceError("读取 Git 工作区超时。") from exc
     # `git diff --no-index` 用 1 表示“有差异”，不是查询失败。
     allowed = (0, 1) if "--no-index" in args else (0,)
-    if completed.returncode not in allowed:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise WorkspaceError(detail or f"git 退出码 {completed.returncode}")
-    return completed.stdout
+    if proc.returncode not in allowed:
+        detail = (stderr or b"").decode("utf-8", "replace").strip()
+        raise WorkspaceError(detail or f"git 退出码 {proc.returncode}")
+    return stdout or b""
 
 
 def find_repository_root(start: Path | None = None) -> Path:
@@ -194,7 +226,7 @@ def changed_files(
         ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )
     fields = raw.split(b"\0")
-    files: list[dict] = []
+    entries: list[dict] = []
     untracked_count = 0
     index = 0
     while index < len(fields):
@@ -217,21 +249,82 @@ def changed_files(
             status = "untracked"
         else:
             status = _status_label(xy)
-        patch = _patch(root, path, status == "untracked")
-        parsed = _parse_patch(patch)
-        files.append(
-            {
-                "path": path,
-                "old_path": old_path,
-                "status": status,
-                **parsed,
-            }
+        entries.append(
+            {"path": path, "old_path": old_path, "status": status}
         )
+    # 已跟踪的改动优先展开。未跟踪目录（node_modules）否则会占满预算，
+    # 把用户真正改过的文件挤掉。输出仍按 git status 的原顺序。
+    deadline = time.monotonic() + _TOTAL_TIMEOUT_SECONDS
+    used = 0
+    stop = False
+    partial = False
+    parsed_by_id: dict[int, dict] = {}
+    ordered = sorted(entries, key=lambda entry: entry["status"] == "untracked")
+    for entry in ordered:
+        timed_out = time.monotonic() >= deadline
+        if stop or timed_out or used >= MAX_TOTAL_PATCH_BYTES:
+            stop = True
+            partial = partial or timed_out
+            parsed_by_id[id(entry)] = _omitted_file(entry)
+            continue
+        try:
+            patch = _patch(root, entry["path"], entry["status"] == "untracked")
+        except WorkspaceError:
+            stop = True
+            partial = True
+            parsed_by_id[id(entry)] = _omitted_file(entry)
+            continue
+        used += len(patch)
+        parsed_by_id[id(entry)] = {
+            **entry,
+            **_cap_diff_lines(_parse_patch(patch)),
+            "omitted": False,
+        }
+    files = [parsed_by_id[id(entry)] for entry in entries]
     return {
         "root": str(root),
         "files": files,
         "untracked_count": untracked_count,
         "include_untracked": include_untracked,
+        "partial": partial,
+        "omitted_count": sum(1 for file in files if file["omitted"]),
+    }
+
+
+_MAX_DIFF_LINES = 400
+
+
+def _cap_diff_lines(parsed: dict) -> dict:
+    """单个文件只把前 400 行交给界面。再多就会在主线程上撑死布局。"""
+    kept: list[dict] = []
+    count = 0
+    for hunk in parsed["hunks"]:
+        if count >= _MAX_DIFF_LINES:
+            parsed["truncated"] = True
+            break
+        lines = hunk["lines"]
+        room = _MAX_DIFF_LINES - count
+        if len(lines) > room:
+            kept.append({**hunk, "lines": lines[:room]})
+            count += room
+            parsed["truncated"] = True
+            break
+        kept.append(hunk)
+        count += len(lines)
+    parsed["hunks"] = kept
+    return parsed
+
+
+def _omitted_file(entry: dict) -> dict:
+    """预算或超时时只留路径，不再为这个文件启动 git diff。"""
+    return {
+        **entry,
+        "binary": False,
+        "truncated": False,
+        "hunks": [],
+        "additions": 0,
+        "deletions": 0,
+        "omitted": True,
     }
 
 
