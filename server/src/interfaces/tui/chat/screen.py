@@ -2142,15 +2142,7 @@ class AgentLearnTUI(App[str | None]):
             )
             return
         if not argument or argument == "list":
-            lines = [
-                f"{position}. {path}"
-                for position, path in enumerate(self._pending_image_paths, start=1)
-            ]
-            await self._show_command_result(
-                "DETACH",
-                f"已挂 {len(lines)} 张：\n" + "\n".join(lines)
-                + "\n/detach <序号|路径|all>",
-            )
+            await self._show_pending_images("DETACH", "/detach <序号|路径|all>")
             return
         if argument == "all":
             self.pending_images = []
@@ -2158,6 +2150,28 @@ class AgentLearnTUI(App[str | None]):
             self._update_attachment_status()
             await self._show_command_result("DETACH", "已移除全部挂图。")
             return
+        index = await self._resolve_pending_image_index(argument)
+        if index is None:
+            return
+        removed = self._pending_image_paths.pop(index)
+        self.pending_images.pop(index)
+        self._update_attachment_status()
+        await self._show_command_result(
+            "DETACH",
+            f"已移除 {removed}（剩 {len(self.pending_images)} 张）。",
+        )
+
+    async def _show_pending_images(self, tag: str, usage: str) -> None:
+        lines = [
+            f"{position}. {path}"
+            for position, path in enumerate(self._pending_image_paths, start=1)
+        ]
+        await self._show_command_result(
+            tag,
+            f"已挂 {len(lines)} 张：\n" + "\n".join(lines) + f"\n{usage}",
+        )
+
+    async def _resolve_pending_image_index(self, argument: str) -> int | None:
         if argument.isdigit():
             # 序号是 1 起：跟上面列表里打出来的编号一致。
             index = int(argument) - 1
@@ -2167,7 +2181,7 @@ class AgentLearnTUI(App[str | None]):
                     f"序号超出范围：{argument}（共 {len(self._pending_image_paths)} 张）。",
                     error=True,
                 )
-                return
+                return None
         else:
             # 路径匹配用后缀：完整路径太长，打文件名或末几级目录就够。
             matches = [
@@ -2179,7 +2193,7 @@ class AgentLearnTUI(App[str | None]):
                 await self._show_command_result(
                     "DETACH", f"没有匹配的路径：{argument}", error=True
                 )
-                return
+                return None
             if len(matches) > 1:
                 listing = "、".join(str(m + 1) for m in matches)
                 await self._show_command_result(
@@ -2187,15 +2201,9 @@ class AgentLearnTUI(App[str | None]):
                     f"「{argument}」匹配多张（序号 {listing}），请用序号指定。",
                     error=True,
                 )
-                return
+                return None
             index = matches[0]
-        removed = self._pending_image_paths.pop(index)
-        self.pending_images.pop(index)
-        self._update_attachment_status()
-        await self._show_command_result(
-            "DETACH",
-            f"已移除 {removed}（剩 {len(self.pending_images)} 张）。",
-        )
+        return index
 
     async def _command_export(self, argument: str) -> None:
         transcript = getattr(self.conversation, "transcript", None)
