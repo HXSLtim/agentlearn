@@ -2278,20 +2278,31 @@ class AgentLearnTUI(App[str | None]):
                 "EXPORT", "当前会话还没有可导出的正文。", error=True
             )
             return
-        if argument:
-            path = Path(argument).expanduser().resolve()
-        else:
-            path = (
-                transcript.directory.parent
-                / "exports"
-                / f"agentlearn-{self.session_id}.md"
-            )
-            path.parent.mkdir(parents=True, exist_ok=True)
+        path = self._export_path(transcript, argument)
         markdown = transcript_to_markdown(
             messages,
             session_id=self.session_id,
             model=self.conversation.chat.model,
         )
+        if not await self._write_export(path, markdown):
+            return
+        await self._show_command_result(
+            "EXPORT",
+            f"{path}\nMarkdown 已导出 · {len(markdown)} chars · {len(messages)} messages",
+        )
+
+    def _export_path(self, transcript, argument: str) -> Path:
+        if argument:
+            return Path(argument).expanduser().resolve()
+        path = (
+            transcript.directory.parent
+            / "exports"
+            / f"agentlearn-{self.session_id}.md"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    async def _write_export(self, path: Path, markdown: str) -> bool:
         try:
             with path.open("x", encoding="utf-8") as handle:
                 handle.write(markdown)
@@ -2299,14 +2310,11 @@ class AgentLearnTUI(App[str | None]):
             await self._show_command_result(
                 "EXPORT", f"文件已存在，不覆盖：\n{path}", error=True
             )
-            return
+            return False
         except OSError as exc:
             await self._show_command_result("EXPORT", str(exc), error=True)
-            return
-        await self._show_command_result(
-            "EXPORT",
-            f"{path}\nMarkdown 已导出 · {len(markdown)} chars · {len(messages)} messages",
-        )
+            return False
+        return True
 
     async def _command_resume(self, argument: str) -> None:
         if self.session_loader is None:
