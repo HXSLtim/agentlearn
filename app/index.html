@@ -204,13 +204,14 @@
           <span class="status-light is-ready" id="ledger-light"></span>
         </header>
 
-        <section class="run-status-card">
-          <span class="mini-label">状态</span>
-          <strong id="run-state">就绪</strong>
-          <p id="run-state-copy">等待第一条消息</p>
-        </section>
+        <div class="run-rail-scroll">
+          <section class="run-status-card">
+            <span class="mini-label">状态</span>
+            <strong id="run-state">就绪</strong>
+            <p id="run-state-copy">等待第一条消息</p>
+          </section>
 
-        <dl class="run-metrics">
+          <dl class="run-metrics">
           <div>
             <dt>会话</dt>
             <dd id="run-session">—</dd>
@@ -263,7 +264,8 @@
             <dt>消息插话</dt>
             <dd id="run-steering">队列</dd>
           </div>
-        </dl>
+          </dl>
+        </div>
 
         <section class="activity-section">
           <div class="section-heading">

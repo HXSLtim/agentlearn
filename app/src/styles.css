@@ -1886,7 +1886,7 @@ kbd {
   flex-direction: column;
   gap: 15px;
   padding: 18px 16px 14px;
-  overflow-y: auto;
+  overflow: hidden;
   color: var(--text);
   background: var(--black);
   border-left: 1px solid var(--line-strong);
@@ -1899,6 +1899,12 @@ kbd {
   justify-content: space-between;
   padding: 0 0 12px;
   border-bottom: 1px solid var(--line-strong);
+}
+
+.run-rail-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .run-rail-heading h2 {
@@ -1988,8 +1994,11 @@ kbd {
 }
 
 .activity-section {
+  display: flex;
   min-height: 0;
-  flex: 1;
+  flex: 0 0 auto;
+  flex-direction: column;
+  max-height: 232px;
 }
 
 .section-heading {
@@ -2010,10 +2019,13 @@ kbd {
 }
 
 .activity-list {
+  min-height: 0;
+  flex: 1;
   margin: 0;
   padding: 0;
   list-style: none;
   border-top: 1px solid var(--line);
+  overflow-y: auto;
 }
 
 .activity-item {
@@ -4685,17 +4697,20 @@ input[type="search"]::-webkit-search-decoration {
   font-weight: 600;
 }
 
-/* —— 原生窗口：红绿灯落在左侧栏头上，给 74px 让位；窗口拖拽靠
-   stage-header 与 rail-header 上的 data-tauri-drag-region —— */
+/* —— 原生窗口：红绿灯占左上角自己的一行，logo 回到侧栏内容的左对齐。
+   横向让位会把字标挤到栏边或折到下一行；窄屏收起侧栏时同样把
+   stage-header 整体下移，而不是把标题往右推。拖拽区仍是两个 header。 */
 .is-tauri .rail-header {
-  min-height: 40px;
-  padding-left: 74px;
+  align-items: flex-end;
+  min-height: 58px;
+  padding: 30px 0 0;
 }
 
-/* 窗口窄到 ≤900 时左栏收成抽屉，红绿灯下的位置换成 stage-header 的汉堡键 */
 @media (max-width: 900px) {
   .is-tauri .stage-header {
-    padding-left: 84px;
+    align-items: end;
+    min-height: 78px;
+    padding: 30px 16px 8px;
   }
 }
 
