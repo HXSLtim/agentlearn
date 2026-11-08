@@ -1457,37 +1457,7 @@ class AgentLearnTUI(App[str | None]):
             self._apply_plan(event)
             return
         if kind == "tool_result":
-            card = self._tool_cards.get(event["id"])
-            if card is None:
-                card = ToolCard(
-                    event["id"],
-                    event.get("name", "tool"),
-                    {},
-                    detailed=self.transcript_mode == "verbose",
-                )
-                self._tool_cards[event["id"]] = card
-                await self.query_one("#timeline", VerticalScroll).mount(card)
-            if card is not None:
-                card.set_result(
-                    event["output"],
-                    event["is_error"],
-                    event["elapsed_ms"],
-                )
-            index = self._activity_by_tool.get(event["id"])
-            if index is not None:
-                first_line = _first_output_line(str(event.get("output", "")))
-                detail = (
-                    f"{format_duration(event['elapsed_ms'])} · {first_line}"
-                    if event.get("elapsed_ms") is not None
-                    else first_line or "完成"
-                )
-                self._set_activity(
-                    index,
-                    tag="错误" if event.get("is_error") else "工具",
-                    detail=detail,
-                    tone="error" if event.get("is_error") else "done",
-                )
-            self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+            await self._apply_tool_result(event)
 
     async def _apply_thinking(self, event: dict) -> None:
         fragment = event["text"]
@@ -1608,6 +1578,39 @@ class AgentLearnTUI(App[str | None]):
             self._plan_closed(plan_id, confirmed)
 
         self.push_screen(PlanScreen(plan_text), plan_resolved)
+
+    async def _apply_tool_result(self, event: dict) -> None:
+        card = self._tool_cards.get(event["id"])
+        if card is None:
+            card = ToolCard(
+                event["id"],
+                event.get("name", "tool"),
+                {},
+                detailed=self.transcript_mode == "verbose",
+            )
+            self._tool_cards[event["id"]] = card
+            await self.query_one("#timeline", VerticalScroll).mount(card)
+        if card is not None:
+            card.set_result(
+                event["output"],
+                event["is_error"],
+                event["elapsed_ms"],
+            )
+        index = self._activity_by_tool.get(event["id"])
+        if index is not None:
+            first_line = _first_output_line(str(event.get("output", "")))
+            detail = (
+                f"{format_duration(event['elapsed_ms'])} · {first_line}"
+                if event.get("elapsed_ms") is not None
+                else first_line or "完成"
+            )
+            self._set_activity(
+                index,
+                tag="错误" if event.get("is_error") else "工具",
+                detail=detail,
+                tone="error" if event.get("is_error") else "done",
+            )
+        self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
