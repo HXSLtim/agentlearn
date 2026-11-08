@@ -1451,35 +1451,7 @@ class AgentLearnTUI(App[str | None]):
             await self._apply_tool_use(event)
             return
         if kind == "tool_approval":
-            approval_id = event.get("approval_id")
-            if not approval_id or self.approval is None:
-                return
-            tool_name = event.get("name", "tool")
-            self._pending_approval_id = approval_id
-            # 用户在事件到达前刚切到 auto/yolo：审批已经不再需要，
-            # 不再弹一个马上失效的旧模态框。
-            if not self.approval.requires_approval(self.approval_mode, tool_name):
-                self.approval.decide(approval_id, True)
-                self._pending_approval_id = None
-                if self.streaming:
-                    self._set_running_state("STREAMING")
-                return
-            self._set_running_state("APPROVAL")
-            waiting = self._tool_cards.get(event.get("id", ""))
-            if waiting is not None:
-                waiting.set_waiting(True)
-
-            def resolved(choice: ApprovalChoice | None) -> None:
-                self._approval_closed(approval_id, choice)
-
-            self.push_screen(
-                ApprovalScreen(
-                    tool_name,
-                    event.get("input", {}),
-                    event.get("mode", self.approval_mode),
-                ),
-                resolved,
-            )
+            self._apply_tool_approval(event)
             return
         if kind == "plan":
             self._finish_live_blocks()
@@ -1602,6 +1574,37 @@ class AgentLearnTUI(App[str | None]):
         await self.query_one("#timeline", VerticalScroll).mount(card)
         self._update_ledger()
         self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+
+    def _apply_tool_approval(self, event: dict) -> None:
+        approval_id = event.get("approval_id")
+        if not approval_id or self.approval is None:
+            return
+        tool_name = event.get("name", "tool")
+        self._pending_approval_id = approval_id
+        # 用户在事件到达前刚切到 auto/yolo：审批已经不再需要，
+        # 不再弹一个马上失效的旧模态框。
+        if not self.approval.requires_approval(self.approval_mode, tool_name):
+            self.approval.decide(approval_id, True)
+            self._pending_approval_id = None
+            if self.streaming:
+                self._set_running_state("STREAMING")
+            return
+        self._set_running_state("APPROVAL")
+        waiting = self._tool_cards.get(event.get("id", ""))
+        if waiting is not None:
+            waiting.set_waiting(True)
+
+        def resolved(choice: ApprovalChoice | None) -> None:
+            self._approval_closed(approval_id, choice)
+
+        self.push_screen(
+            ApprovalScreen(
+                tool_name,
+                event.get("input", {}),
+                event.get("mode", self.approval_mode),
+            ),
+            resolved,
+        )
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
