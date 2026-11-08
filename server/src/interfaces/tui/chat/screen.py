@@ -781,6 +781,11 @@ class AgentLearnTUI(App[str | None]):
         # 与 pending_images 平行：ImageBlock 里只有 base64，没有来源路径；
         # /attach 列表和 /detach 按路径移除要靠这份原始路径。
         self._pending_image_paths: list[str] = []
+        self._init_history_state(history)
+        self._load_initial_settings()
+        self._init_live_state()
+
+    def _init_history_state(self, history: list[DomainMessage]) -> None:
         self.input_history: list[str] = [
             text
             for message in history
@@ -811,6 +816,8 @@ class AgentLearnTUI(App[str | None]):
             "cache_write_tokens": 0,
             "cache_hit_ratio": 0,
         }
+
+    def _load_initial_settings(self) -> None:
         self.effort = "—"
         self.pricing: dict[str, str] | None = None
         if self.settings_loader is not None:
@@ -820,6 +827,8 @@ class AgentLearnTUI(App[str | None]):
                 self.pricing = snapshot.pricing
             except Exception:
                 pass
+
+    def _init_live_state(self) -> None:
         self._assistant: AssistantMessage | None = None
         self._reasoning: ReasoningPanel | None = None
         self._tool_cards: dict[str, ToolCard] = {}
