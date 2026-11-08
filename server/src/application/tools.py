@@ -19,20 +19,18 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from application.sandbox import CHILD_ENV, SANDBOX, current_workdir
+from application import jobs
+from application.ports import ToolGateway
 from domain.message import ImageBlock
 from domain.tool import Tool
-from infrastructure.config import load_mcp_servers
-from infrastructure.mcpClient import MCPManager
 # 单条命令的墙上时间上限。模型偶尔会提交 `cat`（没参数就等 stdin）或
 # `python`（进交互解释器）这类「看起来在跑、其实永远不结束」的命令，
 # 没有超时整轮对话就挂在它身上。
 TIMEOUT_SECONDS = 10
 
-# 后台任务工具（耐心）。import 放在这里而不是文件头：jobs.py 反过来要
-# 本文件的 SANDBOX / CHILD_ENV，两边在文件头互相 import 会断——
-# 这里那些常量已经定义完，环成立。REGISTRY 在下面引用 jobs 的函数。
 # /memory 命令和 remember 工具共用的读写（2026-11-03 从 conversation.py 搬来，
 # memory.md 是 sandbox 里的数据，归这里管；conversation 注入 system 时来读)：它是用户界面命令，
 # 不是给模型的工具——模型自己写记忆走 bash（echo >> memory.md），
@@ -66,9 +64,6 @@ def append_memory(note: str, author: str = "用户", path: Path | None = None) -
     with target.open("a", encoding="utf-8") as f:
         f.write(f"{prefix}{line}\n")
     return line
-
-
-from application import jobs  # noqa: E402
 
 
 def now_time() -> str:
@@ -426,16 +421,38 @@ def _skill_tool() -> Tool:
     )
 
 
-# MCP 工具的进程级登记处（第 5 层）。惰性建：第一次 all_tools() 时读
-# config.ini 的 [mcp:*] 段、起子进程。没有配置段 = 没有外部工具，
-# 和以前的行为完全一样。
-_mcp: MCPManager | None = None
+# 外部工具的进程级登记处（第 5 层）。惰性建：第一次 all_tools() 时向
+# 组合根注入的网关要实例；未注入 = 只有内置工具。
+_mcp: ToolGateway | None = None
+_tool_gateway_factory: Callable[[], ToolGateway] = lambda: _NoExternalTools()
 
 
-def _mcp_manager() -> MCPManager:
+class _NoExternalTools:
+    """没有配置外部工具时的空实现，保持内置工具路径可用。"""
+
+    def list_tools(self) -> list[tuple[str, dict]]:
+        return []
+
+    def call(
+        self, alias: str, name: str, arguments: dict
+    ) -> tuple[str, bool, None]:
+        return f"没有配置叫 {alias} 的外部工具服务器。", True, None
+
+    def health(self) -> list[dict]:
+        return []
+
+
+def configure_tool_gateway(factory: Callable[[], ToolGateway]) -> None:
+    """由组合根注入外部工具网关；未注入时只暴露内置工具。"""
+    global _mcp, _tool_gateway_factory
+    _mcp = None
+    _tool_gateway_factory = factory
+
+
+def _mcp_manager() -> ToolGateway:
     global _mcp
     if _mcp is None:
-        _mcp = MCPManager(load_mcp_servers())
+        _mcp = _tool_gateway_factory()
     return _mcp
 
 

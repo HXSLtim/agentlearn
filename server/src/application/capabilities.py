@@ -14,7 +14,12 @@ from application.tools import (
 )
 
 
-def capability_snapshot(provider: str, model_id: str, effort: str = "") -> dict:
+def capability_snapshot(
+    provider: str,
+    model_id: str,
+    effort: str = "",
+    trigger_count: int = 0,
+) -> dict:
     """只读收集工具、MCP、环境与版本事实；不主动启动 MCP 进程。"""
     builtin = {tool.name for tool, _ in REGISTRY.values()}
     mcp_tools = _mcp_manager().health()
@@ -53,12 +58,6 @@ def capability_snapshot(provider: str, model_id: str, effort: str = "") -> dict:
             "provider": provider,
             "model": model_id,
             "effort": effort,
-            "triggers": _trigger_count(),
+            "triggers": trigger_count,
         },
     }
-
-
-def _trigger_count() -> int:
-    from infrastructure.config import load_triggers
-
-    return len(load_triggers())

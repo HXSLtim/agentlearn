@@ -13,6 +13,8 @@ import os
 import uuid
 from pathlib import Path
 
+import uvicorn
+
 # server/ 的绝对路径。config.ini 和 data/ 这些相对路径全靠它锚定。
 ROOT = Path(__file__).resolve().parent
 
@@ -55,13 +57,17 @@ def _run_tui(session_id: str | None) -> None:
     from application.conversation import Conversation
     from application.capabilities import capability_snapshot
     from application.plan import PlanBroker
+    from application.tools import configure_tool_gateway
     from infrastructure.config import (
         SettingsValues,
         load_config,
+        load_mcp_servers,
         load_settings,
         save_settings,
+        load_triggers,
     )
     from infrastructure.llm import build_chat, list_models
+    from infrastructure.mcpClient import MCPManager
     from infrastructure.store import Store
     from infrastructure.transcript import Transcript
     from interfaces.tui import SessionSummary, run_chat
@@ -70,11 +76,12 @@ def _run_tui(session_id: str | None) -> None:
     store = Store(Path("data") / "agent.db")
     approval = ApprovalBroker()
     plans = PlanBroker()
+    configure_tool_gateway(lambda: MCPManager(load_mcp_servers()))
 
-    def load_sessions() -> list[SessionSummary]:
+    def load_sessions(include_archived: bool = False) -> list[SessionSummary]:
         """把持久化索引映射成 ResumeScreen 需要的轻量列表。"""
         summaries: list[SessionSummary] = []
-        for row in store.list_sessions():
+        for row in store.list_sessions(include_archived=include_archived):
             try:
                 messages = transcript.read(row["id"])
             except Exception:
@@ -110,6 +117,8 @@ def _run_tui(session_id: str | None) -> None:
                     model=row["model"] or "",
                     created_at=row["created_at"] or "",
                     turns=turns,
+                    pinned=bool(row["pinned"]),
+                    archived=bool(row["archived"]),
                 )
             )
         return summaries
@@ -119,7 +128,10 @@ def _run_tui(session_id: str | None) -> None:
         def load_capabilities() -> dict:
             config = load_config()
             return capability_snapshot(
-                config.provider, config.model_id, config.effort or ""
+                config.provider,
+                config.model_id,
+                config.effort or "",
+                trigger_count=len(load_triggers()),
             )
 
         try:
@@ -166,9 +178,42 @@ def _run_trace(session_id: str) -> None:
 
 
 def _run_desktop(port: int) -> None:
-    from interfaces.web.server import main as desktop_main
+    from application.approval import ApprovalBroker
+    from application.plan import PlanBroker
+    from application.sessionManager import SessionManager
+    from application.tools import configure_tool_gateway
+    from infrastructure.config import (
+        load_config,
+        load_mcp_servers,
+        load_settings,
+        load_triggers,
+        save_settings,
+    )
+    from infrastructure.llm import build_chat, list_models
+    from infrastructure.mcpClient import MCPManager
+    from infrastructure.store import Store
+    from infrastructure.transcript import Transcript
+    from interfaces.web.server import WebDependencies, create_app
 
-    desktop_main(port)
+    load_config()
+    app = create_app(
+        WebDependencies(
+            store=Store(Path("data") / "agent.db"),
+            transcript=Transcript(Path("data") / "sessions"),
+            manager=SessionManager(),
+            approval=ApprovalBroker(),
+            plans=PlanBroker(),
+            config_loader=load_config,
+            settings_loader=load_settings,
+            settings_saver=save_settings,
+            chat_factory=build_chat,
+            model_lister=list_models,
+            trigger_loader=load_triggers,
+            tool_gateway_factory=lambda: MCPManager(load_mcp_servers()),
+        )
+    )
+
+    uvicorn.run(app, port=port)
 
 
 if __name__ == "__main__":

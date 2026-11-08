@@ -74,12 +74,11 @@ POST /plans/{plan_id}/confirm
 import json
 import time
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
-import uvicorn
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -93,35 +92,55 @@ from application.approval import APPROVAL_REASON_MAX_LENGTH
 from application.capabilities import capability_snapshot
 from application.conversation import Conversation, TurnCancelled
 from application.jobs import restore_jobs
+from application.ports import ChatClient, ToolGateway
 from application.plan import PlanBroker
-from application.tools import append_memory, read_memory
+from application.tools import append_memory, configure_tool_gateway, read_memory
 from application.proactivity import ProactivityRunner, UNATTENDED_MAX_TOOL_ROUNDS
 from application.sandbox import SANDBOX, normalize_workdir
 from application.sessionManager import MODES, SessionManager
+from application.sessionFork import fork_session as session_fork
 from application.traceView import answers_for_requests, answer_texts, span_payloads
 from application.transcriptExport import transcript_to_markdown
 from application.workspace import WorkspaceError, changed_files
 from application.workspace import complete_paths
 from infrastructure.config import (
     LLMConfig,
+    SettingsSnapshot,
     SettingsValues,
-    load_config,
-    load_settings,
-    load_triggers,
-    save_settings,
 )
-from infrastructure.llm import build_chat
-from infrastructure.llm import list_models
 from infrastructure.store import Store
 from infrastructure.transcript import Transcript
 
-# 数据目录固定在 server/data。相对路径由 main.py 启动时把工作目录
-# 钉在 server/ 来锚定（见 main.py 的说明）。
-DATA = Path("data")
+@dataclass(frozen=True)
+class WebDependencies:
+    """desktop 服务的组合根注入项；web 模块自己不创建外部依赖。"""
 
-# 配置惰性加载：import 本模块不触发读文件。main.py 会按模式分别 import
-# TUI 或 desktop 实现；模块级读配置会让 TUI 启动也受 HTTP 服务的配置影响，
-# 还会让不配 config.ini 就跑测试变得不可能。
+    store: Store
+    transcript: Transcript
+    manager: SessionManager
+    approval: ApprovalBroker
+    plans: PlanBroker
+    config_loader: Callable[[], LLMConfig]
+    settings_loader: Callable[[], SettingsSnapshot]
+    settings_saver: Callable[[SettingsValues], SettingsSnapshot]
+    chat_factory: Callable[[LLMConfig], ChatClient]
+    model_lister: Callable[[LLMConfig], list[str]]
+    trigger_loader: Callable[[], list[dict]]
+    tool_gateway_factory: Callable[[], ToolGateway]
+
+
+_store: Store
+_transcript: Transcript
+_manager: SessionManager
+_approval: ApprovalBroker
+_plans: PlanBroker
+_config_loader: Callable[[], LLMConfig]
+_settings_loader: Callable[[], SettingsSnapshot]
+_settings_saver: Callable[[SettingsValues], SettingsSnapshot]
+_chat_factory: Callable[[LLMConfig], ChatClient]
+_model_lister: Callable[[LLMConfig], list[str]]
+_trigger_loader: Callable[[], list[dict]]
+_started_at: float
 _cached_config: LLMConfig | None = None
 
 
@@ -129,7 +148,7 @@ def get_config() -> LLMConfig:
     """读一次配置，之后缓存复用。第一次调用发生在 desktop 启动或设置保存后。"""
     global _cached_config
     if _cached_config is None:
-        _cached_config = load_config()
+        _cached_config = _config_loader()
     return _cached_config
 
 
@@ -145,7 +164,7 @@ _proactivity: ProactivityRunner | None = None
 async def _lifespan(_: FastAPI):
     global _proactivity
     restore_jobs()
-    _proactivity = ProactivityRunner(load_triggers(), _run_unattended)
+    _proactivity = ProactivityRunner(_trigger_loader(), _run_unattended)
     _proactivity.start()
     yield
     _proactivity.stop()
@@ -171,28 +190,46 @@ app.add_middleware(
 )
 
 
-# 进程级单例三件：
+# 组合根注入的进程级单例。import 本模块不再建库、迁移或改历史数据。
 # - Store 一条连接全进程复用（原来每个请求各建一个）。省的只是建连接开销，
 #   SQLite 写锁本来就是库级的；线程安全靠 Store 自己的锁（见 store.py）。
 # - SessionManager 是 steering 的裁判，状态天生就是跨请求的。
 # - Transcript 无状态（纯文件读写），单例只为少造对象。
-_store = Store(DATA / "agent.db")
-_transcript = Transcript(DATA / "sessions")
-_manager = SessionManager()
-_approval = ApprovalBroker()
-_plans = PlanBroker()
 
-# /health 里的 uptime 基准：import 完成的时刻 ≈ 进程可服务的时刻。
-_started_at = time.monotonic()
 
-# 上个进程留下的 running span（断连/被杀时没来得及收尾的）现在收掉。
-# 实例：11-05 启动的老进程带着一条永挂 running 的 llm_request 跑了一天
-# （D33 之前的代码断连不收尾），监控面会一直被这些遗孤污染。只收
-# 1 小时前的——正常一轮远短于这个数，并行进程（比如 TUI）正在写的
-# span 不会被误伤。
-_orphans = _store.close_stale_spans(older_than_seconds=3600)
-if _orphans:
-    print(f"[startup] 收掉 {_orphans} 条遗留的 running span（cancelled/orphan）")
+def create_app(dependencies: WebDependencies) -> FastAPI:
+    """用组合根给出的依赖创建 desktop 应用，import 本模块不再有副作用。"""
+    global _store, _transcript, _manager, _approval, _plans
+    global _config_loader, _settings_loader, _settings_saver
+    global _chat_factory, _model_lister, _trigger_loader
+    global _started_at, _cached_config, _proactivity
+
+    _store = dependencies.store
+    _transcript = dependencies.transcript
+    _manager = dependencies.manager
+    _approval = dependencies.approval
+    _plans = dependencies.plans
+    _config_loader = dependencies.config_loader
+    _settings_loader = dependencies.settings_loader
+    _settings_saver = dependencies.settings_saver
+    _chat_factory = dependencies.chat_factory
+    _model_lister = dependencies.model_lister
+    _trigger_loader = dependencies.trigger_loader
+    configure_tool_gateway(dependencies.tool_gateway_factory)
+    _started_at = time.monotonic()
+    _cached_config = None
+    _proactivity = None
+
+    # 上个进程留下的 running span（断连/被杀时没来得及收尾的）现在收掉。
+    # 只收 1 小时前的——正常一轮远短于这个数，并行进程（比如 TUI）正在写的
+    # span 不会被误伤。
+    orphans = _store.close_stale_spans(older_than_seconds=3600)
+    if orphans:
+        print(f"[startup] 收掉 {orphans} 条遗留的 running span（cancelled/orphan）")
+    backfilled = _backfill_session_titles()
+    if backfilled:
+        print(f"[startup] 给 {backfilled} 个历史会话补上了标题")
+    return app
 
 
 def _backfill_session_titles(limit: int = 300) -> int:
@@ -233,11 +270,6 @@ def _backfill_session_titles(limit: int = 300) -> int:
     return patched
 
 
-_backfilled = _backfill_session_titles()
-if _backfilled:
-    print(f"[startup] 给 {_backfilled} 个历史会话补上了标题")
-
-
 def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
     """跑一轮无人值守对话（D27）：主动性触发器扣扳机后的执行端。
 
@@ -259,7 +291,7 @@ def _run_unattended(session_id: str, message: str, trigger_name: str) -> dict:
         handle = slot.begin("auto")
         try:
             conv = Conversation(
-                build_chat(get_config()),
+                _chat_factory(get_config()),
                 _transcript,
                 _store,
                 session_id,
@@ -418,7 +450,7 @@ class SessionForkRequest(BaseModel):
 @app.get("/settings")
 def get_settings():
     """返回可展示的设置；真实密钥永远不出现在响应里。"""
-    return asdict(load_settings())
+    return asdict(_settings_loader())
 
 
 @app.get("/health")
@@ -459,7 +491,7 @@ def get_models():
     """读取当前 provider/base_url 暴露的模型列表，只代理 ID，不回显密钥。"""
     config = get_config()
     try:
-        models = list_models(config)
+        models = _model_lister(config)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -473,7 +505,7 @@ def put_settings(request: SettingsRequest):
     """保存设置，并让下一次模型请求使用新配置。"""
     global _cached_config
     try:
-        snapshot = save_settings(SettingsValues(**request.model_dump()))
+        snapshot = _settings_saver(SettingsValues(**request.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _cached_config = None
@@ -719,25 +751,15 @@ def delete_session(session_id: str):
 def fork_session(session_id: str, request: SessionForkRequest):
     """从指定消息点复制出新会话：保留前 through 条，返回新 id。
 
-    spans 不复制——trace 是「这次运行怎么跑出来的」，分支的树从
-    第一轮 turn 重新长。新会话标题加「（分支）」后缀，好认也随时可改。
+    逻辑在 application.sessionFork（TUI /resume 共用）；这里只做
+    存在性校验和 HTTP 错误翻译。
     """
-    source = _validated_session(session_id)
-    messages = _transcript.read(source)
-    if request.through < 1 or request.through > len(messages):
-        raise HTTPException(
-            status_code=422,
-            detail=f"through 要在 1..{len(messages)} 之间（消息总数 {len(messages)}）。",
-        )
-    row = _session_row(source) or {}
-    new_id = str(uuid.uuid4())
-    _store.create_session(
-        new_id, row.get("model", ""), str(_transcript.path_for(new_id)),
-        title=(row.get("title") or "") + "（分支）",
-    )
-    for message in messages[: request.through]:
-        _transcript.append(new_id, message)
-    return {"ok": True, "session_id": new_id, "copied": request.through}
+    _validated_session(session_id)
+    try:
+        new_id, copied = session_fork(_store, _transcript, session_id, request.through)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "session_id": new_id, "copied": copied}
 
 
 def _report_conversation(session_id: str) -> Conversation:
@@ -748,7 +770,7 @@ def _report_conversation(session_id: str) -> Conversation:
     FastAPI 转 500——对只读工具来说，配置坏了就是服务坏了。
     """
     return Conversation(
-        build_chat(get_config()), _transcript, _store, session_id
+        _chat_factory(get_config()), _transcript, _store, session_id
     )
 
 
@@ -762,7 +784,10 @@ def get_capabilities():
     """
     config = get_config()
     return capability_snapshot(
-        config.provider, config.model_id, config.effort or ""
+        config.provider,
+        config.model_id,
+        config.effort or "",
+        trigger_count=len(_trigger_loader()),
     )
 
 
@@ -971,7 +996,7 @@ def chat_events(
             # 构造放在 try 里：建客户端可能失败（典型是本机 SOCKS 代理缺
             # socksio），让它变成一条 error 事件推给前端，而不是连接中途断掉。
             conv = Conversation(
-                build_chat(get_config()),
+                _chat_factory(get_config()),
                 _transcript,
                 _store,
                 session_id,
@@ -1132,16 +1157,3 @@ def confirm_plan(plan_id: str, request: PlanConfirmRequest):
             status_code=404, detail="计划不存在、已执行或不属于当前会话。"
         )
     return {"ok": True, "plan_id": plan_id, "confirmed": True}
-
-
-def main(port: int = 8000) -> None:
-    """启动 HTTP 服务。端口由 main.py 传入。
-
-    启动时先读一次配置：坏了当场报，不带进第一个请求里。
-    """
-    get_config()
-    uvicorn.run(app, port=port)
-
-
-if __name__ == "__main__":
-    main()

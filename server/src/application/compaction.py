@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from domain.message import Message, TextBlock, ToolResultBlock
-from infrastructure.adapter import estimate_tokens
+from application.tokens import estimate_tokens
 
 # 「摘要 + 尾部」的目标预算，单位是估算 token。不是模型窗口大小——
 # 窗口留给回答和工具循环的余量，这个值是「工作集」：历史超过它就压。

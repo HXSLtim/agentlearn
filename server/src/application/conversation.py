@@ -45,16 +45,13 @@ import time
 from pathlib import Path
 
 from domain.message import ImageBlock, Message, TextBlock, ToolResultBlock
-from infrastructure.adapter import estimate_tokens
-from infrastructure.llm import AnthropicChat, OpenAIChat
-from infrastructure.store import Store
-from infrastructure.transcript import Transcript
-
 from application.approval import APPROVAL_MODES, ApprovalBroker
 from application.plan import PLAN_ALLOWED_TOOLS, PlanBroker
+from application.ports import ChatClient, SpanStore, TranscriptStore
 from application.sandbox import bind_workdir, normalize_workdir, reset_workdir
 from application.tools import SANDBOX, all_tools, read_memory, run_tool
 from application import compaction
+from application.tokens import estimate_tokens
 
 # 一轮对话里最多让模型连续调几轮工具。没有这个上限，模型抽风反复调用时
 # 会一直烧 token 停不下来——agent 循环永远要有退出条件。
@@ -82,9 +79,9 @@ class Conversation:
 
     def __init__(
         self,
-        chat: AnthropicChat | OpenAIChat,
-        transcript: Transcript,
-        store: Store,
+        chat: ChatClient,
+        transcript: TranscriptStore,
+        store: SpanStore,
         session_id: str,
         memory_path: Path | None = None,
         constitution_path: Path | None = None,
@@ -284,7 +281,7 @@ class Conversation:
             self._workdir_request = None
         self._turn_workdir = self._load_workdir()
 
-    def _system_prompt(self, chat: AnthropicChat | OpenAIChat, summary_text: str = "") -> str:
+    def _system_prompt(self, chat: ChatClient, summary_text: str = "") -> str:
         """拼这一圈的 system。四段顺序固定，见本文件顶部的说明。
 
         准则文件缺了或是空的，运行态照样带上——模型至少知道自己是谁、
@@ -413,7 +410,7 @@ class Conversation:
         }
 
     def _apply_compaction(
-        self, history: list, chat: AnthropicChat | OpenAIChat, turn_span: str,
+        self, history: list, chat: ChatClient, turn_span: str,
         force: bool = False,
         count_turn_tokens: bool = False,
     ) -> tuple[list, str, int]:

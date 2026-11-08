@@ -20,6 +20,8 @@ tool_result，所以只有三种）。
 import json
 import re
 
+from application.tokens import estimate_tokens
+
 from domain.message import ContentBlock, Message, TextBlock, ThinkingBlock, ToolUseBlock
 from domain.tool import Tool
 
@@ -377,20 +379,6 @@ def _effort(level: str, table: dict) -> tuple[str | None, str]:
 # Anthropic 对可缓存前缀有最短长度要求（Opus/Sonnet 1024、Haiku 2048）。
 # 打了断点但前缀不够长，请求直接 400。取最严的 2048 当门槛，宁可少命中。
 CACHE_MIN_TOKENS = 2048
-
-_CJK = re.compile(r"[一-鿿]")
-
-
-def estimate_tokens(text: str) -> int:
-    """一段文本的 token 估算。中文字符按 1 个算，其余按 4 个字符折 1 个。
-
-    是粗估不是计数（真值在响应的 usage 里，spans 记了账）。
-    用途只有两个，都只吃误差不吃精确：压缩决策（什么时候压）和
-    缓存断点门槛（够不够格打断点）。方向上宁可高估——高估只是早压一点。
-    """
-    cjk = len(_CJK.findall(text))
-    return cjk + (len(text) - cjk) // 4
-
 
 def mark_cache_breakpoint(messages: list[dict]) -> list[dict]:
     """在 Anthropic 请求的 messages 上打缓存断点（就地修改，返回同一列表）。
