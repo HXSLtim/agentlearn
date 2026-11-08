@@ -1504,16 +1504,15 @@ class SettingsScreen(ModalScreen[bool]):
     def _cancel(self) -> None:
         self.dismiss(False)
 
-    @on(Button.Pressed, "#settings-save")
-    def _save(self) -> None:
+    def _read_values(self) -> SettingsValues | None:
         max_tokens_raw = self.query_one("#settings-max-tokens", Input).value.strip()
         if not max_tokens_raw.isdigit():
             self._show_error("max_tokens 必须是正整数。")
-            return
+            return None
         effort_value = str(self.query_one("#settings-effort", Select).value)
         effort = "" if effort_value == "omit" else effort_value
         api_key = self.query_one("#settings-api-key", Input).value.strip() or None
-        values = SettingsValues(
+        return SettingsValues(
             provider=str(self.query_one("#settings-provider", Select).value),
             base_url=self.query_one("#settings-base-url", Input).value.strip(),
             model_id=str(self.query_one("#settings-model", Select).value),
@@ -1521,6 +1520,12 @@ class SettingsScreen(ModalScreen[bool]):
             effort=effort,
             api_key=api_key,
         )
+
+    @on(Button.Pressed, "#settings-save")
+    def _save(self) -> None:
+        values = self._read_values()
+        if values is None:
+            return
         save_button = self.query_one("#settings-save", Button)
         save_button.disabled = True
         try:
