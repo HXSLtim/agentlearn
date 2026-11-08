@@ -1448,21 +1448,7 @@ class AgentLearnTUI(App[str | None]):
             await self._apply_steering_injected(event)
             return
         if kind == "tool_use":
-            self._finish_live_blocks()
-            self.tool_count += 1
-            card = ToolCard(
-                event["id"],
-                event["name"],
-                event["input"],
-                detailed=self.transcript_mode == "verbose",
-            )
-            self._tool_cards[event["id"]] = card
-            self._activity_by_tool[event["id"]] = self._push_activity(
-                "执行", event["name"], "执行中", tone="running"
-            )
-            await self.query_one("#timeline", VerticalScroll).mount(card)
-            self._update_ledger()
-            self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+            await self._apply_tool_use(event)
             return
         if kind == "tool_approval":
             approval_id = event.get("approval_id")
@@ -1599,6 +1585,23 @@ class AgentLearnTUI(App[str | None]):
         await timeline.mount(UserMessage(event["text"]))
         self._expect_kicker = True
         timeline.scroll_end(animate=False)
+
+    async def _apply_tool_use(self, event: dict) -> None:
+        self._finish_live_blocks()
+        self.tool_count += 1
+        card = ToolCard(
+            event["id"],
+            event["name"],
+            event["input"],
+            detailed=self.transcript_mode == "verbose",
+        )
+        self._tool_cards[event["id"]] = card
+        self._activity_by_tool[event["id"]] = self._push_activity(
+            "执行", event["name"], "执行中", tone="running"
+        )
+        await self.query_one("#timeline", VerticalScroll).mount(card)
+        self._update_ledger()
+        self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
