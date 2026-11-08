@@ -1408,17 +1408,34 @@ class AgentLearnTUI(App[str | None]):
         append_user=False 是重试（P0 重试去重）：失败轮的 user 已在
         JSONL 里，不再追加同文一条；turn 内部校验历史尾部必须是 user。
         """
-        outcome: tuple[str, str]
+        try:
+            outcome = self._collect_turn_outcome(
+                question,
+                append_user=append_user,
+                images=images,
+                plan_mode=plan_mode,
+            )
+        finally:
+            leftovers = self._close_running_turn(running)
+        if outcome is None:
+            return
+        try:
+            self._dispatch_turn_outcome(outcome, question, leftovers)
+        except RuntimeError:
+            return
+
+    def _collect_turn_outcome(
+        self,
+        question: str,
+        *,
+        append_user: bool,
+        images: list[ImageBlock] | None,
+        plan_mode: bool,
+    ) -> tuple[str, str] | None:
         try:
             for event in self.conversation.turn(
                 question,
-                origin=(
-                    "retry"
-                    if not append_user
-                    else "plan"
-                    if plan_mode
-                    else ""
-                ),
+                origin=self._turn_origin(append_user, plan_mode),
                 append_user=append_user,
                 images=images,
                 plan_mode=plan_mode,
@@ -1426,28 +1443,36 @@ class AgentLearnTUI(App[str | None]):
                 try:
                     self.call_from_thread(self._apply_event, event)
                 except RuntimeError:
-                    return
-            outcome = ("turn", self.conversation.stop_reason or "—")
+                    return None
+            return ("turn", self.conversation.stop_reason or "—")
         except TurnCancelled:
-            outcome = ("cancelled", "")
+            return ("cancelled", "")
         except Exception as exc:
-            outcome = ("error", str(exc))
-        finally:
-            running.close()
-            leftovers = running.drain()
-            if self.conversation.steering is running:
-                self.conversation.steering = None
-        try:
-            if leftovers:
-                self.call_from_thread(self._queue_leftovers, leftovers)
-            if outcome[0] == "cancelled":
-                self.call_from_thread(self._finish_cancelled)
-            elif outcome[0] == "error":
-                self.call_from_thread(self._finish_error, outcome[1], question)
-            else:
-                self.call_from_thread(self._finish_turn, outcome[1])
-        except RuntimeError:
-            return
+            return ("error", str(exc))
+
+    def _turn_origin(self, append_user: bool, plan_mode: bool) -> str:
+        if not append_user:
+            return "retry"
+        return "plan" if plan_mode else ""
+
+    def _close_running_turn(self, running: RunningTurn) -> list[str]:
+        running.close()
+        leftovers = running.drain()
+        if self.conversation.steering is running:
+            self.conversation.steering = None
+        return leftovers
+
+    def _dispatch_turn_outcome(
+        self, outcome: tuple[str, str], question: str, leftovers: list[str]
+    ) -> None:
+        if leftovers:
+            self.call_from_thread(self._queue_leftovers, leftovers)
+        if outcome[0] == "cancelled":
+            self.call_from_thread(self._finish_cancelled)
+        elif outcome[0] == "error":
+            self.call_from_thread(self._finish_error, outcome[1], question)
+        else:
+            self.call_from_thread(self._finish_turn, outcome[1])
 
     def _queue_leftovers(self, prompts: list[str]) -> None:
         """cooperative 消息赶在轮末到达时，补进下一轮队列而不是丢掉。"""
