@@ -1454,14 +1454,7 @@ class AgentLearnTUI(App[str | None]):
             self._apply_tool_approval(event)
             return
         if kind == "plan":
-            self._finish_live_blocks()
-            plan_id = event.get("plan_id", "")
-            plan_text = event.get("text", "")
-
-            def plan_resolved(confirmed: bool | None) -> None:
-                self._plan_closed(plan_id, confirmed)
-
-            self.push_screen(PlanScreen(plan_text), plan_resolved)
+            self._apply_plan(event)
             return
         if kind == "tool_result":
             card = self._tool_cards.get(event["id"])
@@ -1605,6 +1598,16 @@ class AgentLearnTUI(App[str | None]):
             ),
             resolved,
         )
+
+    def _apply_plan(self, event: dict) -> None:
+        self._finish_live_blocks()
+        plan_id = event.get("plan_id", "")
+        plan_text = event.get("text", "")
+
+        def plan_resolved(confirmed: bool | None) -> None:
+            self._plan_closed(plan_id, confirmed)
+
+        self.push_screen(PlanScreen(plan_text), plan_resolved)
 
     def _finish_live_blocks(self) -> None:
         if self._reasoning is not None:
