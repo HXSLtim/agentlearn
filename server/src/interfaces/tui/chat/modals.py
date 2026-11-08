@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from datetime import datetime
 
-from typing import Callable
+from typing import Callable, TypeVar
 
 from rich.text import Text
 
@@ -72,6 +72,40 @@ class SessionSummary:
     # 管理位（P1 会话库）：/resume 的置顶 / 归档动作要显示和切换它们。
     pinned: bool = False
     archived: bool = False
+
+
+SearchResult = TypeVar("SearchResult")
+
+
+class _FilteredOptionScreen(ModalScreen[SearchResult | None]):
+    """带 ↑↓ 循环选择和 Esc 关闭的过滤列表弹层。"""
+
+    option_list_id: str
+    matches: list
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel", show=False),
+        Binding("up", "previous", "previous", show=False),
+        Binding("down", "next", "next", show=False),
+    ]
+
+    def action_previous(self) -> None:
+        self._move_highlight(-1)
+
+    def action_next(self) -> None:
+        self._move_highlight(1)
+
+    def _move_highlight(self, delta: int) -> None:
+        if not self.matches:
+            return
+        option_list = self.query_one(f"#{self.option_list_id}", OptionList)
+        current = option_list.highlighted or 0
+        option_list.highlighted = (
+            current + delta + len(self.matches)
+        ) % len(self.matches)
+        option_list.scroll_to_highlight()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class InputModal(ModalScreen[str | None]):
@@ -263,8 +297,10 @@ class ConfirmModal(ModalScreen[bool]):
         self.dismiss(True)
 
 
-class HistorySearchScreen(ModalScreen[str | None]):
+class HistorySearchScreen(_FilteredOptionScreen[str]):
     """按内容过滤本会话输入历史，选中后只回填输入台。"""
+
+    option_list_id = "history-search-list"
 
     CSS = f"""
     HistorySearchScreen {{
@@ -323,12 +359,6 @@ class HistorySearchScreen(ModalScreen[str | None]):
         color: {DIM};
     }}
     """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "cancel", show=False),
-        Binding("up", "previous", "previous", show=False),
-        Binding("down", "next", "next", show=False),
-    ]
 
     def __init__(self, history: list[str]) -> None:
         super().__init__()
@@ -395,26 +425,6 @@ class HistorySearchScreen(ModalScreen[str | None]):
         index = int(event.option_id)
         if 0 <= index < len(self.matches):
             self.dismiss(self.matches[index])
-
-    def action_previous(self) -> None:
-        self._move_highlight(-1)
-
-    def action_next(self) -> None:
-        self._move_highlight(1)
-
-    def _move_highlight(self, delta: int) -> None:
-        if not self.matches:
-            return
-        option_list = self.query_one("#history-search-list", OptionList)
-        current = option_list.highlighted or 0
-        option_list.highlighted = (
-            current + delta + len(self.matches)
-        ) % len(self.matches)
-        option_list.scroll_to_highlight()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
 
 class ResumeScreen(ModalScreen[str | None]):
     """历史会话选择器。选中后退出当前 App，由 main.py 重新装配目标会话。"""
@@ -1075,8 +1085,12 @@ def _format_session_time(value: str) -> str:
         return "未知时间"
 
 
-class ConversationSearchScreen(ModalScreen[UserMessage | AssistantMessage | None]):
+class ConversationSearchScreen(
+    _FilteredOptionScreen[UserMessage | AssistantMessage]
+):
     """在当前时间线里定位已经渲染出来的用户/回答卡片。"""
+
+    option_list_id = "conversation-search-list"
 
     CSS = f"""
     ConversationSearchScreen {{
@@ -1135,12 +1149,6 @@ class ConversationSearchScreen(ModalScreen[UserMessage | AssistantMessage | None
         color: {DIM};
     }}
     """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "cancel", show=False),
-        Binding("up", "previous", "previous", show=False),
-        Binding("down", "next", "next", show=False),
-    ]
 
     def __init__(
         self,
@@ -1221,26 +1229,6 @@ class ConversationSearchScreen(ModalScreen[UserMessage | AssistantMessage | None
         index = int(event.option_id)
         if 0 <= index < len(self.matches):
             self.dismiss(self.matches[index][0])
-
-    def action_previous(self) -> None:
-        self._move_highlight(-1)
-
-    def action_next(self) -> None:
-        self._move_highlight(1)
-
-    def _move_highlight(self, delta: int) -> None:
-        if not self.matches:
-            return
-        option_list = self.query_one("#conversation-search-list", OptionList)
-        current = option_list.highlighted or 0
-        option_list.highlighted = (
-            current + delta + len(self.matches)
-        ) % len(self.matches)
-        option_list.scroll_to_highlight()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
 
 class SettingsScreen(ModalScreen[bool]):
     """运行中的模型设置。保存成功后由 main.py 的回调重建客户端。"""
