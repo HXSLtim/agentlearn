@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from typing import Callable
 
 from rich.text import Text
@@ -346,6 +348,9 @@ class WorkspaceDiffScreen(ModalScreen[None]):
     def __init__(self, loader: Callable[[], dict]) -> None:
         super().__init__()
         self.loader = loader
+        self._generation = 0
+        self._closed = False
+        self._announce = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="diff-dialog"):
@@ -359,33 +364,74 @@ class WorkspaceDiffScreen(ModalScreen[None]):
             )
 
     def on_mount(self) -> None:
-        self._load()
+        # git 读取不能占着 UI 线程。新会话一打开变更就在 on_mount 里同步
+        # 跑完所有 git diff，事件循环进不来，Esc 关不掉，画面停在「正在读取」。
+        self._start_load(announce=False)
 
-    def _load(self) -> None:
+    def _start_load(self, *, announce: bool) -> None:
+        self._generation += 1
+        self._announce = announce
+        generation = self._generation
+        loop = asyncio.get_running_loop()
+        # 不用 Textual worker。关屏幕时 worker 的收尾会卡住消息泵，
+        # Esc 进了 action_cancel，屏幕却不卸，面板就停在「正在读取」。
+        threading.Thread(
+            target=self._load_worker,
+            args=(generation, loop),
+            name="workspace-diff",
+            daemon=True,
+        ).start()
+
+    def _load_worker(self, generation: int, loop: asyncio.AbstractEventLoop) -> None:
         try:
             snapshot = self.loader()
+            error: Exception | None = None
         except Exception as exc:
-            self.query_one("#diff-summary", Static).update(
-                f"工作区不可用 · {exc}"
-            )
-            self.query_one("#diff-body", Static).update(
-                Text(f"工作区读取失败\n{exc}", style=ERROR)
-            )
-            self.query_one("#diff-scroll", VerticalScroll).focus()
+            snapshot = None
+            error = exc
+
+        def apply() -> None:
+            if self._closed or generation != self._generation or not self.is_mounted:
+                return
+            if error is not None:
+                self._show_error(error)
+            elif snapshot is not None:
+                self._show_snapshot(snapshot)
+
+        # 不要用 call_from_thread：它会等 UI 线程，而 UI 线程若正在等这次
+        # 读取（或 pilot 在等队列排空），两边就死锁，面板关不掉。
+        try:
+            loop.call_soon_threadsafe(apply)
+        except RuntimeError:
             return
+
+    def _show_error(self, exc: Exception) -> None:
+        self.query_one("#diff-summary", Static).update(f"工作区不可用 · {exc}")
+        self.query_one("#diff-body", Static).update(
+            Text(f"工作区读取失败\n{exc}", style=ERROR)
+        )
+        self.query_one("#diff-scroll", VerticalScroll).focus()
+
+    def _show_snapshot(self, snapshot: dict) -> None:
         self.query_one("#diff-summary", Static).update(self._summary(snapshot))
         self.query_one("#diff-body", Static).update(self._diff_text(snapshot))
         pager = self.query_one("#diff-scroll", VerticalScroll)
         pager.scroll_home(animate=False)
         pager.focus()
+        if self._announce:
+            self.notify("工作区变更已刷新")
 
     def _summary(self, snapshot: dict) -> str:
         tracked = sum(
             1 for file in snapshot["files"] if file["status"] != "untracked"
         )
+        omitted = snapshot.get("omitted_count") or 0
+        suffix = f" · 未展开 {omitted}" if omitted else ""
+        if snapshot.get("partial"):
+            suffix += " · 读取未完成"
         return (
             f"{snapshot['root']} · 已跟踪 {tracked} · "
-            f"未跟踪 {snapshot['untracked_count']}（已计入）"
+            f"未跟踪 {snapshot['untracked_count']}（已计入）{suffix}"
         )
 
     def _diff_text(self, snapshot: dict) -> Text:
@@ -402,6 +448,9 @@ class WorkspaceDiffScreen(ModalScreen[None]):
             if file["old_path"]:
                 text.append(f"{file['old_path']} → ", style=DIM)
             text.append(f"{file['path']}\n", style=PAPER)
+            if file.get("omitted"):
+                text.append("  差异未展开\n\n", style=MUTED)
+                continue
             text.append(
                 f"  +{file['additions']} −{file['deletions']}"
                 + ("  二进制" if file["binary"] else "")
@@ -431,8 +480,7 @@ class WorkspaceDiffScreen(ModalScreen[None]):
         return text
 
     def action_reload(self) -> None:
-        self._load()
-        self.notify("工作区变更已刷新")
+        self._start_load(announce=True)
 
     def action_scroll_up(self) -> None:
         self.query_one("#diff-scroll", VerticalScroll).scroll_up(animate=False)
@@ -453,4 +501,7 @@ class WorkspaceDiffScreen(ModalScreen[None]):
         self.query_one("#diff-scroll", VerticalScroll).scroll_end(animate=False)
 
     def action_cancel(self) -> None:
+        # 先作废在途结果，再关。读取还在 worker 里时也不能把 Esc 吃掉。
+        self._closed = True
+        self._generation += 1
         self.dismiss(None)

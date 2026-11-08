@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from rich.text import Text
 
 from textual import on
@@ -130,9 +132,15 @@ class ReasoningPanel(Collapsible):
     def _snippet(self) -> str:
         compact = " ".join(self._text.split())
         if not compact:
-            return "waiting for first token"
+            return "等待首字"
         tail = compact[-88:]
         return ("…" if len(compact) > len(tail) else "") + tail
+
+    def _visible_text(self) -> str:
+        # 流式阶段跟 WebUI 一样只露尾巴，避免长思考把时间线撑满。
+        if self._live and len(self._text) > 280:
+            return "…" + self._text[-280:]
+        return self._text
 
     @property
     def char_count(self) -> int:
@@ -141,7 +149,7 @@ class ReasoningPanel(Collapsible):
 
     def append_text(self, fragment: str) -> None:
         self._text += fragment
-        self._label.update(self._text)
+        self._label.update(self._visible_text())
         self.title = self._display_title()
 
     def finish(self) -> None:
@@ -150,30 +158,83 @@ class ReasoningPanel(Collapsible):
         self._live = False
         self.remove_class("-live")
         self.add_class("-done")
+        self._label.update(self._text)
         self.title = self._display_title()
 
 
 class ToolCard(Static):
     """一次工具调用的紧凑卡片。id 用来把 result 填回正确的 use。"""
 
-    def __init__(self, tool_id: str, name: str, arguments: dict) -> None:
+    def __init__(
+        self, tool_id: str, name: str, arguments: dict, *, detailed: bool = False
+    ) -> None:
         self.tool_id = tool_id
         self.tool_name = name
         self.arguments = arguments
+        self.detailed = detailed
         self._output: str | None = None
         self._is_error = False
         self._elapsed_ms: int | None = None
+        self._waiting = False
         super().__init__(classes="tool-card")
         self._paint()
 
+    def set_detailed(self, detailed: bool) -> None:
+        if self.detailed == detailed:
+            return
+        self.detailed = detailed
+        self._paint()
+
+    def set_waiting(self, waiting: bool) -> None:
+        if self._waiting == waiting:
+            return
+        self._waiting = waiting
+        self._paint()
+
+    def _summary(self) -> str:
+        preferred = next(
+            (
+                value
+                for key in ("command", "path", "name", "text")
+                if isinstance(value := self.arguments.get(key), str) and value.strip()
+            ),
+            None,
+        )
+        raw = (
+            preferred
+            if preferred is not None
+            else json.dumps(self.arguments, ensure_ascii=False)
+            if self.arguments
+            else "无参数"
+        )
+        return " ".join(str(raw).split()).strip()[:120] or "无参数"
+
     def _paint(self) -> None:
+        if not self.detailed:
+            if self._output is None:
+                state = "等待审批" if self._waiting else "执行中"
+                tone = WARN
+            else:
+                state = "出错" if self._is_error else "完成"
+                if self._elapsed_ms is not None:
+                    state += f" · {format_duration(self._elapsed_ms)}"
+                tone = ERROR if self._is_error else TOOL
+            self.update(
+                Text.assemble(
+                    ("工具  ", f"bold {tone}"),
+                    (self.tool_name, f"bold {PAPER}"),
+                    (f"  {state}\n", DIM),
+                    (self._summary(), MUTED),
+                )
+            )
+            return
         args = ", ".join(f"{key}={value!r}" for key, value in self.arguments.items())
         call = f"{self.tool_name}({args})"
         if self._output is None:
+            state = "等待审批" if self._waiting else "运行中"
             text = Text.assemble(
-                ("运行中  ", f"bold {WARN}"),
+                (f"{state}  ", f"bold {WARN}"),
                 (call, f"bold {PAPER}"),
-                ("\n等待工具结果", DIM),
             )
         else:
             mark = "出错" if self._is_error else "结果"
@@ -194,6 +255,7 @@ class ToolCard(Static):
         self._output = output.strip() or "（无输出）"
         self._is_error = is_error
         self._elapsed_ms = elapsed_ms
+        self._waiting = False
         self._paint()
 
 
