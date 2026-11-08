@@ -2273,34 +2273,42 @@ class AgentLearnTUI(App[str | None]):
             return
 
         if argument:
-            query = argument.casefold()
-            matches = [
-                session
-                for session in sessions
-                if (
-                    query in session.session_id.casefold()
-                    or query in session.title.casefold()
-                    or query in session.model.casefold()
-                )
-            ]
-            if len(matches) == 1:
-                self._resume_session(matches[0].session_id)
-                return
-            if not matches:
-                await self._show_command_result(
-                    "RESUME",
-                    f"没有 id / 标题 / 模型匹配 {argument} 的会话。"
-                    "输入 /resume 打开选择器。",
-                    error=True,
-                )
-                return
+            await self._resume_by_argument(argument, sessions)
+            return
+
+        self._open_resume_selector(sessions)
+
+    async def _resume_by_argument(
+        self, argument: str, sessions: list[SessionSummary]
+    ) -> None:
+        query = argument.casefold()
+        matches = [
+            session
+            for session in sessions
+            if (
+                query in session.session_id.casefold()
+                or query in session.title.casefold()
+                or query in session.model.casefold()
+            )
+        ]
+        if len(matches) == 1:
+            self._resume_session(matches[0].session_id)
+            return
+        if not matches:
             await self._show_command_result(
                 "RESUME",
-                "匹配到多个会话，请补充关键词，或直接输入 /resume 选择。",
+                f"没有 id / 标题 / 模型匹配 {argument} 的会话。"
+                "输入 /resume 打开选择器。",
                 error=True,
             )
             return
+        await self._show_command_result(
+            "RESUME",
+            "匹配到多个会话，请补充关键词，或直接输入 /resume 选择。",
+            error=True,
+        )
 
+    def _open_resume_selector(self, sessions: list[SessionSummary]) -> None:
         self.push_screen(
             ResumeScreen(
                 sessions,
