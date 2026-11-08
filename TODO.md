@@ -97,9 +97,12 @@ desktop / TUI 还没接上的界面：
       `VITE_AGENTLEARN_API_BASE`、localStorage、默认回环地址解析；查询参数会
       持久化，侧栏显示实际 host。真实浏览器用 `?apiBase=http://127.0.0.1:18081`
       打开，后端收到 `/settings` 200，380×900 无横向溢出。
-- [ ] 替换 Tauri 模板图标为 AgentLearn 图标。2026-11-09 已画
-      `app/src-tauri/icons/agentlearn-icon.svg` 源稿；待确认视觉后生成
-      PNG/ICNS/ICO 全套并替换。
+- [x] 替换 Tauri 模板图标为 AgentLearn 图标 ✅（2026-11-09）：确认
+      `agentlearn-icon.svg` 视觉后，用 Tauri CLI 重建原有桌面图标位：
+      配置引用的 32/128/256 PNG、ICNS、ICO，以及 Windows Store 尺寸与
+      512px 源图；未引入项目不用的 iOS/Android 资产。512px 与 32px
+      成品人工检查，ICNS 展开核对 16–1024 十档，ICO 为 16/24/32/48
+      六项多尺寸资源。
 - [ ] 顶层包名出现冲突时，再把 `domain` / `application` / `infrastructure` / `interfaces` 收成 `agentlearn.*`。验收：现在不改；`server/pyproject.toml` 的 `packages.find.where = src` 就是现状。
 - [x] 客户端断开的 `GeneratorExit` 收成 `cancelled`（2026-11-06，D33）：不改
       成功率统计的语义，只解决「trace 永久挂运行中、界面分不清假运行」。

@@ -2,6 +2,14 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-09（四十一）：替换 Tauri 模板图标
+
+- 用已确认的 `agentlearn-icon.svg` 重建 Tauri 原有桌面图标位：
+  32/128/256 PNG、512px 源图、macOS ICNS、Windows ICO 与 Store 尺寸。
+- 官方生成器额外产出的 iOS / Android 资产未被项目引用，未带入仓库。
+- 验证：512px 与 32px 成品人工检查；ICNS 展开核对 16–1024 十档；
+  ICO 为多尺寸资源；Tauri debug bundle 构建通过。
+
 ## 2026-11-09（四十）：无鉴权时拒绝外绑地址
 
 - desktop CLI 新增显式 `--host`，默认仍为 `127.0.0.1`，并传给 uvicorn。
