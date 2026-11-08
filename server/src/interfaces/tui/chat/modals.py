@@ -22,6 +22,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 
 from textual.screen import ModalScreen
 
+from textual.widget import Widget
+
 from textual.worker import WorkerFailed
 
 from textual.widgets import (
@@ -1370,64 +1372,75 @@ class SettingsScreen(ModalScreen[bool]):
         self.saver = saver
         self.model_loader = model_loader
 
+    def _field(self, label: str, *controls: Widget) -> ComposeResult:
+        yield Static(label, classes="settings-label")
+        yield from controls
+
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
             with Horizontal(id="settings-header"):
                 yield Static("设置  ·  模型运行时", id="settings-title")
                 yield Button("×", id="settings-close")
             with VerticalScroll(id="settings-body"):
-                yield Static("提供方", classes="settings-label")
-                yield Select(
-                    [("Anthropic", "anthropic"), ("OpenAI", "openai")],
-                    allow_blank=False,
-                    id="settings-provider",
+                yield from self._field(
+                    "提供方",
+                    Select(
+                        [("Anthropic", "anthropic"), ("OpenAI", "openai")],
+                        allow_blank=False,
+                        id="settings-provider",
+                    ),
                 )
-
-                yield Static("模型 ID", classes="settings-label")
-                yield Select(
-                    [(self.current.model_id, self.current.model_id)],
-                    allow_blank=False,
-                    id="settings-model",
+                yield from self._field(
+                    "模型 ID",
+                    Select(
+                        [(self.current.model_id, self.current.model_id)],
+                        allow_blank=False,
+                        id="settings-model",
+                    ),
+                    Static(
+                        "正在读取模型列表…",
+                        id="settings-model-status",
+                        classes="settings-hint",
+                    ),
                 )
-                yield Static(
-                    "正在读取模型列表…",
-                    id="settings-model-status",
-                    classes="settings-hint",
+                yield from self._field(
+                    "接口地址",
+                    Input(value=self.current.base_url, id="settings-base-url"),
                 )
-
-                yield Static("接口地址", classes="settings-label")
-                yield Input(value=self.current.base_url, id="settings-base-url")
-
-                yield Static("最大 token", classes="settings-label")
-                yield Input(
-                    value=str(self.current.max_tokens),
-                    type="integer",
-                    id="settings-max-tokens",
+                yield from self._field(
+                    "最大 token",
+                    Input(
+                        value=str(self.current.max_tokens),
+                        type="integer",
+                        id="settings-max-tokens",
+                    ),
                 )
-
-                yield Static("思考强度", classes="settings-label")
-                yield Select(
-                    [
-                        ("默认（不发送）", "omit"),
-                        ("off", "off"),
-                        ("low", "low"),
-                        ("medium", "medium"),
-                        ("high", "high"),
-                        ("max", "max"),
-                    ],
-                    allow_blank=False,
-                    id="settings-effort",
+                yield from self._field(
+                    "思考强度",
+                    Select(
+                        [
+                            ("默认（不发送）", "omit"),
+                            ("off", "off"),
+                            ("low", "low"),
+                            ("medium", "medium"),
+                            ("high", "high"),
+                            ("max", "max"),
+                        ],
+                        allow_blank=False,
+                        id="settings-effort",
+                    ),
                 )
-
-                yield Static("API 密钥", classes="settings-label")
-                yield Static(
-                    f"当前来源：{self.current.api_key_source}。留空保持原值。",
-                    classes="settings-hint",
-                )
-                yield Input(
-                    placeholder="输入新密钥，或写 ${ENV_VAR}",
-                    password=True,
-                    id="settings-api-key",
+                yield from self._field(
+                    "API 密钥",
+                    Static(
+                        f"当前来源：{self.current.api_key_source}。留空保持原值。",
+                        classes="settings-hint",
+                    ),
+                    Input(
+                        placeholder="输入新密钥，或写 ${ENV_VAR}",
+                        password=True,
+                        id="settings-api-key",
+                    ),
                 )
             yield Static("", id="settings-status")
             with Horizontal(id="settings-actions"):
