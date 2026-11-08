@@ -81,7 +81,8 @@ desktop / TUI 还没接上的界面：
 - [x] SQLite 打开 `PRAGMA journal_mode=WAL`（2026-11-09）：连接初始化即切
       WAL，切换失败直接启动报错；不上连接池、不上 ORM。双连接验证写事务
       未提交时另一连接仍可读旧快照，提交后读到新行。
-- [ ] bash 超时改为杀掉进程组，和 `stop_job` 一样。验收：超时后 `sleep && ...` 的子进程不残留。依据：`tools.py` 的 `subprocess.run(timeout=...)` 只杀 shell。
+- [x] bash 超时杀掉整个进程组（2026-11-09）：shell 进入独立进程组，
+      超时先 `SIGKILL` 进程组再回收输出；验证 `sleep` 子进程在超时后消失。
 - [x] 按 session 分开 sandbox 工作目录 ✅（2026-11-07，D35）：`sessions.workdir` 记每个会话的起跑目录（界面可选，默认仍是 data/sandbox），bash / start_job 经 contextvar 取当轮目录；「变更」和 @file 跟会话目录走。两个会话的相对路径互不可见✅（各在各的项目里）；后半句（并行执行器的冲突检测）仍未做，跟下面「并行执行」那条一起算。
 - [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
 - [ ] web 在绑定非 127.0.0.1 之前先加鉴权。验收：现在 `uvicorn.run(app, port=port)` 没有 host，默认只本机；没有鉴权时拒绝 `--host 0.0.0.0`。

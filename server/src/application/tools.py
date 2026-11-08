@@ -15,6 +15,8 @@ CLAUDE.md 约定 5，工具代码历史在 git（commit 46ef2e1）。
 - bash：有参数、有副作用、会失败——真实工具的样子（第 3 层的失败验收靠它）。
 """
 import base64
+import os
+import signal
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -91,30 +93,49 @@ def bash(command: str) -> str:
     # 向模型承诺一个「残缺的 shell」（$((...))、> 全是字面量），description
     # 没法如实写。安全上两者无差别——python -c 本来就能执行任意代码。
     # text=True 让 stdout/stderr 是字符串而不是字节；capture 住才有东西返回。
-    # 超时 kill 的是 shell 进程，它的个别子进程可能残留（如后台 &），学习期接受。
+    # shell 进入独立进程组，超时才能连同子进程一起终止。
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             command,
             shell=True,
             cwd=cwd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=TIMEOUT_SECONDS,
             # 见 CHILD_ENV 的说明：不给进程环境，密钥不进工具输出。
             env=CHILD_ENV,
+            start_new_session=True,
         )
+        stdout, stderr = proc.communicate(timeout=TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as e:
+        _kill_process_group(proc)
+        killed_stdout, killed_stderr = proc.communicate(timeout=2)
         # 超时路径上 text=True 不总是生效：shell=True 时 TimeoutExpired 的
         # stdout/stderr 可能是 bytes 而不是 str（实测 macOS python3.14 如此，
         # trace 里那次 10008ms 的报错「can't concat str to bytes」就是它）。
         # 统一在这里转成 str，别把类型错误报给模型。
-        partial = _as_text(e.stdout) + _as_text(e.stderr)
+        partial = (
+            _as_text(killed_stdout or e.stdout)
+            + _as_text(killed_stderr or e.stderr)
+        )
         # 说清超时和上限，模型看懂了才会改提交一条更快的命令，而不是原样重试。
         raise ValueError(f"命令超过 {TIMEOUT_SECONDS} 秒没结束，已终止。已输出: {partial!r}")
     # 返回码放进结果：很多命令「成功」但非零退出（grep 没匹配到），
     # 只给 stdout 模型分不清是空结果还是失败。
-    out = (proc.stdout or "") + (proc.stderr or "")
+    out = (stdout or "") + (stderr or "")
     return f"[exit {proc.returncode}] {out.strip() or '(无输出)'}"
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
 
 
 def _as_text(data) -> str:
