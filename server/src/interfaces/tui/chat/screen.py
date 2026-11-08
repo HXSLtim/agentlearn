@@ -1211,26 +1211,12 @@ class AgentLearnTUI(App[str | None]):
         """
         # 最后一条带文本的用户消息之后都算最后一轮（tool_result 住在
         # user 消息里但不开新轮，跟上面切 turn_groups 同一条规则）。
-        last_prompt = -1
-        for index, message in enumerate(self.history):
-            if message.role == "user" and any(
-                block.type == "text" and block.text.strip()
-                for block in message.content
-            ):
-                last_prompt = index
+        last_prompt = self._last_prompt_index()
         if last_prompt < 0:
             return
-        thinking_chars = 0
-        uses: list[tuple[str, str]] = []  # (tool_use_id, name)，按出现顺序
-        results: dict[str, tuple[str, bool]] = {}
-        for message in self.history[last_prompt:]:
-            for block in message.content:
-                if block.type == "thinking" and block.thinking:
-                    thinking_chars += len(block.thinking)
-                elif block.type == "tool_use":
-                    uses.append((block.id, block.name))
-                elif block.type == "tool_result":
-                    results[block.tool_use_id] = (block.content, block.is_error)
+        thinking_chars, uses, results = self._collect_last_turn_activity(
+            last_prompt
+        )
         if thinking_chars:
             self._activity.append(
                 {
@@ -1252,6 +1238,32 @@ class AgentLearnTUI(App[str | None]):
                 }
             )
         self._render_activity()
+
+    def _last_prompt_index(self) -> int:
+        last_prompt = -1
+        for index, message in enumerate(self.history):
+            if message.role == "user" and any(
+                block.type == "text" and block.text.strip()
+                for block in message.content
+            ):
+                last_prompt = index
+        return last_prompt
+
+    def _collect_last_turn_activity(
+        self, last_prompt: int
+    ) -> tuple[int, list[tuple[str, str]], dict[str, tuple[str, bool]]]:
+        thinking_chars = 0
+        uses: list[tuple[str, str]] = []  # (tool_use_id, name)，按出现顺序
+        results: dict[str, tuple[str, bool]] = {}
+        for message in self.history[last_prompt:]:
+            for block in message.content:
+                if block.type == "thinking" and block.thinking:
+                    thinking_chars += len(block.thinking)
+                elif block.type == "tool_use":
+                    uses.append((block.id, block.name))
+                elif block.type == "tool_result":
+                    results[block.tool_use_id] = (block.content, block.is_error)
+        return thinking_chars, uses, results
 
     def _scroll_timeline_end(self) -> None:
         """把续接会话定位到最后一轮，而不是停在历史开头。"""
