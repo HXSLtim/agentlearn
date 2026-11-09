@@ -2,6 +2,17 @@
 
 每完成一层或一项基建记一版，不逐 commit。新条目放最上面。
 
+## 2026-11-09（四十四）：安全工具批次并发执行
+
+- `Tool` 显式声明是否可并发；`now_time/read_skill/wait_job/job_status`
+  与不同 MCP alias 会同批并发，同 MCP alias 仍串行。
+- `bash/start_job/stop_job/remember/screenshot`、混合批次和需要人工审批的
+  批次保持串行，避免工作目录、记忆文件、屏幕与审批 UI 的语义漂移。
+- `tool_result` 事件和 JSONL 仍按模型给出的 block 顺序配对；span 记
+  `parallel=true`。顺手修复审批超时/拒绝路径未初始化附图变量导致的崩溃。
+- 验证：两个 0.25 秒安全工具 0.261 秒完成；混合批与 approve 超时批均串行、
+  配对完整；`compileall` 通过。
+
 ## 2026-11-09（四十三）：工具调用先想完再集中执行
 
 - 不新增模型回合，也不改成并行。一条回复里的工具仍按写出的顺序整批执行，

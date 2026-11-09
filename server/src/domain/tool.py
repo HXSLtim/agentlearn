@@ -23,3 +23,6 @@ class Tool:
     # 参数的 JSON Schema，模型按它生成入参字典。形状：
     # {"type": "object", "properties": {...}, "required": [...]}
     input_schema: dict
+    # 本地执行器能不能和其它 parallel_safe 工具同批并发。默认 False：
+    # 新工具先按有共享状态处理，明确论证无冲突后再打开。
+    parallel_safe: bool = False

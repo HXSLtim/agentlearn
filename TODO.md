@@ -84,7 +84,13 @@ desktop / TUI 还没接上的界面：
 - [x] bash 超时杀掉整个进程组（2026-11-09）：shell 进入独立进程组，
       超时先 `SIGKILL` 进程组再回收输出；验证 `sleep` 子进程在超时后消失。
 - [x] 按 session 分开 sandbox 工作目录 ✅（2026-11-07，D35）：`sessions.workdir` 记每个会话的起跑目录（界面可选，默认仍是 data/sandbox），bash / start_job 经 contextvar 取当轮目录；「变更」和 @file 跟会话目录走。两个会话的相对路径互不可见✅（各在各的项目里）；后半句（并行执行器的冲突检测）仍未做，跟下面「并行执行」那条一起算。
-- [ ] 一轮里的多个 tool_use 可以真正并行执行。验收：配对仍靠 id，不靠完成顺序；不能并行的工具仍排队。
+- [x] 一轮里的多个 tool_use 可以真正并行执行 ✅（2026-11-09，D49）：
+      `Tool` 显式声明 `parallel_safe`；`now_time/read_skill/wait_job/job_status`
+      与不同 MCP alias 的调用可并发，同 MCP alias 由既有调用锁串行。
+      `bash/start_job/stop_job/remember/screenshot` 与混合批次仍串行，
+      需要人工审批时整批退回串行。结果事件和 JSONL 仍按 tool_use 原顺序
+      配对；离线两个 0.25s 工具 0.261s 完成，混合批与 approve 超时批均回退
+      且配对不丢。
 - [x] web 无鉴权时拒绝非回环绑定 ✅（2026-11-09，D47）：desktop CLI
       显式支持 `--host`，解析阶段用 `ipaddress` 只放行数字回环地址；
       `0.0.0.0`、局域网地址与 `localhost` 都在装配依赖和绑定前拒绝。

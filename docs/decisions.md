@@ -1365,3 +1365,25 @@ auto 继续跟随 `prefers-color-scheme`。
 
 **否掉的备选**：先发一轮禁止工具的长思考，再发一轮专门调工具——多一次主模型开销，
 和「省不下就不加回合」的约束相反。
+
+---
+
+## D49 安全工具批的并发执行器（2026-11-09）
+
+**背景**：D48 只改模型行为，执行器仍把同批 `tool_use` 串行跑完。对多个
+只读查询和不同 MCP 服务器来说，这会把“集中执行”变成集中排队。
+
+**决定**：
+
+1. `Tool` 增加 `parallel_safe`，默认 false；新工具先按有共享状态处理。
+2. 第一批放行 `now_time/read_skill/wait_job/job_status` 和 MCP 复合名。
+   MCP 不同 alias 并发，同 alias 继续由 `MCPManager` 的调用锁串行。
+3. `bash/start_job/stop_job/remember/screenshot` 与安全/不安全混合批都串行；
+   approve 档需要人工决策时整批串行，不一次弹多张审批卡。
+4. 最多 4 个 worker；先发完全部 `tool_use` 事件，工具全部结束后再按模型
+   给出的 block 顺序发 `tool_result` 并落 JSONL。断开路径继续补齐缺失结果。
+5. tool_call span 记 `parallel=true`，trace 能区分并发批和串行批。
+
+**验收**：离线假模型两个 0.25 秒安全工具 0.261 秒完成，事件与 JSONL 均按
+`tool-a/tool-b` 配对，两个 span 带 `parallel=true`；`now_time+bash` 混合批
+自动串行且无 parallel 标记；approve 档超时路径不崩、两张审批结果仍配对。

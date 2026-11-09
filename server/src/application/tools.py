@@ -222,6 +222,7 @@ NOW_TIME = Tool(
     name="now_time",
     description="获取当前的 UTC 时间（ISO 格式）。任何涉及「现在几点/今天日期」的问题都必须用它，不要猜。",
     input_schema={"type": "object", "properties": {}},
+    parallel_safe=True,
 )
 
 BASH = Tool(
@@ -289,6 +290,7 @@ WAIT_JOB = Tool(
         },
         "required": ["job_id"],
     },
+    parallel_safe=True,
 )
 
 JOB_STATUS = Tool(
@@ -304,6 +306,7 @@ JOB_STATUS = Tool(
         },
         "required": ["job_id"],
     },
+    parallel_safe=True,
 )
 
 STOP_JOB = Tool(
@@ -439,6 +442,7 @@ def _skill_tool() -> Tool:
             },
             "required": ["name"],
         },
+        parallel_safe=True,
     )
 
 
@@ -541,3 +545,17 @@ def run_tool(name: str, args: dict) -> tuple[str, bool, ImageBlock | None]:
     # 模型幻觉出了一个不存在的工具名。如实告诉它有哪些可用，让它调整。
     available = [t.name for t in all_tools()]
     return f"没有叫 {name} 的工具。可用：{', '.join(available)}", True, None
+
+
+def is_parallel_safe(name: str) -> bool:
+    """这批工具能否交给并发执行器。
+
+    内置工具看显式声明；read_skill 只读文件；MCP 按别名有调用锁，
+    不同别名可以并发，同别名由 MCPManager 串行化。bash / start_job /
+    stop_job / remember / screenshot 共享工作目录、记忆文件或整块屏幕，
+    第一版保持串行。
+    """
+    entry = REGISTRY.get(name)
+    if entry is not None:
+        return entry[0].parallel_safe
+    return name == "read_skill" or "__" in name

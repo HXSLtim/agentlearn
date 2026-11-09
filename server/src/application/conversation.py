@@ -4,7 +4,7 @@ TUI 和 desktop/web 两个入口共用的循环收在这里：入口只剩输入
 「一轮对话怎么走」只写这一份。这里是 agent loop 本体：
 
     用户提问 -> 模型先把这一步想完，并在同一次回复里集中给出工具调用
-       └─ 有工具？按回复里的顺序整批执行 -> 结果一次交回 -> 再请求模型
+       └─ 有工具？安全批并发、混合批串行 -> 结果一次交回 -> 再请求模型
           （循环，直到模型不再要工具，或达到轮数上限）
 
 每一圈是一次独立的厂商请求：POST 全部历史 -> SSE 流回 -> 流关。
@@ -42,14 +42,15 @@ system 提示词每圈拼一次、不落 JSONL（派生状态不是历史）。�
 """
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from domain.message import ImageBlock, Message, TextBlock, ToolResultBlock
+from domain.message import ImageBlock, Message, TextBlock, ToolResultBlock, ToolUseBlock
 from application.approval import APPROVAL_MODES, ApprovalBroker
 from application.plan import PLAN_ALLOWED_TOOLS, PlanBroker
 from application.ports import ChatClient, SpanStore, TranscriptStore
 from application.sandbox import bind_workdir, normalize_workdir, reset_workdir
-from application.tools import SANDBOX, all_tools, read_memory, run_tool
+from application.tools import SANDBOX, all_tools, is_parallel_safe, read_memory, run_tool
 from application import compaction
 from application.tokens import estimate_tokens
 
@@ -542,6 +543,100 @@ class Conversation:
                 )
             raise TurnCancelled
 
+    def _can_parallel_tools(self, blocks: list[ToolUseBlock], plan_mode: bool) -> bool:
+        """只有整批都安全且不需要人工决策时才并发。
+
+        混合批次退回串行：一个 bash 会让同批 read_skill 的结果变得不可预期。
+        approve 档也退回串行，避免一次弹出多张审批卡改变现有交互。
+        """
+        if len(blocks) < 2 or not all(is_parallel_safe(block.name) for block in blocks):
+            return False
+        if plan_mode and any(block.name not in PLAN_ALLOWED_TOOLS for block in blocks):
+            return False
+        if self.approval is not None:
+            mode = self._approval_mode_now()
+            if any(
+                self.approval.requires_approval(mode, block.name)
+                and not self.approval.is_session_approved(self.session_id, block.name)
+                for block in blocks
+            ):
+                return False
+        return True
+
+    def _run_parallel_tools(self, blocks: list[ToolUseBlock], turn_span: str):
+        """并发执行一批安全工具；事件和落盘结果仍按模型给出的顺序配对。"""
+        approval_mode = self._approval_mode_now()
+        for block in blocks:
+            try:
+                yield {
+                    "kind": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                }
+            except GeneratorExit:
+                self._append_disconnect_tool_results(blocks, [])
+                raise
+
+        spans = {
+            block.id: self._start_span(
+                "tool_call",
+                parent_id=turn_span,
+                data={
+                    "tool": block.name,
+                    "input": block.input,
+                    "approval_mode": approval_mode,
+                    "parallel": True,
+                },
+            )
+            for block in blocks
+        }
+
+        def execute(block: ToolUseBlock):
+            token = bind_workdir(self._turn_workdir)
+            try:
+                return run_tool(block.name, block.input)
+            except Exception as error:
+                return f"工具执行出错: {error}", True, None
+            finally:
+                reset_workdir(token)
+
+        with ThreadPoolExecutor(max_workers=min(4, len(blocks))) as executor:
+            futures = {executor.submit(execute, block): block for block in blocks}
+            results_by_id: dict[str, ToolResultBlock] = {}
+            for future, block in futures.items():
+                content, is_error, image = future.result()
+                self._end_span(
+                    spans[block.id],
+                    status="error" if is_error else "ok",
+                    data={"output": content, "approval_mode": approval_mode},
+                )
+                results_by_id[block.id] = ToolResultBlock(
+                    tool_use_id=block.id,
+                    content=content,
+                    is_error=is_error,
+                    image=image,
+                )
+
+        results = [results_by_id[block.id] for block in blocks]
+        for block, result in zip(blocks, results, strict=True):
+            elapsed_ms = self.store.span_duration_ms(spans[block.id])
+            try:
+                yield {
+                    "kind": "tool_result",
+                    "id": block.id,
+                    "name": block.name,
+                    "output": result.content,
+                    "is_error": result.is_error,
+                    "denied": False,
+                    "has_image": result.image is not None,
+                    "elapsed_ms": elapsed_ms,
+                }
+            except GeneratorExit:
+                self._append_disconnect_tool_results(blocks, results)
+                raise
+        return results
+
     def _append_disconnect_tool_results(
         self, assistant_blocks: list, results: list
     ) -> None:
@@ -826,6 +921,13 @@ class Conversation:
             # 对应的 user(tool_result) 不跟上，这个会话就再也续不上
             # （Anthropic 要求配对）。「配对不变式」优先于抢占的及时性——
             # 工具批次一旦开跑就完整落盘，取消在下一圈圈界生效（D18）。
+            tool_blocks = [block for block in blocks if block.type == "tool_use"]
+            if self._can_parallel_tools(tool_blocks, plan_mode):
+                results = yield from self._run_parallel_tools(tool_blocks, turn_span)
+                self.transcript.append(self.session_id, Message("user", results))
+                history = self.transcript.read(self.session_id)
+                continue
+
             results = []
             for block in blocks:
                 if block.type != "tool_use":
@@ -850,6 +952,7 @@ class Conversation:
                 decision = None
                 approved: bool | None = True
                 approval_id: str | None = None
+                image = None
                 plan_blocked = plan_mode and block.name not in PLAN_ALLOWED_TOOLS
                 if plan_blocked:
                     approved = False
